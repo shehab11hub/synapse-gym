@@ -1003,6 +1003,29 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     localStorage.setItem('synapse_current_month', currentMonth);
   }, [currentMonth]);
 
+  // Cross-tab / Mobile-to-Desk Real-time Sync for CheckIn Logs and Members
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'synapse_checkin_logs' && e.newValue) {
+        try {
+          setCheckInLogs(JSON.parse(e.newValue));
+        } catch {
+          // ignore
+        }
+      }
+      if (e.key === 'synapse_members' && e.newValue) {
+        try {
+          setMembers(JSON.parse(e.newValue));
+        } catch {
+          // ignore
+        }
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
+
   // Live timer for active physio sessions
   useEffect(() => {
     const interval = setInterval(() => {

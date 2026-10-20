@@ -13,6 +13,7 @@ import { MasterReportPage } from './pages/MasterReportPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { PosPage } from './pages/PosPage';
 import { UsersPage } from './pages/UsersPage';
+import { PlayerCheckInPage } from './pages/PlayerCheckInPage';
 
 const MainDashboard: React.FC = () => {
   const { currentUser, canAccessPage } = useAuth();
@@ -40,16 +41,12 @@ const MainDashboard: React.FC = () => {
       case 'physiotherapy':
         return <PhysiotherapyPage />;
       case 'trainers':
-        // NOW VISIBLE TO RECEPTIONIST AS REQUESTED
         return <TrainerAccountsPage />;
       case 'expenses':
-        // NEW EXPENSES & CASH DRAWER PAGE
         return <ExpensesPage />;
       case 'master_report':
-        // COMPREHENSIVE EXCEL LEDGER & NEW MONTH
         return <MasterReportPage />;
       case 'analytics':
-        // NEW FINANCIAL ANALYTICS & BI CHARTS PAGE
         return <AnalyticsPage />;
       case 'pos':
         return <PosPage />;
@@ -77,10 +74,28 @@ const MainDashboard: React.FC = () => {
 };
 
 export default function App() {
+  const [currentPath, setCurrentPath] = useState(() => {
+    return typeof window !== 'undefined' ? window.location.pathname.toLowerCase() : '/';
+  });
+
+  useEffect(() => {
+    const handleLocationChange = () => {
+      setCurrentPath(window.location.pathname.toLowerCase());
+    };
+
+    window.addEventListener('popstate', handleLocationChange);
+    return () => window.removeEventListener('popstate', handleLocationChange);
+  }, []);
+
+  // Public Member Check-in Route (accessible directly without admin login when scanning Desk QR)
+  const isCheckInRoute =
+    currentPath.startsWith('/checkin') ||
+    currentPath.startsWith('/scan');
+
   return (
     <AuthProvider>
       <GymDataProvider>
-        <MainDashboard />
+        {isCheckInRoute ? <PlayerCheckInPage /> : <MainDashboard />}
       </GymDataProvider>
     </AuthProvider>
   );

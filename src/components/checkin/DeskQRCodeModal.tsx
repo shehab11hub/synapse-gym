@@ -17,8 +17,9 @@ export const DeskQRCodeModal: React.FC<DeskQRCodeModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      // Desk QR code encodes the gym check-in portal link
-      const deskCheckinUrl = window.location.origin + '/checkin-desk';
+      // Dynamic Desk QR code using current origin with SPA /checkin route
+      const baseUrl = typeof window !== 'undefined' && window.location.origin ? window.location.origin : '';
+      const deskCheckinUrl = `${baseUrl}/checkin?desk=true&gym=${encodeURIComponent(gymName)}`;
       generateQRDataUrl(deskCheckinUrl).then(setQrUrl);
     }
   }, [isOpen]);
