@@ -30,6 +30,7 @@ import {
   Play,
   User,
   Smartphone,
+  Trash2,
 } from 'lucide-react';
 import { useGymData } from '../context/GymDataContext';
 import { Member, SessionCategory, Coach, CheckInLog } from '../types';
@@ -43,6 +44,7 @@ export const ReceptionPage: React.FC = () => {
     members,
     findMemberByCode,
     performCheckIn,
+    cancelCheckIn,
     toggleMemberAsDoctor,
     addMember,
     checkInLogs,
@@ -51,6 +53,16 @@ export const ReceptionPage: React.FC = () => {
     assignPlayerToSession,
     assignArrivedMember,
   } = useGymData();
+
+  const handleCancelCheckIn = (logId: string, memberName: string) => {
+    if (
+      window.confirm(
+        `هل أنت متأكد من إلغاء تحضير اللاعب (${memberName}) وحذفه من الحصة؟\nسيتم استرجاع رصيد الحصص وإلغاء أي مديونية أو تحصيل تم تسجيله.`
+      )
+    ) {
+      cancelCheckIn(logId);
+    }
+  };
 
   // Search input for manual entry
   const [searchCode, setSearchCode] = useState('');
@@ -564,19 +576,30 @@ export const ReceptionPage: React.FC = () => {
                     )}
                   </div>
 
-                  {/* Seating CTA Button */}
-                  <button
-                    type="button"
-                    onClick={() => openSeatingModal(log)}
-                    className={`w-full py-2.5 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                      isAssigned
-                        ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
-                        : 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 shadow-lg shadow-amber-500/20'
-                    }`}
-                  >
-                    <Layers className="w-3.5 h-3.5" />
-                    <span>{isAssigned ? 'تعديل التوجيه والتسكين' : 'تسكين وتوجيه اللاعب الآن'}</span>
-                  </button>
+                  {/* Seating CTA & Cancel Actions */}
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openSeatingModal(log)}
+                      className={`flex-1 py-2.5 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                        isAssigned
+                          ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                          : 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 shadow-lg shadow-amber-500/20'
+                      }`}
+                    >
+                      <Layers className="w-3.5 h-3.5" />
+                      <span>{isAssigned ? 'تعديل التوجيه والتسكين' : 'تسكين وتوجيه اللاعب الآن'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleCancelCheckIn(log.id, log.memberName)}
+                      title="إلغاء التحضير وحذف من الحصة"
+                      className="p-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/30 text-rose-400 border border-rose-500/30 transition cursor-pointer flex items-center justify-center shrink-0"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -920,12 +943,21 @@ export const ReceptionPage: React.FC = () => {
                       )}
                     </td>
                     <td className="py-3 px-4">
-                      <button
-                        onClick={() => openSeatingModal(log)}
-                        className="px-2.5 py-1 rounded-lg bg-teal-500/20 hover:bg-teal-500 text-teal-300 hover:text-slate-950 font-bold text-[11px] transition"
-                      >
-                        {log.seatingStatus === 'assigned' ? 'تعديل' : 'تسكين الآن'}
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => openSeatingModal(log)}
+                          className="px-2.5 py-1 rounded-lg bg-teal-500/20 hover:bg-teal-500 text-teal-300 hover:text-slate-950 font-bold text-[11px] transition"
+                        >
+                          {log.seatingStatus === 'assigned' ? 'تعديل' : 'تسكين الآن'}
+                        </button>
+                        <button
+                          onClick={() => handleCancelCheckIn(log.id, log.memberName)}
+                          title="إلغاء التحضير وحذف"
+                          className="p-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/30 text-rose-400 border border-rose-500/30 transition cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

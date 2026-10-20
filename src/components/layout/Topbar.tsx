@@ -4,8 +4,7 @@ import {
   Users,
   DollarSign,
   TrendingUp,
-  Bell,
-  Search,
+  Menu,
 } from 'lucide-react';
 import { useGymData } from '../../context/GymDataContext';
 import { useAuth } from '../../context/AuthContext';
@@ -13,9 +12,10 @@ import { formatEGP } from '../../utils/formatters';
 
 interface TopbarProps {
   activeTab: string;
+  onOpenMobileMenu?: () => void;
 }
 
-export const Topbar: React.FC<TopbarProps> = ({ activeTab }) => {
+export const Topbar: React.FC<TopbarProps> = ({ activeTab, onOpenMobileMenu }) => {
   const { getTodayStats } = useGymData();
   const { currentUser } = useAuth();
   const stats = getTodayStats();
@@ -51,6 +51,8 @@ export const Topbar: React.FC<TopbarProps> = ({ activeTab }) => {
         return { title: 'حسابات ومستحقات المدربين', subtitle: 'إثبات حضور الحصص وتصفية اليوميات والرواتب' };
       case 'expenses':
         return { title: 'إدارة المصاريف والدرج النقدي', subtitle: 'تسجيل الفواتير والصيانة وصافي النقدية بالدرج بالجنيه' };
+      case 'master_report':
+        return { title: 'التقرير الشامل والأرشيف الشهري', subtitle: 'شيت الإكسيل، تفصيل الكباتن، وحسابات الدرج' };
       case 'analytics':
         return { title: 'التقارير الإحصائية والرسومات البيانية', subtitle: 'تحليل الأرباح ومقارنة أداء الأسبوع والشهر والسنة' };
       case 'pos':
@@ -65,13 +67,26 @@ export const Topbar: React.FC<TopbarProps> = ({ activeTab }) => {
   const { title, subtitle } = getPageTitle(activeTab);
 
   return (
-    <header className="h-20 bg-[#090d16]/90 backdrop-blur-md border-b border-slate-800/80 px-8 flex items-center justify-between sticky top-0 z-20">
-      {/* Title & Subtitle */}
-      <div>
-        <h1 className="text-xl font-black text-white flex items-center gap-2">
-          {title}
-        </h1>
-        <p className="text-xs text-slate-400 mt-0.5">{subtitle}</p>
+    <header className="h-20 bg-[#090d16]/90 backdrop-blur-md border-b border-slate-800/80 px-4 sm:px-8 flex items-center justify-between sticky top-0 z-20">
+      {/* Title & Subtitle + Mobile Hamburger */}
+      <div className="flex items-center gap-3">
+        {onOpenMobileMenu && (
+          <button
+            type="button"
+            onClick={onOpenMobileMenu}
+            className="lg:hidden p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-teal-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+            title="فتح القائمة الرئيسية"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+        )}
+
+        <div>
+          <h1 className="text-base sm:text-xl font-black text-white flex items-center gap-2">
+            {title}
+          </h1>
+          <p className="text-[11px] sm:text-xs text-slate-400 mt-0.5 line-clamp-1">{subtitle}</p>
+        </div>
       </div>
 
       {/* Middle Stat Badges */}
@@ -113,11 +128,11 @@ export const Topbar: React.FC<TopbarProps> = ({ activeTab }) => {
       </div>
 
       {/* Clock & Status */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2">
         {/* Live Clock */}
-        <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-900/90 border border-slate-800 text-slate-300">
-          <Clock className="w-4 h-4 text-teal-400 animate-pulse" />
-          <span className="text-xs font-mono font-bold tracking-wider dir-ltr text-teal-200">
+        <div className="flex items-center gap-2 px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl bg-slate-900/90 border border-slate-800 text-slate-300">
+          <Clock className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-teal-400 animate-pulse" />
+          <span className="text-[11px] sm:text-xs font-mono font-bold tracking-wider dir-ltr text-teal-200">
             {timeString || '--:--:--'}
           </span>
         </div>

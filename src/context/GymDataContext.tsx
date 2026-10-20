@@ -26,6 +26,8 @@ interface GymDataContextType {
   toggleMemberAsDoctor: (id: string) => void;
   findMemberByCode: (code: string) => Member | undefined;
   performCheckIn: (memberId: string, method?: 'qr' | 'manual') => { success: boolean; member?: Member; message?: string };
+  cancelCheckIn: (checkInLogId: string) => { success: boolean };
+  wipeAllDataToCleanSlate: () => void;
 
   // Sessions / Classes
   sessions: GymSession[];
@@ -181,680 +183,50 @@ interface GymDataContextType {
   exportMasterReportToCSV: (month?: string) => void;
 }
 
-// Initial Mock Seed Data
-const INITIAL_MEMBERS: Member[] = [
-  {
-    id: 'mem-101',
-    code: 'SYN-101',
-    name: 'محمود عبد الرحمن',
-    phone: '01011223344',
-    type: 'member',
-    subscriptionPlan: 'عضوية VIP سنوية + مدرب خاص',
-    subscriptionFee: 4500,
-    startDate: '2026-01-01',
-    endDate: '2026-12-31',
-    totalDays: 365,
-    remainingDays: 142,
-    totalSessions: 50,
-    remainingSessions: 28,
-    active: true,
-    assignedSessionId: 'sess-1',
-    notes: 'يفضل التدريب المسائي',
-  },
-  {
-    id: 'mem-102',
-    code: 'SYN-102',
-    name: 'يوسف طارق علام',
-    phone: '01144556677',
-    type: 'member',
-    subscriptionPlan: 'اشتراك شهري لياقة وكروس فيت',
-    subscriptionFee: 750,
-    startDate: '2026-09-20',
-    endDate: '2026-10-20',
-    totalDays: 30,
-    remainingDays: 7,
-    totalSessions: 12,
-    remainingSessions: 4,
-    active: true,
-    assignedSessionId: 'sess-1',
-  },
-  {
-    id: 'mem-103',
-    code: 'SYN-103',
-    name: 'د. حسام فاروق الشامي',
-    phone: '01288990011',
-    type: 'doctor',
-    subscriptionPlan: 'عضوية أطباء وتأهيل حركي',
-    subscriptionFee: 1200,
-    startDate: '2026-05-01',
-    endDate: '2027-05-01',
-    totalDays: 365,
-    remainingDays: 200,
-    totalSessions: 100,
-    remainingSessions: 85,
-    active: true,
-    notes: 'استشاري إصابات ملاعب وتأهيل',
-  },
-  {
-    id: 'mem-104',
-    code: 'SYN-104',
-    name: 'كريم سامي رضوان',
-    phone: '01599887766',
-    type: 'member',
-    subscriptionPlan: 'اشتراك ملاكمة ودفاع عن النفس',
-    subscriptionFee: 900,
-    startDate: '2026-09-01',
-    endDate: '2026-11-01',
-    totalDays: 60,
-    remainingDays: 19,
-    totalSessions: 24,
-    remainingSessions: 11,
-    active: true,
-    assignedSessionId: 'sess-2',
-  },
-  {
-    id: 'mem-105',
-    code: 'SYN-105',
-    name: 'سارة خالد الديب',
-    phone: '01066778899',
-    type: 'member',
-    subscriptionPlan: 'اشتراك سبينينغ ولياقة بدنية',
-    subscriptionFee: 650,
-    startDate: '2026-10-01',
-    endDate: '2026-11-01',
-    totalDays: 30,
-    remainingDays: 18,
-    totalSessions: 16,
-    remainingSessions: 10,
-    active: true,
-    assignedSessionId: 'sess-3',
-  },
-];
+// Production Clean Slate & Cache Busting
+const CURRENT_DATA_VERSION = 'synapse_v3_production_clean';
 
-const INITIAL_COACHES: Coach[] = [
-  {
-    id: 'cch-1',
-    name: 'كابتن إسلام سمير',
-    phone: '01099887711',
-    specialty: 'كروس فيت ولياقة وظيفية',
-    paymentType: 'per_session', // بالحصة -> Red tag
-    ratePerSession: 150,
-    currentBalance: 450,
-    totalPaidToday: 0,
-    active: true,
-  },
-  {
-    id: 'cch-2',
-    name: 'كابتن رامي جمال',
-    phone: '01122334455',
-    specialty: 'ملاكمة وقتال مختلط',
-    paymentType: 'monthly', // بالشهر -> Blue tag
-    monthlySalary: 7500,
-    currentBalance: 0,
-    totalPaidToday: 0,
-    monthlySalaryPaidThisMonth: false,
-    active: true,
-  },
-  {
-    id: 'cch-5',
-    name: 'كابتن هشام القاضي',
-    phone: '01022338899',
-    specialty: 'مدرب لياقة بدنية عامة وتخسيس',
-    paymentType: 'monthly', // بالشهر -> Blue tag
-    monthlySalary: 6200,
-    currentBalance: 0,
-    totalPaidToday: 0,
-    monthlySalaryPaidThisMonth: true,
-    lastSalaryPaymentDate: '2026-10-01',
-    active: true,
-  },
-  {
-    id: 'cch-3',
-    name: 'كابتن نادر مصطفى',
-    phone: '01233445566',
-    specialty: 'كمال أجسام ورفع أثقال',
-    paymentType: 'percentage', // بالنسبة
-    commissionRate: 35,
-    ratePerSession: 100,
-    currentBalance: 320,
-    totalPaidToday: 0,
-    active: true,
-  },
-  {
-    id: 'cch-4',
-    name: 'كابتن يوسف حسن',
-    phone: '01055667788',
-    specialty: 'سبينينغ وكارديو',
-    paymentType: 'daily', // يومي
-    ratePerSession: 120,
-    currentBalance: 240,
-    totalPaidToday: 0,
-    active: true,
-  },
-];
+if (typeof window !== 'undefined') {
+  const currentVer = localStorage.getItem('synapse_data_version');
+  if (currentVer !== CURRENT_DATA_VERSION) {
+    [
+      'synapse_members',
+      'synapse_sessions',
+      'synapse_coaches',
+      'synapse_physio',
+      'synapse_products',
+      'synapse_transactions',
+      'synapse_expenses',
+      'synapse_cash_inflows',
+      'synapse_checkin_logs',
+      'synapse_settlement_logs',
+      'synapse_trainer_transactions',
+      'synapse_master_report',
+      'synapse_billing_cycles',
+      'synapse_current_month',
+    ].forEach((key) => localStorage.removeItem(key));
+    localStorage.setItem('synapse_data_version', CURRENT_DATA_VERSION);
+  }
+}
 
-const INITIAL_SESSIONS: GymSession[] = [
-  {
-    id: 'sess-1',
-    title: 'كروس فيت عالي الشدة (CrossFit Beast)',
-    sport: 'كروس فيت',
-    hall: 'القاعة الرئيسية A',
-    coachIds: ['cch-1', 'cch-3'],
-    price: 150,
-    startTime: '18:00',
-    endTime: '19:30',
-    daysOfWeek: [0, 1, 2, 3, 4],
-    enrolledPlayerIds: ['mem-101', 'mem-102'],
-    completedTodayByCoach: {
-      'cch-1': true,
-      'cch-3': false,
-    },
-    notes: 'تدريب رفع أوزان ولياقة مكثفة',
-  },
-  {
-    id: 'sess-2',
-    title: 'ملاكمة وتكنيك القتال (Pro Boxing)',
-    sport: 'ملاكمة',
-    hall: 'حلبة الأبطال B',
-    coachIds: ['cch-2'],
-    price: 180,
-    startTime: '19:30',
-    endTime: '21:00',
-    daysOfWeek: [1, 3, 5],
-    enrolledPlayerIds: ['mem-104'],
-    completedTodayByCoach: {
-      'cch-2': false,
-    },
-    notes: 'تمارين لكمات ورشاقة وسرعة رد الفعل',
-  },
-  {
-    id: 'sess-3',
-    title: 'سبينينغ وحرق دهون (Spinning Cardio)',
-    sport: 'سبينينغ',
-    hall: 'قاعة الدراجات الهوائية C',
-    coachIds: ['cch-4'],
-    price: 120,
-    startTime: '10:00',
-    endTime: '11:30',
-    daysOfWeek: [0, 2, 4],
-    enrolledPlayerIds: ['mem-105'],
-    completedTodayByCoach: {
-      'cch-4': true,
-    },
-    notes: 'جلسة صباحية مكثفة',
-  },
-];
-
-const INITIAL_PHYSIO_BOOKINGS: PhysioBooking[] = [
-  {
-    id: 'physio-1',
-    doctorName: 'د. حسام فاروق الشامي',
-    doctorCode: 'SYN-103',
-    doctorPhone: '01288990011',
-    patientName: 'أحمد محمود العوضي',
-    roomName: 'عيادة التأهيل الطبي 1',
-    hourlyRate: 150,
-    startTime: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
-    elapsedMinutes: 45,
-    totalFee: 112.5,
-    serviceType: 'physio',
-    status: 'active',
-    paid: false,
-  },
-  {
-    id: 'massage-waiting-1',
-    doctorName: 'كابتن نادر مصطفى',
-    doctorCode: 'cch-3',
-    patientName: 'سامح حسن عبد ربه',
-    patientCode: 'SYN-104',
-    roomName: 'غرفة المساج والاستشفاء 1',
-    hourlyRate: 180,
-    startTime: new Date().toISOString(),
-    elapsedMinutes: 0,
-    totalFee: 180,
-    serviceType: 'massage',
-    status: 'waiting',
-    paid: false,
-    notes: 'تم التسكين من الاستقبال - في انتظار بدء الجلسة',
-  },
-];
-
-const INITIAL_PRODUCTS: POSProduct[] = [
-  {
-    id: 'prod-1',
-    name: 'واي بروتين جولد ستاندرد (Optimum Whey 2.2kg)',
-    category: 'supplements',
-    buyPrice: 1500,
-    sellPrice: 1950,
-    stock: 14,
-    barcode: '600101',
-  },
-  {
-    id: 'prod-2',
-    name: 'كرياتين مونوهايدرات ميكرونايزد (300g)',
-    category: 'supplements',
-    buyPrice: 550,
-    sellPrice: 750,
-    stock: 22,
-    barcode: '600102',
-  },
-  {
-    id: 'prod-3',
-    name: 'مشروب طاقة ريد بُل (Red Bull 250ml)',
-    category: 'drinks',
-    buyPrice: 42,
-    sellPrice: 65,
-    stock: 48,
-    barcode: '600103',
-  },
-  {
-    id: 'prod-4',
-    name: 'مياه معدنية طبيعية (Nestle 1.5L)',
-    category: 'drinks',
-    buyPrice: 8,
-    sellPrice: 15,
-    stock: 120,
-    barcode: '600104',
-  },
-  {
-    id: 'prod-5',
-    name: 'بروتين بار عضوي بالشوكولاتة (Grenade Carb Killa)',
-    category: 'snacks',
-    buyPrice: 38,
-    sellPrice: 60,
-    stock: 35,
-    barcode: '600105',
-  },
-  {
-    id: 'prod-6',
-    name: 'تيشيرت سينابس جيم الرياضي (Synapse Pro Dry-Fit)',
-    category: 'apparel',
-    buyPrice: 140,
-    sellPrice: 280,
-    stock: 18,
-    barcode: '600106',
-  },
-  {
-    id: 'prod-7',
-    name: 'شيكر رياضي سينابس (Synapse Shaker 700ml)',
-    category: 'other',
-    buyPrice: 60,
-    sellPrice: 120,
-    stock: 25,
-    barcode: '600107',
-  },
-];
-
-// Initial realistic Expenses
-const INITIAL_EXPENSES: ExpenseItem[] = [
-  {
-    id: 'exp-1',
-    title: 'فاتورة كهرباء شهرية لمكيفات وإضاءة الجيم',
-    category: 'electricity',
-    amount: 3200,
-    date: new Date(Date.now() - 3 * 86400000).toISOString(),
-    recordedBy: 'cahmed255u',
-    notes: 'العداد التجاري للصالات الثلاث',
-    paymentMethod: 'cash',
-  },
-  {
-    id: 'exp-2',
-    title: 'فاتورة استهلاك المياه ومرافق الساونا والشاور',
-    category: 'water',
-    amount: 650,
-    date: new Date(Date.now() - 2 * 86400000).toISOString(),
-    recordedBy: 'cahmed255u',
-    paymentMethod: 'cash',
-  },
-  {
-    id: 'exp-3',
-    title: 'صيانة وقائية لأجهزة المشايات الكهربائية والكابلات',
-    category: 'maintenance',
-    amount: 1400,
-    date: new Date(Date.now() - 1 * 86400000).toISOString(),
-    recordedBy: 'reception',
-    notes: 'تغيير سيور المشاية رقم 2 و 4',
-    paymentMethod: 'cash',
-  },
-  {
-    id: 'exp-4',
-    title: 'مستلزمات نظافة ومعقمات ومناشف',
-    category: 'supplies',
-    amount: 450,
-    date: new Date().toISOString(),
-    recordedBy: 'reception',
-    paymentMethod: 'cash',
-  },
-];
-
-// Initial realistic Inflows (Subscriptions entered into cash drawer)
-const INITIAL_INFLOWS: CashInflowItem[] = [
-  {
-    id: 'inf-1',
-    type: 'subscription',
-    title: 'اشتراك سنوي VIP نقدي في الخزينة',
-    amount: 4500,
-    date: new Date(Date.now() - 4 * 86400000).toISOString(),
-    memberName: 'محمود عبد الرحمن',
-    paymentMethod: 'cash',
-    recordedBy: 'cahmed255u',
-  },
-  {
-    id: 'inf-2',
-    type: 'subscription',
-    title: 'تجديد اشتراك شهري كروس فيت نقدياً بالدرج',
-    amount: 750,
-    date: new Date().toISOString(),
-    memberName: 'يوسف طارق علام',
-    paymentMethod: 'cash',
-    recordedBy: 'reception',
-  },
-  {
-    id: 'inf-3',
-    type: 'subscription',
-    title: 'اشتراك شهري سبينينغ بالدرج',
-    amount: 650,
-    date: new Date().toISOString(),
-    memberName: 'سارة خالد الديب',
-    paymentMethod: 'cash',
-    recordedBy: 'reception',
-  },
-];
-
-const INITIAL_CHECKIN_LOGS: CheckInLog[] = [
-  {
-    id: 'chk-1',
-    memberId: 'mem-101',
-    memberName: 'أحمد محمود العوضي',
-    memberCode: 'SYN-101',
-    memberType: 'member',
-    timestamp: new Date(Date.now() - 12 * 60000).toISOString(),
-    method: 'qr',
-    subscriptionValid: true,
-    seatingStatus: 'unassigned',
-  },
-  {
-    id: 'chk-2',
-    memberId: 'mem-102',
-    memberName: 'محمد طارق كمال',
-    memberCode: 'SYN-102',
-    memberType: 'member',
-    timestamp: new Date(Date.now() - 32 * 60000).toISOString(),
-    method: 'qr',
-    subscriptionValid: true,
-    seatingStatus: 'assigned',
-    assignedCategory: 'group',
-    assignedCoachId: 'cch-1',
-    assignedCoachName: 'كابتن إسلام سمير',
-    assignedSessionTitle: 'كروس فيت عالي الشدة',
-  },
-];
-
-// Seed Data for Dual Financial Flows Unified Transactions
-const INITIAL_TRAINER_TRANSACTIONS: TrainerTransaction[] = [
-  // Carried-Over Debt from Previous Month (September 2026) -> ترحيل مديونية الشهر السابق
-  {
-    transaction_id: 'TRX-099',
-    coach_id: 'cch-1',
-    coach_name: 'كابتن إسلام سمير',
-    amount: 800,
-    collected_by: 'coach',
-    payer_type: 'مديونية مرحلة من الشهر السابق (حصة كروس فيت سبتمبر)',
-    payer_name: 'حساب شهر سبتمبر 2026',
-    gym_share: 800, // Gym Receivable carried over!
-    coach_share: 0,
-    status: 'pending',
-    created_at: '2026-09-28T14:00:00.000Z',
-    month: 'سبتمبر 2026',
-    type: 'session_charge',
-    payment_method: 'coach_collected',
-    notes: 'مديونية مرحلة من شهر سبتمبر 2026 لم تسدد بعد',
-  },
-  // Flow 1: Gym-Centric (Paid to Gym -> Coach Payable: مستحقات للمدرب / ليه فلوس)
-  {
-    transaction_id: 'TRX-101',
-    coach_id: 'cch-1',
-    coach_name: 'كابتن إسلام سمير',
-    amount: 1500,
-    collected_by: 'gym',
-    payer_type: 'باقة تدريب خاصة 6 حصص PT',
-    payer_name: 'محمود عبد الرحمن',
-    gym_share: 750,
-    coach_share: 750, // Coach Payable
-    status: 'pending',
-    created_at: new Date(Date.now() - 2 * 86400000).toISOString(),
-    month: 'أكتوبر 2026',
-    type: 'subscription_charge',
-    payment_method: 'cash',
-    notes: 'تم الدفع بالاستقبال نقداً - نسبة المدرب 50%',
-  },
-  // Flow 2: Coach-Centric (Paid to Coach -> Gym Receivable: مديونية للجيم عند المدرب / عليه فلوس)
-  {
-    transaction_id: 'TRX-102',
-    coach_id: 'cch-1',
-    coach_name: 'كابتن إسلام سمير',
-    amount: 1000,
-    collected_by: 'coach',
-    payer_type: 'حصة تدريب وتغذية خاصة',
-    payer_name: 'يوسف طارق علام',
-    gym_share: 400, // Gym Receivable
-    coach_share: 600,
-    status: 'pending',
-    created_at: new Date(Date.now() - 1 * 86400000).toISOString(),
-    month: 'أكتوبر 2026',
-    type: 'session_charge',
-    payment_method: 'coach_collected',
-    notes: 'تحميل مباشر على الكابتن - اللاعب دفع للمدرب',
-  },
-  // Flow 1: Gym-Centric (Paid to Gym)
-  {
-    transaction_id: 'TRX-103',
-    coach_id: 'cch-2',
-    coach_name: 'كابتن رامي جمال',
-    amount: 800,
-    collected_by: 'gym',
-    payer_type: 'حصة ملاكمة مكثفة فردية',
-    payer_name: 'كريم سامي رضوان',
-    gym_share: 480,
-    coach_share: 320, // Coach Payable
-    status: 'pending',
-    created_at: new Date(Date.now() - 1 * 86400000).toISOString(),
-    month: 'أكتوبر 2026',
-    type: 'session_charge',
-    payment_method: 'instapay',
-    notes: 'سداد تحويل انستاباي لحساب الجيم',
-  },
-  // Flow 2: Coach-Centric (Paid to Coach)
-  {
-    transaction_id: 'TRX-104',
-    coach_id: 'cch-4',
-    coach_name: 'كابتن يوسف حسن',
-    amount: 600,
-    collected_by: 'coach',
-    payer_type: 'جلسة سبينينغ خاصة',
-    payer_name: 'سارة خالد الديب',
-    gym_share: 200, // Gym Receivable (remaining)
-    coach_share: 400,
-    status: 'pending',
-    created_at: new Date().toISOString(),
-    month: 'أكتوبر 2026',
-    type: 'session_charge',
-    payment_method: 'coach_collected',
-    notes: 'استلام مباشر من المتدربة - متبقي 200 ج.م بعد سداد جزئي',
-  },
-  // Repayment record from Coach (سداد جزئي من مديونية الكابتن)
-  {
-    transaction_id: 'REP-101',
-    coach_id: 'cch-4',
-    coach_name: 'كابتن يوسف حسن',
-    amount: 200,
-    collected_by: 'gym',
-    payer_type: 'إيداع سداد تحميل',
-    payer_name: 'كابتن يوسف حسن',
-    gym_share: 200,
-    coach_share: 0,
-    status: 'settled',
-    created_at: new Date(Date.now() - 3 * 3600000).toISOString(),
-    settled_at: new Date(Date.now() - 3 * 3600000).toISOString(),
-    settled_by: 'الاستقبال',
-    month: 'أكتوبر 2026',
-    type: 'coach_repayment',
-    payment_method: 'cash',
-    notes: 'سداد جزئي بقيمة 200 ج.م نقداً بالدرج من مديونية الحصص',
-  },
-  // Settled Transaction
-  {
-    transaction_id: 'TRX-105',
-    coach_id: 'cch-3',
-    coach_name: 'كابتن نادر مصطفى',
-    amount: 1200,
-    collected_by: 'gym',
-    payer_type: 'اشتراك شهري كمال أجسام خاص',
-    payer_name: 'عمر الشريف',
-    gym_share: 720,
-    coach_share: 480,
-    status: 'settled',
-    created_at: new Date(Date.now() - 5 * 86400000).toISOString(),
-    settled_at: new Date(Date.now() - 2 * 86400000).toISOString(),
-    settled_by: 'cahmed255u',
-    month: 'أكتوبر 2026',
-    type: 'subscription_charge',
-    payment_method: 'cash',
-    notes: 'تمت التسوية بنجاح وصرف مستحقات المدرب',
-  },
-];
-
-const INITIAL_MASTER_ENTRIES: MasterReportEntry[] = [
-  // 1. Regular Subscriptions & Direct Gym Cash (Always at the top)
-  {
-    id: 'rep-sub-1',
-    month: 'أكتوبر 2026',
-    date: new Date(Date.now() - 5 * 86400000).toISOString(),
-    playerName: 'أحمد محمود العوضي',
-    playerCode: 'SYN-106',
-    amount: 600,
-    coachName: 'اشتراك عام بالخزينة',
-    sessionCategory: 'gym',
-    sessionTitle: 'اشتراك شهري لياقة عامة (خزينة الجيم)',
-    paymentMethod: 'cash',
-    paymentStatus: 'paid',
-    notes: 'اشتراك عادي مسدد نقداً بالخزينة',
-    sourceType: 'subscription',
-  },
-  {
-    id: 'rep-sub-2',
-    month: 'أكتوبر 2026',
-    date: new Date(Date.now() - 3 * 86400000).toISOString(),
-    playerName: 'محمد طارق كمال',
-    playerCode: 'SYN-107',
-    amount: 750,
-    coachName: 'اشتراك عام بالخزينة',
-    sessionCategory: 'gym',
-    sessionTitle: 'اشتراك شهري حديد وأجهزة',
-    paymentMethod: 'cash',
-    paymentStatus: 'paid',
-    notes: 'سداد فوري بالدرج',
-    sourceType: 'subscription',
-  },
-  // 2. Players grouped by Coach (With Status: تحميل / معلق على الكابتن)
-  {
-    id: 'rep-1',
-    month: 'أكتوبر 2026',
-    date: new Date(Date.now() - 4 * 86400000).toISOString(),
-    playerName: 'محمود عبد الرحمن',
-    playerCode: 'SYN-101',
-    amount: 4500,
-    coachId: 'cch-1',
-    coachName: 'كابتن إسلام سمير',
-    sessionCategory: 'private',
-    sessionTitle: 'باقة تدريب خاصة 6 حصص PT',
-    paymentMethod: 'coach_collected',
-    paymentStatus: 'pending_on_coach',
-    notes: 'تحميل على الكابتن - مستلم من المتدرب',
-    sourceType: 'subscription',
-  },
-  {
-    id: 'rep-2',
-    month: 'أكتوبر 2026',
-    date: new Date(Date.now() - 2 * 86400000).toISOString(),
-    playerName: 'يوسف طارق علام',
-    playerCode: 'SYN-102',
-    amount: 1000,
-    coachId: 'cch-1',
-    coachName: 'كابتن إسلام سمير',
-    sessionCategory: 'private',
-    sessionTitle: 'كورس تأهيل وتغذية مع المدرب',
-    paymentMethod: 'coach_collected',
-    paymentStatus: 'pending_on_coach',
-    notes: 'اللاعب دفع للكابتن مباشرة - مديونية على الكابتن لحين التوريد',
-    sourceType: 'session',
-  },
-  {
-    id: 'rep-3',
-    month: 'أكتوبر 2026',
-    date: new Date(Date.now() - 1 * 86400000).toISOString(),
-    playerName: 'كريم سامي رضوان',
-    playerCode: 'SYN-104',
-    amount: 900,
-    coachId: 'cch-2',
-    coachName: 'كابتن رامي جمال',
-    sessionCategory: 'group',
-    sessionTitle: 'اشتراك ملاكمة ودفاع عن النفس',
-    paymentMethod: 'instapay',
-    paymentStatus: 'paid',
-    notes: 'تحويل انستاباي لحساب الجيم',
-    sourceType: 'subscription',
-  },
-  {
-    id: 'rep-4',
-    month: 'أكتوبر 2026',
-    date: new Date().toISOString(),
-    playerName: 'سارة خالد الديب',
-    playerCode: 'SYN-105',
-    amount: 650,
-    coachId: 'cch-4',
-    coachName: 'كابتن يوسف حسن',
-    sessionCategory: 'group',
-    sessionTitle: 'اشتراك شهري سبينينغ',
-    paymentMethod: 'coach_collected',
-    paymentStatus: 'pending_on_coach',
-    notes: 'مع الكابتن - يحاسب في نهاية الشهر',
-    sourceType: 'subscription',
-  },
-  {
-    id: 'rep-5',
-    month: 'أكتوبر 2026',
-    date: new Date().toISOString(),
-    playerName: 'أحمد محمود العوضي',
-    playerCode: 'SYN-106',
-    amount: 150,
-    coachId: 'cch-5',
-    coachName: 'د. حسام فاروق الشامي',
-    sessionCategory: 'physio',
-    sessionTitle: 'جلسة تأهيل وعلاج طبيعي',
-    paymentMethod: 'coach_collected',
-    paymentStatus: 'pending_on_coach',
-    notes: 'جلسة علاج طبيعي - محملة على حساب الدكتور',
-    sourceType: 'physio',
-  },
-];
-
+// Clean Initial Data
+const INITIAL_MEMBERS: Member[] = [];
+const INITIAL_SESSIONS: GymSession[] = [];
+const INITIAL_COACHES: Coach[] = [];
+const INITIAL_PHYSIO_BOOKINGS: PhysioBooking[] = [];
+const INITIAL_PRODUCTS: POSProduct[] = [];
+const INITIAL_EXPENSES: ExpenseItem[] = [];
+const INITIAL_INFLOWS: CashInflowItem[] = [];
+const INITIAL_CHECKIN_LOGS: CheckInLog[] = [];
+const INITIAL_TRAINER_TRANSACTIONS: TrainerTransaction[] = [];
+const INITIAL_MASTER_ENTRIES: MasterReportEntry[] = [];
 const INITIAL_BILLING_CYCLES: MonthlyBillingCycle[] = [
   {
-    id: 'cycle-2026-10',
-    name: 'أكتوبر 2026',
-    startDate: '2026-10-01',
+    id: `cycle-${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`,
+    name: new Date().toLocaleDateString('ar-EG', { month: 'long', year: 'numeric' }),
+    startDate: new Date().toISOString(),
     isActive: true,
-    totalCollected: 7050,
-    totalPendingOnCoaches: 1800,
-  },
-  {
-    id: 'cycle-2026-09',
-    name: 'سبتمبر 2026',
-    startDate: '2026-09-01',
-    closedDate: '2026-09-30',
-    isActive: false,
-    totalCollected: 38200,
+    totalCollected: 0,
     totalPendingOnCoaches: 0,
   },
 ];
@@ -1024,6 +396,33 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
+
+  // Polling for mobile check-ins via serverless relay /api/checkin
+  useEffect(() => {
+    const pollCheckIns = async () => {
+      try {
+        const res = await fetch('/api/checkin');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.logs) && data.logs.length > 0) {
+            setCheckInLogs((prev) => {
+              const existingIds = new Set(prev.map((l) => l.id));
+              const newItems = data.logs.filter((l: CheckInLog) => !existingIds.has(l.id));
+              if (newItems.length > 0) {
+                return [...newItems, ...prev];
+              }
+              return prev;
+            });
+          }
+        }
+      } catch {
+        // Silently ignore if offline
+      }
+    };
+
+    const interval = setInterval(pollCheckIns, 3000);
+    return () => clearInterval(interval);
   }, []);
 
   // Live timer for active physio sessions
@@ -1229,6 +628,17 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       seatingStatus: 'unassigned',
     };
     setCheckInLogs((prev) => [log, ...prev.slice(0, 49)]);
+
+    // Broadcast check-in to serverless relay
+    try {
+      fetch('/api/checkin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(log),
+      }).catch(() => {});
+    } catch {
+      // ignore
+    }
 
     return {
       success: true,
@@ -2626,6 +2036,125 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setCurrentMonth(newMonthName);
   };
 
+
+  const cancelCheckIn = (checkInLogId: string) => {
+    const log = checkInLogs.find((l) => l.id === checkInLogId);
+    if (!log) return { success: false };
+
+    // 1. If remainingSessions was deducted, restore it
+    if (log.memberId) {
+      setMembers((prev) =>
+        prev.map((m) => {
+          if (m.id === log.memberId) {
+            return {
+              ...m,
+              remainingSessions: m.remainingSessions + 1,
+            };
+          }
+          return m;
+        })
+      );
+    }
+
+    // 2. If member was placed in a session, remove them
+    if (log.assignedSessionId && log.memberId) {
+      removePlayerFromSession(log.assignedSessionId, log.memberId);
+    }
+
+    // 3. If member was placed in physio or massage, remove the booking
+    if (log.assignedCategory === 'massage' || log.assignedCategory === 'physio') {
+      setPhysioBookings((prev) =>
+        prev.filter((b) => !(b.patientCode === log.memberCode || b.patientName === log.memberName))
+      );
+    }
+
+    // 4. If a coach debt transaction was created for this check-in / seating, remove it
+    setTrainerTransactions((prev) =>
+      prev.filter(
+        (t) =>
+          !(
+            t.payer_name === log.memberName &&
+            (t.notes?.includes(log.memberCode) || t.payer_type.includes('تسكين'))
+          )
+      )
+    );
+
+    // 5. If a cash drawer inflow was created, remove it
+    setCashInflows((prev) =>
+      prev.filter(
+        (inf) =>
+          !(
+            inf.memberName === log.memberName &&
+            inf.title.includes('تسكين')
+          )
+      )
+    );
+
+    // 6. If Master Report entry was created for this seating, remove it
+    setMasterReportEntries((prev) =>
+      prev.filter(
+        (rep) =>
+          !(
+            (rep.playerCode === log.memberCode || rep.playerName === log.memberName) &&
+            rep.id.startsWith('rep-seat-')
+          )
+      )
+    );
+
+    // 7. Remove the checkInLog itself
+    setCheckInLogs((prev) => prev.filter((l) => l.id !== checkInLogId));
+
+    // 8. Delete from serverless relay /api/checkin if available
+    try {
+      fetch(`/api/checkin?id=${checkInLogId}`, { method: 'DELETE' }).catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    return { success: true };
+  };
+
+  const wipeAllDataToCleanSlate = () => {
+    setMembers([]);
+    setSessions([]);
+    setCoaches([]);
+    setPhysioBookings([]);
+    setProducts([]);
+    setTransactions([]);
+    setExpenses([]);
+    setCashInflows([]);
+    setCheckInLogs([]);
+    setSettlementLogs([]);
+    setTrainerTransactions([]);
+    setMasterReportEntries([]);
+    const freshCycle: MonthlyBillingCycle = {
+      id: `cycle-${Date.now()}`,
+      name: new Date().toLocaleDateString('ar-EG', { month: 'long', year: 'numeric' }),
+      startDate: new Date().toISOString(),
+      isActive: true,
+      totalCollected: 0,
+      totalPendingOnCoaches: 0,
+    };
+    setBillingCycles([freshCycle]);
+    [
+      'synapse_members',
+      'synapse_sessions',
+      'synapse_coaches',
+      'synapse_physio',
+      'synapse_products',
+      'synapse_transactions',
+      'synapse_expenses',
+      'synapse_cash_inflows',
+      'synapse_checkin_logs',
+      'synapse_settlement_logs',
+      'synapse_trainer_transactions',
+      'synapse_master_report',
+      'synapse_billing_cycles',
+      'synapse_current_month',
+    ].forEach((k) => localStorage.removeItem(k));
+    localStorage.setItem('synapse_data_version', 'synapse_v3_production_clean');
+  };
+
   const exportMasterReportToCSV = (filterMonth?: string) => {
     const targetMonth = filterMonth || currentMonth;
     const entries = masterReportEntries.filter(
@@ -2725,6 +2254,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     <GymDataContext.Provider
       value={{
         members,
+        cancelCheckIn,
+        wipeAllDataToCleanSlate,
         addMember,
         updateMember,
         toggleMemberAsDoctor,

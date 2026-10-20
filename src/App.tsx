@@ -18,6 +18,7 @@ import { PlayerCheckInPage } from './pages/PlayerCheckInPage';
 const MainDashboard: React.FC = () => {
   const { currentUser, canAccessPage } = useAuth();
   const [activeTab, setActiveTab] = useState('reception');
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
   // Enforce access control if role changes or unauthorized page requested
   useEffect(() => {
@@ -59,12 +60,20 @@ const MainDashboard: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#090d16] text-slate-100 flex flex-row selection:bg-teal-500 selection:text-white">
-      {/* Role-Aware Sidebar */}
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+      {/* Role-Aware Sidebar (Hidden on mobile by default, drawer when opened) */}
+      <Sidebar
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        isMobileOpen={isMobileSidebarOpen}
+        onCloseMobile={() => setIsMobileSidebarOpen(false)}
+      />
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 min-h-screen overflow-x-hidden">
-        <Topbar activeTab={activeTab} />
+        <Topbar
+          activeTab={activeTab}
+          onOpenMobileMenu={() => setIsMobileSidebarOpen(true)}
+        />
         <main className="flex-1 pb-16">
           {renderActivePage()}
         </main>
@@ -72,6 +81,7 @@ const MainDashboard: React.FC = () => {
     </div>
   );
 };
+
 
 export default function App() {
   const [currentPath, setCurrentPath] = useState(() => {

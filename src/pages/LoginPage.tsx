@@ -5,9 +5,7 @@ import {
   ShieldAlert,
   ArrowRight,
   Dumbbell,
-  Sparkles,
-  KeyRound,
-  CheckCircle2,
+  ShieldCheck,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { sounds } from '../utils/sound';
@@ -33,27 +31,15 @@ export const LoginPage: React.FC = () => {
       const res = login(username, password);
       setIsLoading(false);
       if (!res.success) {
-        setError(res.error || 'فشل تسجيل الدخول');
+        setError(res.error || 'اسم المستخدم أو كلمة المرور غير صحيحة');
       } else {
         sounds.playSuccessDing();
       }
     }, 400);
   };
 
-  const fillAdminCredentials = () => {
-    setUsername('cahmed255u');
-    setPassword('cahmed255p');
-    setError('');
-  };
-
-  const fillReceptionCredentials = () => {
-    setUsername('reception');
-    setPassword('123');
-    setError('');
-  };
-
   return (
-    <div className="min-h-screen bg-[#070b12] flex items-center justify-center p-4 relative overflow-hidden selection:bg-teal-500 selection:text-white">
+    <div className="min-h-screen bg-[#070b12] flex items-center justify-center p-4 relative overflow-hidden selection:bg-teal-500 selection:text-white" dir="rtl">
       {/* Background Glow Orbs */}
       <div className="absolute top-1/4 -right-24 w-96 h-96 bg-teal-500/10 rounded-full blur-3xl pointer-events-none"></div>
       <div className="absolute bottom-1/4 -left-24 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none"></div>
@@ -81,35 +67,12 @@ export const LoginPage: React.FC = () => {
             </p>
           </div>
 
-          {/* Quick Credential Test Pills */}
-          <div className="mb-6 p-3 rounded-2xl bg-slate-900/90 border border-slate-800 text-xs">
-            <div className="text-[11px] text-slate-400 font-semibold mb-2 flex items-center justify-between">
-              <span>حسابات تجريبية سريعة:</span>
-              <Sparkles className="w-3.5 h-3.5 text-teal-400" />
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={fillAdminCredentials}
-                className="px-2.5 py-1.5 rounded-xl bg-teal-500/10 hover:bg-teal-500/20 border border-teal-500/30 text-teal-300 font-bold text-[11px] text-right transition flex items-center justify-between"
-              >
-                <span>المدير العام</span>
-                <span className="text-[9px] font-mono text-teal-400 bg-teal-950/60 px-1 rounded">
-                  cahmed255u
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={fillReceptionCredentials}
-                className="px-2.5 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 font-bold text-[11px] text-right transition flex items-center justify-between"
-              >
-                <span>موظف استقبال</span>
-                <span className="text-[9px] font-mono text-amber-400 bg-amber-950/60 px-1 rounded">
-                  reception
-                </span>
-              </button>
-            </div>
+          {/* Protected Portal Security Banner */}
+          <div className="mb-6 p-3 rounded-2xl bg-slate-900/90 border border-slate-800 text-xs flex items-center gap-2.5 text-slate-300">
+            <ShieldCheck className="w-4 h-4 text-teal-400 shrink-0" />
+            <span className="text-[11px] leading-relaxed">
+              بوابة تسجيل دخول آمنة ومحمية. يرجى إدخال اسم المستخدم وكلمة المرور المعتمدة.
+            </span>
           </div>
 
           {/* Error Message */}
@@ -129,10 +92,12 @@ export const LoginPage: React.FC = () => {
               <div className="relative">
                 <input
                   type="text"
+                  required
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="مثال: cahmed255u"
+                  placeholder="اسم المستخدم..."
                   className="w-full bg-slate-900/90 border border-slate-700/80 rounded-xl px-4 py-3 pl-10 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 transition dir-ltr"
+                  autoFocus
                 />
                 <User className="w-4 h-4 text-slate-500 absolute left-3 top-3.5" />
               </div>
@@ -145,6 +110,7 @@ export const LoginPage: React.FC = () => {
               <div className="relative">
                 <input
                   type="password"
+                  required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
@@ -172,7 +138,7 @@ export const LoginPage: React.FC = () => {
 
           {/* Footer note */}
           <div className="mt-8 pt-5 border-t border-slate-800/80 text-center text-xs text-slate-500">
-            <p>منظومة سينابس SaaS تدعم تسجيل دخول فوري بالصلاحيات المخصصة</p>
+            <p>منظومة Synapse Gym SaaS - الإصدار الإنتاجي للتشغيل الفعلي v2.4</p>
           </div>
         </div>
       </div>

@@ -12,15 +12,23 @@ import {
   WalletCards,
   BarChart3,
   FileSpreadsheet,
+  X,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 interface SidebarProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
+  isMobileOpen?: boolean;
+  onCloseMobile?: () => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => {
+export const Sidebar: React.FC<SidebarProps> = ({
+  activeTab,
+  setActiveTab,
+  isMobileOpen = false,
+  onCloseMobile,
+}) => {
   const { currentUser, logout, canAccessPage } = useAuth();
 
   const menuItems = [
@@ -52,7 +60,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
       sublabel: 'اليوميات، الحصص، وتصفية الحساب',
       icon: Calculator,
       pageKey: 'trainers',
-      // Now visible to Receptionist as requested!
     },
     {
       id: 'expenses',
@@ -100,23 +107,34 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
     return canAccessPage(item.pageKey);
   });
 
-  return (
-    <aside className="w-72 bg-[#0c1220] border-l border-slate-800/80 flex flex-col h-screen sticky top-0 select-none z-30 shadow-2xl">
+  const renderContent = (isDrawer = false) => (
+    <>
       {/* Brand Header */}
       <div className="p-5 border-b border-slate-800/60">
-        <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-xl bg-gradient-to-tr from-teal-600 via-teal-500 to-cyan-400 flex items-center justify-center shadow-lg shadow-teal-500/20 text-white font-black text-xl tracking-wider">
-            S
-          </div>
-          <div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-xl font-extrabold text-white tracking-wide">SYNAPSE</span>
-              <span className="text-[10px] uppercase font-bold tracking-widest px-1.5 py-0.5 rounded bg-teal-500/20 text-teal-400 border border-teal-500/30">
-                SaaS
-              </span>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-gradient-to-tr from-teal-600 via-teal-500 to-cyan-400 flex items-center justify-center shadow-lg shadow-teal-500/20 text-white font-black text-xl tracking-wider">
+              S
             </div>
-            <p className="text-xs text-slate-400 font-medium">نظام إدارة الأندية الرياضية</p>
+            <div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xl font-extrabold text-white tracking-wide">SYNAPSE</span>
+                <span className="text-[10px] uppercase font-bold tracking-widest px-1.5 py-0.5 rounded bg-teal-500/20 text-teal-400 border border-teal-500/30">
+                  SaaS
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 font-medium">نظام إدارة الأندية الرياضية</p>
+            </div>
           </div>
+
+          {isDrawer && onCloseMobile && (
+            <button
+              onClick={onCloseMobile}
+              className="p-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white transition"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         {/* Tenant Gym Selector */}
@@ -140,8 +158,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
           return (
             <button
               key={item.id}
-              onClick={() => setActiveTab(item.id)}
-              className={`w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-right transition-all duration-200 group ${
+              onClick={() => {
+                setActiveTab(item.id);
+                if (isDrawer && onCloseMobile) {
+                  onCloseMobile();
+                }
+              }}
+              className={`w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-right transition-all duration-200 group cursor-pointer ${
                 isActive
                   ? 'bg-gradient-to-l from-teal-500/15 via-teal-500/10 to-transparent border-r-4 border-teal-400 text-teal-300 font-bold shadow-sm'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
@@ -203,7 +226,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
           <button
             onClick={logout}
             title="تسجيل الخروج"
-            className="p-2 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
+            className="p-2 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer"
           >
             <LogOut className="w-4 h-4" />
           </button>
@@ -214,6 +237,30 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
           <span>منصة سينابس SaaS الذكية v2.4</span>
         </div>
       </div>
-    </aside>
+    </>
+  );
+
+  return (
+    <>
+      {/* Desktop Persistent Sidebar (Hidden on Mobile) */}
+      <aside className="hidden lg:flex w-72 bg-[#0c1220] border-l border-slate-800/80 flex-col h-screen sticky top-0 select-none z-30 shadow-2xl">
+        {renderContent(false)}
+      </aside>
+
+      {/* Mobile Slide-Over Drawer */}
+      {isMobileOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden flex" dir="rtl">
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 bg-black/70 backdrop-blur-sm transition-opacity"
+            onClick={onCloseMobile}
+          />
+          {/* Drawer Pane */}
+          <div className="relative w-80 max-w-[85vw] bg-[#0c1220] border-l border-slate-800/80 flex flex-col h-full shadow-2xl z-10 animate-slide-left">
+            {renderContent(true)}
+          </div>
+        </div>
+      )}
+    </>
   );
 };
