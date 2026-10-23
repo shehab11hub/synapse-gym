@@ -1,193 +1,555 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   BarChart3,
   TrendingUp,
   DollarSign,
   PieChart as PieIcon,
   Calendar,
-  Users,
   Award,
-  Zap,
-  Droplets,
-  Wrench,
   Percent,
   ArrowUpRight,
   Sparkles,
+  Clock,
+  Filter,
+  CheckCircle2,
+  AlertCircle,
+  RotateCcw,
 } from 'lucide-react';
 import { useGymData } from '../context/GymDataContext';
 import { formatEGP } from '../utils/formatters';
 
+type PeriodMode = 'day' | 'month' | 'year';
+
+const ARABIC_MONTH_LABELS = [
+  'يناير',
+  'فبراير',
+  'مارس',
+  'إبريل',
+  'مايو',
+  'يونيو',
+  'يوليو',
+  'أغسطس',
+  'سبتمبر',
+  'أكتوبر',
+  'نوفمبر',
+  'ديسمبر',
+];
+
 export const AnalyticsPage: React.FC = () => {
   const { expenses, cashInflows, transactions, physioBookings } = useGymData();
 
-  // Period Filter: 'week' | 'month' | 'year'
-  const [period, setPeriod] = useState<'week' | 'month' | 'year'>('week');
+  // Period mode: 'day' | 'month' | 'year'
+  const [periodMode, setPeriodMode] = useState<PeriodMode>('month');
+
+  // Selected Date States
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const currentMonthIso = new Date().toISOString().slice(0, 7);
+  const currentYearNum = new Date().getFullYear();
+
+  const [selectedDate, setSelectedDate] = useState<string>(todayIso);
+  const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthIso);
+  const [selectedYear, setSelectedYear] = useState<number>(currentYearNum);
+
   const [hoveredBarIndex, setHoveredBarIndex] = useState<number | null>(null);
 
-  // Live revenue calculations
-  const totalSubRevenue = cashInflows
-    .filter((i) => i.type === 'subscription' || i.type === 'manual_deposit')
+  // Helper date shortcuts
+  const handleSetToday = () => {
+    setSelectedDate(todayIso);
+  };
+
+  const handleSetYesterday = () => {
+    const y = new Date();
+    y.setDate(y.getDate() - 1);
+    setSelectedDate(y.toISOString().slice(0, 10));
+  };
+
+  const handleSetCurrentMonth = () => {
+    setSelectedMonth(currentMonthIso);
+  };
+
+  const handleSetPreviousMonth = () => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 1);
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    setSelectedMonth(`${d.getFullYear()}-${m}`);
+  };
+
+  const handleSetCurrentYear = () => {
+    setSelectedYear(currentYearNum);
+  };
+
+  const handleSetPreviousYear = () => {
+    setSelectedYear(currentYearNum - 1);
+  };
+
+  // 1. FILTER LIVE DATA STRICTLY ACCORDING TO SELECTED PERIOD
+  const filteredData = useMemo(() => {
+    let matchDate: (dateStr?: string) => boolean;
+
+    if (periodMode === 'day') {
+      matchDate = (dateStr?: string) => !!dateStr && dateStr.startsWith(selectedDate);
+    } else if (periodMode === 'month') {
+      matchDate = (dateStr?: string) => !!dateStr && dateStr.startsWith(selectedMonth);
+    } else {
+      matchDate = (dateStr?: string) => !!dateStr && dateStr.startsWith(String(selectedYear));
+    }
+
+    const matchedInflows = cashInflows.filter((inf) => matchDate(inf.date));
+    const matchedExpenses = expenses.filter((exp) => matchDate(exp.date));
+    const matchedTransactions = transactions.filter((tx) => matchDate(tx.timestamp));
+    const matchedPhysio = physioBookings.filter(
+      (b) => b.status === 'completed' && matchDate(b.startTime)
+    );
+
+    return {
+      inflows: matchedInflows,
+      expenses: matchedExpenses,
+      transactions: matchedTransactions,
+      physio: matchedPhysio,
+    };
+  }, [
+    cashInflows,
+    expenses,
+    transactions,
+    physioBookings,
+    periodMode,
+    selectedDate,
+    selectedMonth,
+    selectedYear,
+  ]);
+
+  // 2. LIVE REVENUE CALCULATIONS (Strictly real data, zero fake numbers)
+  const totalSubRevenue = filteredData.inflows
+    .filter(
+      (i) =>
+        i.type === 'subscription' ||
+        i.type === 'manual_deposit' ||
+        i.type === 'coach_settlement'
+    )
     .reduce((acc, i) => acc + i.amount, 0);
 
-  const totalPosRevenue = transactions.reduce((acc, t) => acc + t.totalAmount, 0);
+  const totalPosRevenue = filteredData.transactions.reduce(
+    (acc, t) => acc + t.totalAmount,
+    0
+  );
 
-  const totalPhysioRevenue = physioBookings
-    .filter((p) => p.status === 'completed')
-    .reduce((acc, p) => acc + p.totalFee, 0);
+  const totalPhysioRevenue = filteredData.physio.reduce(
+    (acc, p) => acc + p.totalFee,
+    0
+  );
 
   const totalRevenue = totalSubRevenue + totalPosRevenue + totalPhysioRevenue;
 
-  // Live expense calculations
-  const totalCoachExpense = expenses
+  // 3. LIVE EXPENSE CALCULATIONS (Strictly real data)
+  const totalCoachExpense = filteredData.expenses
     .filter((e) => e.category === 'trainer_payout')
     .reduce((acc, e) => acc + e.amount, 0);
 
-  const totalElectricityExpense = expenses
+  const totalElectricityExpense = filteredData.expenses
     .filter((e) => e.category === 'electricity')
     .reduce((acc, e) => acc + e.amount, 0);
 
-  const totalWaterExpense = expenses
+  const totalWaterExpense = filteredData.expenses
     .filter((e) => e.category === 'water')
     .reduce((acc, e) => acc + e.amount, 0);
 
-  const totalMaintenanceExpense = expenses
+  const totalMaintenanceExpense = filteredData.expenses
     .filter((e) => e.category === 'maintenance')
     .reduce((acc, e) => acc + e.amount, 0);
 
-  const totalOtherExpenses = expenses
+  const totalOtherExpenses = filteredData.expenses
     .filter((e) => ['rent', 'supplies', 'other'].includes(e.category))
     .reduce((acc, e) => acc + e.amount, 0);
 
-  const totalExpenses = expenses.reduce((acc, e) => acc + e.amount, 0);
+  const totalExpenses = filteredData.expenses.reduce((acc, e) => acc + e.amount, 0);
   const netProfit = totalRevenue - totalExpenses;
   const profitMargin = totalRevenue > 0 ? Math.round((netProfit / totalRevenue) * 100) : 0;
 
-  // Comparison Datasets for Week, Month, and Year
-  const weekData = [
-    { label: 'السبت', revenue: 5200, expense: 1800, profit: 3400 },
-    { label: 'الأحد', revenue: 4800, expense: 1200, profit: 3600 },
-    { label: 'الاثنين', revenue: 6100, expense: 2200, profit: 3900 },
-    { label: 'الثلاثاء', revenue: 5400, expense: 1500, profit: 3900 },
-    { label: 'الأربعاء', revenue: 7300, expense: 2100, profit: 5200 },
-    { label: 'الخميس', revenue: 8900, expense: 3400, profit: 5500 },
-    { label: 'الجمعة', revenue: 4200, expense: 900, profit: 3300 },
-  ];
+  // 4. DYNAMIC BAR CHART DATASET ACCORDING TO PERIOD
+  const currentDataset = useMemo(() => {
+    if (periodMode === 'day') {
+      // 6 time slots throughout the day
+      const slots = [
+        { label: '08:00 - 11:00', startH: 8, endH: 11 },
+        { label: '11:00 - 14:00', startH: 11, endH: 14 },
+        { label: '14:00 - 17:00', startH: 14, endH: 17 },
+        { label: '17:00 - 20:00', startH: 17, endH: 20 },
+        { label: '20:00 - 23:00', startH: 20, endH: 23 },
+        { label: '23:00 - 02:00', startH: 23, endH: 26 },
+      ];
 
-  const monthData = [
-    { label: 'الأسبوع 1', revenue: 24500, expense: 9200, profit: 15300 },
-    { label: 'الأسبوع 2', revenue: 28900, expense: 8700, profit: 20200 },
-    { label: 'الأسبوع 3', revenue: 31200, expense: 11400, profit: 19800 },
-    { label: 'الأسبوع 4 (الحالي)', revenue: 34100, expense: 10500, profit: 23600 },
-  ];
+      return slots.map((slot) => {
+        const isInSlot = (dateStr?: string) => {
+          if (!dateStr || !dateStr.startsWith(selectedDate)) return false;
+          try {
+            const h = new Date(dateStr).getHours();
+            if (slot.endH === 26) {
+              return h >= 23 || h < 2;
+            }
+            return h >= slot.startH && h < slot.endH;
+          } catch {
+            return false;
+          }
+        };
 
-  const yearData = [
-    { label: 'يناير', revenue: 85000, expense: 38000, profit: 47000 },
-    { label: 'فبراير', revenue: 92000, expense: 41000, profit: 51000 },
-    { label: 'مارس', revenue: 104000, expense: 43000, profit: 61000 },
-    { label: 'أبريل', revenue: 89000, expense: 36000, profit: 53000 },
-    { label: 'مايو', revenue: 112000, expense: 48000, profit: 64000 },
-    { label: 'يونيو', revenue: 125000, expense: 52000, profit: 73000 },
-    { label: 'يوليو', revenue: 138000, expense: 55000, profit: 83000 },
-    { label: 'أغسطس', revenue: 142000, expense: 58000, profit: 84000 },
-    { label: 'سبتمبر', revenue: 119000, expense: 49000, profit: 70000 },
-    { label: 'أكتوبر', revenue: 128000, expense: 46000, profit: 82000 },
-  ];
+        const subRev = filteredData.inflows
+          .filter(
+            (i) =>
+              isInSlot(i.date) &&
+              (i.type === 'subscription' ||
+                i.type === 'manual_deposit' ||
+                i.type === 'coach_settlement')
+          )
+          .reduce((acc, i) => acc + i.amount, 0);
 
-  const currentDataset =
-    period === 'week' ? weekData : period === 'month' ? monthData : yearData;
+        const posRev = filteredData.transactions
+          .filter((t) => isInSlot(t.timestamp))
+          .reduce((acc, t) => acc + t.totalAmount, 0);
 
-  const maxVal = Math.max(
-    ...currentDataset.map((d) => Math.max(d.revenue, d.expense, d.profit)),
-    1000
+        const physRev = filteredData.physio
+          .filter((p) => isInSlot(p.startTime))
+          .reduce((acc, p) => acc + p.totalFee, 0);
+
+        const exp = filteredData.expenses
+          .filter((e) => isInSlot(e.date))
+          .reduce((acc, e) => acc + e.amount, 0);
+
+        const rev = subRev + posRev + physRev;
+        return {
+          label: slot.label,
+          revenue: rev,
+          expense: exp,
+          profit: rev - exp,
+        };
+      });
+    }
+
+    if (periodMode === 'month') {
+      // 4 weeks of the selected month
+      const weeks = [
+        { label: 'الأسبوع 1 (1 - 7)', startDay: 1, endDay: 7 },
+        { label: 'الأسبوع 2 (8 - 14)', startDay: 8, endDay: 14 },
+        { label: 'الأسبوع 3 (15 - 21)', startDay: 15, endDay: 21 },
+        { label: 'الأسبوع 4 (22 - 31)', startDay: 22, endDay: 31 },
+      ];
+
+      return weeks.map((w) => {
+        const isInWeek = (dateStr?: string) => {
+          if (!dateStr || !dateStr.startsWith(selectedMonth)) return false;
+          try {
+            const day = new Date(dateStr).getDate();
+            return day >= w.startDay && day <= w.endDay;
+          } catch {
+            return false;
+          }
+        };
+
+        const subRev = filteredData.inflows
+          .filter(
+            (i) =>
+              isInWeek(i.date) &&
+              (i.type === 'subscription' ||
+                i.type === 'manual_deposit' ||
+                i.type === 'coach_settlement')
+          )
+          .reduce((acc, i) => acc + i.amount, 0);
+
+        const posRev = filteredData.transactions
+          .filter((t) => isInWeek(t.timestamp))
+          .reduce((acc, t) => acc + t.totalAmount, 0);
+
+        const physRev = filteredData.physio
+          .filter((p) => isInWeek(p.startTime))
+          .reduce((acc, p) => acc + p.totalFee, 0);
+
+        const exp = filteredData.expenses
+          .filter((e) => isInWeek(e.date))
+          .reduce((acc, e) => acc + e.amount, 0);
+
+        const rev = subRev + posRev + physRev;
+        return {
+          label: w.label,
+          revenue: rev,
+          expense: exp,
+          profit: rev - exp,
+        };
+      });
+    }
+
+    // Yearly: 12 months
+    return ARABIC_MONTH_LABELS.map((monthName, idx) => {
+      const monthPrefix = `${selectedYear}-${String(idx + 1).padStart(2, '0')}`;
+
+      const isInMonth = (dateStr?: string) => !!dateStr && dateStr.startsWith(monthPrefix);
+
+      const subRev = filteredData.inflows
+        .filter(
+          (i) =>
+            isInMonth(i.date) &&
+            (i.type === 'subscription' ||
+              i.type === 'manual_deposit' ||
+              i.type === 'coach_settlement')
+        )
+        .reduce((acc, i) => acc + i.amount, 0);
+
+      const posRev = filteredData.transactions
+        .filter((t) => isInMonth(t.timestamp))
+        .reduce((acc, t) => acc + t.totalAmount, 0);
+
+      const physRev = filteredData.physio
+        .filter((p) => isInMonth(p.startTime))
+        .reduce((acc, p) => acc + p.totalFee, 0);
+
+      const exp = filteredData.expenses
+        .filter((e) => isInMonth(e.date))
+        .reduce((acc, e) => acc + e.amount, 0);
+
+      const rev = subRev + posRev + physRev;
+      return {
+        label: monthName,
+        revenue: rev,
+        expense: exp,
+        profit: rev - exp,
+      };
+    });
+  }, [periodMode, selectedDate, selectedMonth, selectedYear, filteredData]);
+
+  // Dynamic Scale for Bars
+  const rawMax = Math.max(
+    ...currentDataset.map((d) => Math.max(d.revenue, d.expense, Math.abs(d.profit))),
+    0
   );
+  const maxVal = rawMax > 0 ? rawMax : 1000;
+  const isAllZeroData = rawMax === 0;
 
-  // Revenue Pie Breakdown Items
+  // 5. REVENUE BREAKDOWN (Zero-fake numbers)
   const revenueBreakdown = [
-    { name: 'اشتراكات الجيم', amount: Math.max(totalSubRevenue, 1200), color: '#14b8a6' },
-    { name: 'مبيعات المتجر (POS)', amount: Math.max(totalPosRevenue, 650), color: '#06b6d4' },
-    { name: 'تأجير العلاج الطبيعي', amount: Math.max(totalPhysioRevenue, 450), color: '#a855f7' },
+    { name: 'اشتراكات وتحصيلات الجيم', amount: totalSubRevenue, color: '#14b8a6' },
+    { name: 'مبيعات المتجر (POS)', amount: totalPosRevenue, color: '#06b6d4' },
+    { name: 'جلسات العلاج الطبيعي والمساج', amount: totalPhysioRevenue, color: '#a855f7' },
   ];
   const sumRevenue = revenueBreakdown.reduce((acc, r) => acc + r.amount, 0);
 
-  // Expense Pie Breakdown Items
+  // 6. EXPENSE BREAKDOWN (Zero-fake numbers)
   const expenseBreakdown = [
-    { name: 'حسابات ورواتب المدربين', amount: Math.max(totalCoachExpense, 1800), color: '#f43f5e' },
-    { name: 'كهرباء ومكيفات', amount: Math.max(totalElectricityExpense, 1200), color: '#f59e0b' },
-    { name: 'صيانة المشايات والأجهزة', amount: Math.max(totalMaintenanceExpense, 800), color: '#f97316' },
-    { name: 'استهلاك مياه وساونا', amount: Math.max(totalWaterExpense, 450), color: '#38bdf8' },
-    { name: 'إيجار ونظافة ونثريات', amount: Math.max(totalOtherExpenses, 500), color: '#8b5cf6' },
+    { name: 'حسابات ورواتب المدربين', amount: totalCoachExpense, color: '#f43f5e' },
+    { name: 'كهرباء ومكيفات', amount: totalElectricityExpense, color: '#f59e0b' },
+    { name: 'صيانة المشايات والأجهزة', amount: totalMaintenanceExpense, color: '#f97316' },
+    { name: 'استهلاك مياه ومرافق', amount: totalWaterExpense, color: '#38bdf8' },
+    { name: 'إيجار ونظافة ونثريات', amount: totalOtherExpenses, color: '#8b5cf6' },
   ];
   const sumExpenses = expenseBreakdown.reduce((acc, e) => acc + e.amount, 0);
 
+  // Formatted Period Description
+  const formattedPeriodTitle = useMemo(() => {
+    if (periodMode === 'day') {
+      try {
+        const d = new Date(selectedDate);
+        return d.toLocaleDateString('ar-EG', {
+          weekday: 'long',
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric',
+        });
+      } catch {
+        return selectedDate;
+      }
+    }
+    if (periodMode === 'month') {
+      try {
+        const parts = selectedMonth.split('-');
+        const y = parts[0];
+        const m = parseInt(parts[1]) - 1;
+        return `${ARABIC_MONTH_LABELS[m] || ''} ${y}`;
+      } catch {
+        return selectedMonth;
+      }
+    }
+    return `عام ${selectedYear}`;
+  }, [periodMode, selectedDate, selectedMonth, selectedYear]);
+
   return (
     <div className="p-8 space-y-8 max-w-7xl mx-auto">
-      {/* Top Banner with Period Switcher */}
-      <div className="bg-gradient-to-r from-[#0d1e38] via-[#0f2342] to-[#091528] border border-cyan-500/20 rounded-3xl p-6 shadow-xl flex flex-col md:flex-row items-center justify-between gap-6">
-        <div className="flex items-center gap-4">
-          <div className="w-14 h-14 rounded-2xl bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-300">
-            <BarChart3 className="w-8 h-8" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-xl font-black text-white">
-                التحليلات المالية والرسومات البيانية الشاملة
-              </h2>
-              <span className="text-xs px-2.5 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold">
-                Business Intelligence
-              </span>
+      {/* Top Banner with Period Mode Tabs & Interactive Date Pickers */}
+      <div className="bg-gradient-to-r from-[#0d1e38] via-[#0f2342] to-[#091528] border border-cyan-500/20 rounded-3xl p-6 shadow-xl space-y-6">
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 rounded-2xl bg-cyan-500/20 border border-cyan-500/40 flex items-center justify-center text-cyan-300 shadow-inner">
+              <BarChart3 className="w-8 h-8" />
             </div>
-            <p className="text-xs text-slate-400 mt-1">
-              مقارنة الإيرادات، المصاريف، وصافي الأرباح للأسبوع والشهر والسنة وحالة المكان المالية بالكامل
-            </p>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl font-black text-white">
+                  التحليلات المالية والرسومات البيانية الشاملة
+                </h2>
+                <span className="text-xs px-2.5 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold">
+                  Business Intelligence 100% Real
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">
+                مقارنة الإيرادات، المصاريف، وصافي الأرباح محسوبة ديناميكياً 100% من واقع المعاملات المسجلة
+              </p>
+            </div>
+          </div>
+
+          {/* PERIOD MODE SELECTOR TABS (يومي | شهري | سنوي) */}
+          <div className="flex items-center gap-1.5 p-1.5 bg-slate-900 border border-slate-800 rounded-2xl">
+            <button
+              onClick={() => setPeriodMode('day')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                periodMode === 'day'
+                  ? 'bg-teal-500 text-slate-950 font-black shadow-md shadow-teal-500/20'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>عرض يومي (Day)</span>
+            </button>
+
+            <button
+              onClick={() => setPeriodMode('month')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                periodMode === 'month'
+                  ? 'bg-cyan-500 text-slate-950 font-black shadow-md shadow-cyan-500/20'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              <span>عرض شهري (Month)</span>
+            </button>
+
+            <button
+              onClick={() => setPeriodMode('year')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                periodMode === 'year'
+                  ? 'bg-indigo-500 text-white font-black shadow-md shadow-indigo-500/20'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Filter className="w-3.5 h-3.5" />
+              <span>عرض سنوي (Year)</span>
+            </button>
           </div>
         </div>
 
-        {/* PERIOD SWITCHER BUTTONS (الأسبوع ده، الشهر ده، السنه دي) */}
-        <div className="flex items-center gap-1.5 p-1.5 bg-slate-900 border border-slate-800 rounded-2xl">
-          <button
-            onClick={() => setPeriod('week')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
-              period === 'week'
-                ? 'bg-teal-500 text-slate-950 font-black shadow-md shadow-teal-500/20'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <Calendar className="w-3.5 h-3.5" />
-            <span>الأسبوع الحالي (This Week)</span>
-          </button>
+        {/* INTERACTIVE DATE FILTER TOOLBAR */}
+        <div className="pt-4 border-t border-cyan-500/15 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs font-bold text-slate-400 flex items-center gap-1.5">
+              <Calendar className="w-4 h-4 text-cyan-400" />
+              <span>تحديد النطاق الزمني:</span>
+            </span>
 
-          <button
-            onClick={() => setPeriod('month')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
-              period === 'month'
-                ? 'bg-cyan-500 text-slate-950 font-black shadow-md shadow-cyan-500/20'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <Calendar className="w-3.5 h-3.5" />
-            <span>الشهر الحالي (This Month)</span>
-          </button>
+            {/* Daily Picker Controls */}
+            {periodMode === 'day' && (
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(e.target.value)}
+                  className="bg-slate-900 border border-slate-700 hover:border-teal-400 text-white font-mono font-bold text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-teal-400 cursor-pointer shadow-inner"
+                />
+                <button
+                  type="button"
+                  onClick={handleSetToday}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                    selectedDate === todayIso
+                      ? 'bg-teal-500/20 text-teal-300 border border-teal-500/40'
+                      : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  اليوم
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSetYesterday}
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-900 text-slate-400 hover:text-white border border-slate-800 transition cursor-pointer"
+                >
+                  أمس
+                </button>
+              </div>
+            )}
 
-          <button
-            onClick={() => setPeriod('year')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
-              period === 'year'
-                ? 'bg-indigo-500 text-white font-black shadow-md shadow-indigo-500/20'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <Calendar className="w-3.5 h-3.5" />
-            <span>السنة الحالية (This Year)</span>
-          </button>
+            {/* Monthly Picker Controls */}
+            {periodMode === 'month' && (
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="month"
+                  value={selectedMonth}
+                  onChange={(e) => setSelectedMonth(e.target.value)}
+                  className="bg-slate-900 border border-slate-700 hover:border-cyan-400 text-white font-mono font-bold text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-cyan-400 cursor-pointer shadow-inner"
+                />
+                <button
+                  type="button"
+                  onClick={handleSetCurrentMonth}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                    selectedMonth === currentMonthIso
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                      : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  الشهر الحالي
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSetPreviousMonth}
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-900 text-slate-400 hover:text-white border border-slate-800 transition cursor-pointer"
+                >
+                  الشهر السابق
+                </button>
+              </div>
+            )}
+
+            {/* Yearly Picker Controls */}
+            {periodMode === 'year' && (
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={selectedYear}
+                  onChange={(e) => setSelectedYear(parseInt(e.target.value))}
+                  className="bg-slate-900 border border-slate-700 hover:border-indigo-400 text-white font-mono font-bold text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-indigo-400 cursor-pointer shadow-inner"
+                >
+                  {[2024, 2025, 2026, 2027, 2028, 2029, 2030].map((yr) => (
+                    <option key={yr} value={yr}>
+                      {yr}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={handleSetCurrentYear}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                    selectedYear === currentYearNum
+                      ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40'
+                      : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  السنة الحالية
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSetPreviousYear}
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-900 text-slate-400 hover:text-white border border-slate-800 transition cursor-pointer"
+                >
+                  السنة السابقة
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Active Period Label Display */}
+          <div className="flex items-center gap-2 text-xs font-bold px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 text-slate-300 shadow-sm">
+            <span className="text-slate-500">الفترة المعروضة:</span>
+            <span className="text-cyan-300 font-bold">{formattedPeriodTitle}</span>
+          </div>
         </div>
       </div>
 
-      {/* Top 4 KPI Metrics */}
+      {/* Top 4 KPI Metrics (100% Dynamic Calculated) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         {/* Total Revenues */}
         <div className="p-6 rounded-3xl bg-[#0f172a]/90 border border-slate-800 shadow-xl relative overflow-hidden">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-bold text-slate-400">إجمالي الإيرادات الكلية</span>
+            <span className="text-xs font-bold text-slate-400">إجمالي الإيرادات الفعلية</span>
             <div className="p-2 rounded-xl bg-teal-500/20 text-teal-400">
               <DollarSign className="w-5 h-5" />
             </div>
@@ -225,7 +587,7 @@ export const AnalyticsPage: React.FC = () => {
               <Award className="w-5 h-5" />
             </div>
           </div>
-          <div className="text-2xl font-black text-emerald-400 font-mono">
+          <div className={`text-2xl font-black font-mono ${netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
             {formatEGP(netProfit)}
           </div>
           <div className="flex items-center gap-1 text-[11px] text-emerald-300 mt-2 font-bold">
@@ -246,25 +608,33 @@ export const AnalyticsPage: React.FC = () => {
             {profitMargin}%
           </div>
           <div className="text-[11px] text-cyan-400/80 mt-2 font-bold">
-            مؤشر كفاءة تشغيلية عالي للنادي
+            {totalRevenue === 0
+              ? 'بانتظار تسجيل حركات للفترة'
+              : profitMargin >= 30
+              ? 'مؤشر كفاءة تشغيلية عالي للنادي'
+              : 'مؤشر تشغيلي متوازن'}
           </div>
         </div>
       </div>
 
-      {/* CHART 1: COMPARISON BAR CHART (مقارنة الإيرادات مقابل المصاريف وصافي الربح) */}
-      <div className="bg-[#0f172a]/90 border border-slate-800 rounded-3xl p-6 shadow-xl">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
+      {/* CHART 1: DYNAMIC COMPARISON BAR CHART */}
+      <div className="bg-[#0f172a]/90 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div>
             <h3 className="text-base font-black text-white flex items-center gap-2">
               <TrendingUp className="w-5 h-5 text-teal-400" />
               <span>
                 مقارنة الإيرادات والمصاريف وصافي الأرباح (
-                {period === 'week' ? 'خلال أيام الأسبوع الحالي' : period === 'month' ? 'خلال أسابيع الشهر الحالي' : 'شهور السنة الحالية'}
+                {periodMode === 'day'
+                  ? 'خلال فترات اليوم المحدد'
+                  : periodMode === 'month'
+                  ? 'خلال أسابيع الشهر المحدد'
+                  : 'خلال شهور السنة المحددة'}
                 )
               </span>
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              رسم بياني يوضح التدفق المالي وحجم الفائض الصافي
+              رسم بياني تفاعلي يوضح التدفق المالي الفعلي (بيانات حية 100%)
             </p>
           </div>
 
@@ -284,13 +654,27 @@ export const AnalyticsPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Custom Responsive SVG Chart */}
+        {/* Empty State Banner if all data is 0 */}
+        {isAllZeroData && (
+          <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 flex items-center justify-center gap-2 text-xs text-slate-400">
+            <AlertCircle className="w-4 h-4 text-amber-400" />
+            <span>
+              لا توجد حركات مالية أو مصروفات مسجلة في هذا التاريخ المحدد ({formattedPeriodTitle}).
+              جميع الأرقام صفرية وفعلية.
+            </span>
+          </div>
+        )}
+
+        {/* Custom Responsive Dynamic SVG/CSS Bar Chart */}
         <div className="h-72 w-full pt-4 flex flex-col justify-end">
-          <div className="flex-1 flex items-end justify-between gap-3 px-2 border-b border-slate-800 pb-2">
+          <div className="flex-1 flex items-end justify-between gap-2 sm:gap-3 px-2 border-b border-slate-800 pb-2">
             {currentDataset.map((item, idx) => {
-              const revHeight = Math.max(8, Math.round((item.revenue / maxVal) * 100));
-              const expHeight = Math.max(8, Math.round((item.expense / maxVal) * 100));
-              const profHeight = Math.max(8, Math.round((item.profit / maxVal) * 100));
+              const revHeight =
+                item.revenue > 0 ? Math.max(8, Math.round((item.revenue / maxVal) * 100)) : 0;
+              const expHeight =
+                item.expense > 0 ? Math.max(8, Math.round((item.expense / maxVal) * 100)) : 0;
+              const profHeight =
+                item.profit > 0 ? Math.max(8, Math.round((item.profit / maxVal) * 100)) : 0;
               const isHovered = hoveredBarIndex === idx;
 
               return (
@@ -308,7 +692,13 @@ export const AnalyticsPage: React.FC = () => {
                       </div>
                       <div className="text-teal-400 font-mono">إيرادات: {formatEGP(item.revenue)}</div>
                       <div className="text-rose-400 font-mono">مصاريف: {formatEGP(item.expense)}</div>
-                      <div className="text-emerald-400 font-mono font-bold">صافي: {formatEGP(item.profit)}</div>
+                      <div
+                        className={`font-mono font-bold ${
+                          item.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                        }`}
+                      >
+                        صافي: {formatEGP(item.profit)}
+                      </div>
                     </div>
                   )}
 
@@ -317,24 +707,30 @@ export const AnalyticsPage: React.FC = () => {
                     {/* Revenue Bar */}
                     <div
                       style={{ height: `${revHeight}%` }}
-                      className="w-2.5 sm:w-3.5 bg-gradient-to-t from-teal-600 to-teal-400 rounded-t-md transition-all duration-300 group-hover:brightness-125"
+                      className={`w-2 sm:w-3.5 bg-gradient-to-t from-teal-600 to-teal-400 rounded-t-md transition-all duration-300 group-hover:brightness-125 ${
+                        revHeight === 0 ? 'opacity-20 bg-slate-800 h-1' : ''
+                      }`}
                     ></div>
 
                     {/* Expense Bar */}
                     <div
                       style={{ height: `${expHeight}%` }}
-                      className="w-2.5 sm:w-3.5 bg-gradient-to-t from-rose-600 to-rose-400 rounded-t-md transition-all duration-300 group-hover:brightness-125"
+                      className={`w-2 sm:w-3.5 bg-gradient-to-t from-rose-600 to-rose-400 rounded-t-md transition-all duration-300 group-hover:brightness-125 ${
+                        expHeight === 0 ? 'opacity-20 bg-slate-800 h-1' : ''
+                      }`}
                     ></div>
 
                     {/* Profit Bar */}
                     <div
                       style={{ height: `${profHeight}%` }}
-                      className="w-2.5 sm:w-3.5 bg-gradient-to-t from-emerald-600 to-emerald-400 rounded-t-md transition-all duration-300 group-hover:brightness-125"
+                      className={`w-2 sm:w-3.5 bg-gradient-to-t from-emerald-600 to-emerald-400 rounded-t-md transition-all duration-300 group-hover:brightness-125 ${
+                        profHeight === 0 ? 'opacity-20 bg-slate-800 h-1' : ''
+                      }`}
                     ></div>
                   </div>
 
                   {/* Label */}
-                  <div className="mt-2 text-[10px] sm:text-xs text-slate-400 font-bold truncate max-w-full">
+                  <div className="mt-2 text-[10px] sm:text-xs text-slate-400 font-bold truncate max-w-full text-center">
                     {item.label}
                   </div>
                 </div>
@@ -346,28 +742,38 @@ export const AnalyticsPage: React.FC = () => {
 
       {/* CHARTS ROW 2: (توزيع مصادر الدخل + توزيع بنود المصاريف) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* 1. Revenue Sources Breakdown */}
+        {/* 1. Revenue Sources Breakdown (Zero Fake Data) */}
         <div className="bg-[#0f172a]/90 border border-slate-800 rounded-3xl p-6 shadow-xl">
-          <h3 className="text-base font-black text-white mb-1 flex items-center gap-2">
-            <PieIcon className="w-5 h-5 text-cyan-400" />
-            <span>توزيع مصادر الدخل والإيرادات</span>
-          </h3>
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="text-base font-black text-white flex items-center gap-2">
+              <PieIcon className="w-5 h-5 text-cyan-400" />
+              <span>توزيع مصادر الدخل والإيرادات الفعلية</span>
+            </h3>
+            <span className="text-xs font-mono font-bold text-teal-300">
+              {formatEGP(sumRevenue)}
+            </span>
+          </div>
           <p className="text-xs text-slate-400 mb-6">
-            النسب المئوية لكل قطاع دخل (اشتراكات، متجر، علاج طبيعي)
+            النسب المئوية المحسوبة لكل قطاع دخل خلال الفترة المحددة
           </p>
 
           <div className="space-y-4">
             {revenueBreakdown.map((item, idx) => {
-              const pct = Math.round((item.amount / sumRevenue) * 100);
+              const pct = sumRevenue > 0 ? Math.round((item.amount / sumRevenue) * 100) : 0;
               return (
                 <div key={idx} className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800">
                   <div className="flex items-center justify-between text-xs mb-2">
                     <div className="flex items-center gap-2 font-bold text-white">
-                      <span className="w-3 h-3 rounded-full" style={{ backgroundColor: item.color }}></span>
+                      <span
+                        className="w-3 h-3 rounded-full"
+                        style={{ backgroundColor: item.color }}
+                      ></span>
                       <span>{item.name}</span>
                     </div>
                     <div className="flex items-center gap-3">
-                      <span className="font-mono text-teal-300 font-bold">{formatEGP(item.amount)}</span>
+                      <span className="font-mono text-teal-300 font-bold">
+                        {formatEGP(item.amount)}
+                      </span>
                       <span className="text-[11px] font-mono text-slate-400 bg-slate-800 px-2 py-0.5 rounded-lg">
                         {pct}%
                       </span>
@@ -384,31 +790,47 @@ export const AnalyticsPage: React.FC = () => {
                 </div>
               );
             })}
+
+            {sumRevenue === 0 && (
+              <div className="text-center py-3 text-xs text-slate-500">
+                لا توجد إيرادات مسجلة لهذه الفترة
+              </div>
+            )}
           </div>
         </div>
 
-        {/* 2. Expense Categories Breakdown */}
+        {/* 2. Expense Categories Breakdown (Zero Fake Data) */}
         <div className="bg-[#0f172a]/90 border border-slate-800 rounded-3xl p-6 shadow-xl">
-          <h3 className="text-base font-black text-white mb-1 flex items-center gap-2">
-            <PieIcon className="w-5 h-5 text-rose-400" />
-            <span>توزيع بنود المصاريف التشغيلية</span>
-          </h3>
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="text-base font-black text-white flex items-center gap-2">
+              <PieIcon className="w-5 h-5 text-rose-400" />
+              <span>توزيع بنود المصاريف التشغيلية الفعلية</span>
+            </h3>
+            <span className="text-xs font-mono font-bold text-rose-300">
+              {formatEGP(sumExpenses)}
+            </span>
+          </div>
           <p className="text-xs text-slate-400 mb-6">
-            أين تُنفق أموال الجيم (رواتب، كهرباء، صيانة، مياه، إيجار ونظافة)
+            أين أُنفقت أموال الجيم خلال الفترة المحددة
           </p>
 
           <div className="space-y-4">
             {expenseBreakdown.map((item, idx) => {
-              const pct = Math.round((item.amount / sumExpenses) * 100);
+              const pct = sumExpenses > 0 ? Math.round((item.amount / sumExpenses) * 100) : 0;
               return (
                 <div key={idx} className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800">
                   <div className="flex items-center justify-between text-xs mb-2">
                     <div className="flex items-center gap-2 font-bold text-white">
-                      <span className="w-3 h-3 rounded-full" style={{ backgroundColor: item.color }}></span>
+                      <span
+                        className="w-3 h-3 rounded-full"
+                        style={{ backgroundColor: item.color }}
+                      ></span>
                       <span>{item.name}</span>
                     </div>
                     <div className="flex items-center gap-3">
-                      <span className="font-mono text-rose-300 font-bold">{formatEGP(item.amount)}</span>
+                      <span className="font-mono text-rose-300 font-bold">
+                        {formatEGP(item.amount)}
+                      </span>
                       <span className="text-[11px] font-mono text-slate-400 bg-slate-800 px-2 py-0.5 rounded-lg">
                         {pct}%
                       </span>
@@ -425,6 +847,12 @@ export const AnalyticsPage: React.FC = () => {
                 </div>
               );
             })}
+
+            {sumExpenses === 0 && (
+              <div className="text-center py-3 text-xs text-slate-500">
+                لا توجد مصاريف مسجلة لهذه الفترة
+              </div>
+            )}
           </div>
         </div>
       </div>

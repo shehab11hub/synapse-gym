@@ -31,6 +31,29 @@ import { MasterReportEntry, SessionCategory, Coach, ExpenseItem, CashInflowItem 
 import { formatEGP, formatDateAr } from '../utils/formatters';
 import { sounds } from '../utils/sound';
 
+export const ARABIC_MONTH_NAMES = [
+  'يناير',
+  'فبراير',
+  'مارس',
+  'إبريل',
+  'مايو',
+  'يونيو',
+  'يوليو',
+  'أغسطس',
+  'سبتمبر',
+  'أكتوبر',
+  'نوفمبر',
+  'ديسمبر',
+];
+
+export const parseMonthYear = (str: string) => {
+  const yearMatch = str.match(/\d{4}/);
+  const year = yearMatch ? yearMatch[0] : '';
+  const monthIdx = ARABIC_MONTH_NAMES.findIndex((m) => str.includes(m));
+  const monthNum = monthIdx !== -1 ? String(monthIdx + 1).padStart(2, '0') : '';
+  return { year, monthNum };
+};
+
 export const MasterReportPage: React.FC = () => {
   const {
     masterReportEntries,
@@ -47,8 +70,9 @@ export const MasterReportPage: React.FC = () => {
 
   const { currentUser } = useAuth();
 
-  // Active Month filter (default to current month)
+  // Active Month & Year filters (default to current month and all years)
   const [selectedMonth, setSelectedMonth] = useState<string>(currentMonth);
+  const [selectedYearFilter, setSelectedYearFilter] = useState<string>('all');
 
   // Search & Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -56,10 +80,37 @@ export const MasterReportPage: React.FC = () => {
   const [paymentMethodFilter, setPaymentMethodFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
-  // Modals
+  // Modals - Dedicated Month and Year for Start New Month
   const [isNewMonthModalOpen, setIsNewMonthModalOpen] = useState(false);
-  const [newMonthInput, setNewMonthInput] = useState('');
+  const [selectedNewMonthName, setSelectedNewMonthName] = useState<string>('نوفمبر');
+  const [selectedNewMonthYear, setSelectedNewMonthYear] = useState<number>(new Date().getFullYear());
   const [isAddEntryModalOpen, setIsAddEntryModalOpen] = useState(false);
+
+  // Available years dynamically extracted from cycles, entries, and current year
+  const availableYears = Array.from(
+    new Set([
+      String(new Date().getFullYear()),
+      '2026',
+      '2025',
+      ...billingCycles.map((c) => {
+        const match = c.name.match(/\d{4}/);
+        return match ? match[0] : '';
+      }),
+      ...masterReportEntries.map((e) => {
+        const match = e.month?.match(/\d{4}/) || e.date?.match(/\d{4}/);
+        return match ? match[0] : '';
+      }),
+    ])
+  )
+    .filter(Boolean)
+    .sort()
+    .reverse();
+
+  // Filter cycles list by selected year if active
+  const displayedCycles = billingCycles.filter((cycle) => {
+    if (selectedYearFilter === 'all') return true;
+    return cycle.name.includes(selectedYearFilter);
+  });
 
   // Manual entry form
   const [newEntryForm, setNewEntryForm] = useState({
@@ -74,8 +125,15 @@ export const MasterReportPage: React.FC = () => {
     notes: '',
   });
 
-  // Filter entries according to month and search/filters
+  // Filter entries according to month, year and search/filters
   const filteredEntries = masterReportEntries.filter((item) => {
+    // Year filter (when viewing all months or filtering)
+    if (selectedYearFilter !== 'all') {
+      const matchYear =
+        item.month?.includes(selectedYearFilter) || item.date?.startsWith(selectedYearFilter);
+      if (!matchYear) return false;
+    }
+
     // Month filter
     if (selectedMonth !== 'all' && item.month !== selectedMonth) {
       return false;
@@ -113,22 +171,34 @@ export const MasterReportPage: React.FC = () => {
   const directEntries = filteredEntries.filter((e) => e.paymentMethod !== 'coach_collected');
   const coachEntries = filteredEntries.filter((e) => e.paymentMethod === 'coach_collected');
 
-  // 2. Filter Expenses & Repayments according to selectedMonth
+  // 2. Filter Expenses & Repayments dynamically according to selectedMonth and selectedYearFilter
   const filteredExpenses = expenses.filter((exp) => {
-    if (selectedMonth === 'all') return true;
-    if (selectedMonth === currentMonth) return true;
-    if (selectedMonth.includes('أكتوبر') && exp.date.includes('2026-10')) return true;
-    if (selectedMonth.includes('سبتمبر') && exp.date.includes('2026-09')) return true;
-    return true;
+    if (selectedMonth === 'all') {
+      if (selectedYearFilter !== 'all') {
+        return exp.date.startsWith(selectedYearFilter);
+      }
+      return true;
+    }
+    const { year, monthNum } = parseMonthYear(selectedMonth);
+    if (year && monthNum) {
+      return exp.date.startsWith(`${year}-${monthNum}`);
+    }
+    return exp.date.includes(selectedMonth);
   });
 
   const filteredRepayments = cashInflows.filter((inf) => {
     if (inf.type !== 'coach_settlement') return false;
-    if (selectedMonth === 'all') return true;
-    if (selectedMonth === currentMonth) return true;
-    if (selectedMonth.includes('أكتوبر') && inf.date.includes('2026-10')) return true;
-    if (selectedMonth.includes('سبتمبر') && inf.date.includes('2026-09')) return true;
-    return true;
+    if (selectedMonth === 'all') {
+      if (selectedYearFilter !== 'all') {
+        return inf.date.startsWith(selectedYearFilter);
+      }
+      return true;
+    }
+    const { year, monthNum } = parseMonthYear(selectedMonth);
+    if (year && monthNum) {
+      return inf.date.startsWith(`${year}-${monthNum}`);
+    }
+    return inf.date.includes(selectedMonth);
   });
 
   // Financial aggregates
@@ -150,12 +220,13 @@ export const MasterReportPage: React.FC = () => {
 
   const handleStartNewMonthSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMonthInput.trim()) return;
+    const compositeName = `${selectedNewMonthName} ${selectedNewMonthYear}`.trim();
+    if (!compositeName) return;
 
-    startNewMonth(newMonthInput.trim());
-    setSelectedMonth(newMonthInput.trim());
+    startNewMonth(compositeName);
+    setSelectedMonth(compositeName);
+    setSelectedYearFilter(String(selectedNewMonthYear));
     setIsNewMonthModalOpen(false);
-    setNewMonthInput('');
     sounds.playCashRegister();
   };
 
@@ -167,7 +238,7 @@ export const MasterReportPage: React.FC = () => {
 
     addMasterReportEntry({
       playerName: newEntryForm.playerName,
-      playerCode: newEntryForm.playerCode || `SYN-${Math.floor(100 + Math.random() * 900)}`,
+      playerCode: newEntryForm.playerCode || Math.floor(100000 + Math.random() * 900000).toString(),
       amount: Number(newEntryForm.amount),
       coachId: newEntryForm.coachId || undefined,
       coachName: coach ? coach.name : 'اشتراك عام بالخزينة',
@@ -338,24 +409,49 @@ export const MasterReportPage: React.FC = () => {
 
         {/* Month Selector Bar & Quick Meta */}
         <div className="mt-8 pt-6 border-t border-teal-500/20 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-bold text-slate-400 flex items-center gap-1.5">
-              <Calendar className="w-4 h-4 text-teal-400" />
-              <span>الشهر المالي المعروض:</span>
-            </span>
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Year Filter */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-400">السنة:</span>
+              <select
+                value={selectedYearFilter}
+                onChange={(e) => {
+                  setSelectedYearFilter(e.target.value);
+                  if (e.target.value !== 'all' && selectedMonth !== 'all' && !selectedMonth.includes(e.target.value)) {
+                    setSelectedMonth('all');
+                  }
+                }}
+                className="bg-slate-900 border border-slate-700 hover:border-teal-500/40 rounded-xl px-3 py-2 text-xs font-bold text-white focus:outline-none focus:border-teal-400 cursor-pointer shadow-inner"
+              >
+                <option value="all">كل السنوات</option>
+                {availableYears.map((yr) => (
+                  <option key={yr} value={yr}>
+                    {yr}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-            <select
-              value={selectedMonth}
-              onChange={(e) => setSelectedMonth(e.target.value)}
-              className="bg-slate-900 border border-teal-500/40 rounded-xl px-4 py-2 text-xs font-bold text-teal-300 focus:outline-none focus:border-teal-400 cursor-pointer shadow-inner"
-            >
-              <option value="all">كل الشهور (تراكمي كامل)</option>
-              {billingCycles.map((cycle) => (
-                <option key={cycle.id} value={cycle.name}>
-                  {cycle.name} {cycle.isActive ? '(الشهر الحالي النشط)' : '(شهر مؤرشف)'}
-                </option>
-              ))}
-            </select>
+            {/* Month Filter */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-400 flex items-center gap-1.5">
+                <Calendar className="w-4 h-4 text-teal-400" />
+                <span>الشهر المالي:</span>
+              </span>
+
+              <select
+                value={selectedMonth}
+                onChange={(e) => setSelectedMonth(e.target.value)}
+                className="bg-slate-900 border border-teal-500/40 rounded-xl px-4 py-2 text-xs font-bold text-teal-300 focus:outline-none focus:border-teal-400 cursor-pointer shadow-inner"
+              >
+                <option value="all">كل الشهور (تراكمي كامل)</option>
+                {displayedCycles.map((cycle) => (
+                  <option key={cycle.id} value={cycle.name}>
+                    {cycle.name} {cycle.isActive ? '(الشهر الحالي النشط)' : '(شهر مؤرشف)'}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-4 text-xs text-slate-400">
@@ -933,8 +1029,8 @@ export const MasterReportPage: React.FC = () => {
                 <Calendar className="w-6 h-6" />
               </div>
               <div>
-                <h3 className="text-base font-black text-white">بدء شهر مالي جديد (New Month)</h3>
-                <p className="text-xs text-slate-400">أرشفة الشهر السابق وبدء دورة محاسبية جديدة</p>
+                <h3 className="text-base font-black text-white">بدء شهر مالي جديد (New Billing Cycle)</h3>
+                <p className="text-xs text-slate-400">أرشفة الشهر السابق وبدء دورة محاسبية جديدة محددة بالسنة</p>
               </div>
             </div>
 
@@ -950,31 +1046,60 @@ export const MasterReportPage: React.FC = () => {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                  اسم الشهر الجديد:
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={newMonthInput}
-                  onChange={(e) => setNewMonthInput(e.target.value)}
-                  placeholder="مثال: نوفمبر 2026 أو ديسمبر 2026"
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-teal-500 font-bold"
-                />
+              {/* Dedicated Month & Year Pickers */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                    اختر الشهر:
+                  </label>
+                  <select
+                    value={selectedNewMonthName}
+                    onChange={(e) => setSelectedNewMonthName(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-teal-500 font-bold cursor-pointer"
+                  >
+                    {ARABIC_MONTH_NAMES.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                    اختر / حدد السنة:
+                  </label>
+                  <input
+                    type="number"
+                    min="2020"
+                    max="2035"
+                    required
+                    value={selectedNewMonthYear}
+                    onChange={(e) => setSelectedNewMonthYear(parseInt(e.target.value) || 2026)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-teal-500 font-mono font-bold"
+                  />
+                </div>
+              </div>
+
+              {/* Live Preview Box */}
+              <div className="p-3.5 rounded-2xl bg-teal-500/10 border border-teal-500/30 flex items-center justify-between text-xs">
+                <span className="text-slate-300 font-medium">اسم الدورة المالية الجديدة:</span>
+                <span className="font-black text-teal-300 text-sm font-mono bg-teal-950/60 px-3 py-1 rounded-xl border border-teal-500/40">
+                  {selectedNewMonthName} {selectedNewMonthYear}
+                </span>
               </div>
 
               <div className="flex items-center gap-3 pt-3">
                 <button
                   type="submit"
-                  className="flex-1 py-3 px-4 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-teal-500/20"
+                  className="flex-1 py-3 px-4 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-teal-500/20 transition"
                 >
-                  تأكيد وبدء الشهر الجديد
+                  تأكيد وبدء الدورة الجديدة
                 </button>
                 <button
                   type="button"
                   onClick={() => setIsNewMonthModalOpen(false)}
-                  className="py-3 px-4 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs cursor-pointer hover:bg-slate-700"
+                  className="py-3 px-4 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs cursor-pointer hover:bg-slate-700 transition"
                 >
                   إلغاء
                 </button>
@@ -1016,7 +1141,8 @@ export const MasterReportPage: React.FC = () => {
                     onChange={(e) =>
                       setNewEntryForm({ ...newEntryForm, playerCode: e.target.value })
                     }
-                    placeholder="SYN-..."
+                    placeholder="مثال: 102938"
+                    inputMode="numeric"
                     className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-teal-500 dir-ltr"
                   />
                 </div>

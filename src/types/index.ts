@@ -18,7 +18,7 @@ export type SessionCategory = 'private' | 'group' | 'physio' | 'massage' | 'gym'
 
 export interface Member {
   id: string;
-  code: string; // e.g. SYN-101
+  code: string; // 6-digit numeric ID, e.g. '102938'
   name: string;
   phone: string;
   photoUrl?: string;

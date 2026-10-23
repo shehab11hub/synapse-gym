@@ -650,7 +650,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (!member && fallbackMember && (fallbackMember.name || fallbackMember.code)) {
       member = {
         id: memberId || `mem-${Date.now()}`,
-        code: fallbackMember.code || `SYN-${Math.floor(100 + Math.random() * 900)}`,
+        code: fallbackMember.code || Math.floor(100000 + Math.random() * 900000).toString(),
         name: fallbackMember.name || 'عضو سينابس',
         phone: fallbackMember.phone || '',
         type: fallbackMember.type || 'member',
@@ -857,7 +857,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           date: new Date().toISOString(),
           playerName: playerObj ? playerObj.name : `متدرب (${idx + 1})`,
           playerCode:
-            playerObj ? playerObj.code : `SYN-${Math.floor(100 + Math.random() * 900)}`,
+            playerObj ? playerObj.code : Math.floor(100000 + Math.random() * 900000).toString(),
           amount: session.price,
           coachId: coach.id,
           coachName: coach.name,

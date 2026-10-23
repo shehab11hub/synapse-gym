@@ -125,7 +125,7 @@ export const PlayerCheckInPage: React.FC = () => {
 
             const target: Member = liveMember || {
               id: savedMemberId,
-              code: parsed.code || 'SYN-AUTO',
+              code: parsed.code || Math.floor(100000 + Math.random() * 900000).toString(),
               name: parsed.name,
               phone: parsed.phone || '',
               type: 'member',
@@ -244,7 +244,7 @@ export const PlayerCheckInPage: React.FC = () => {
       return;
     }
 
-    const generatedCode = `SYN-${Math.floor(100 + Math.random() * 900)}`;
+    const generatedCode = Math.floor(100000 + Math.random() * 900000).toString();
     const categoryTitle =
       newPlayerForm.sessionCategory === 'private'
         ? 'تدريب خاص (Private PT)'
@@ -510,7 +510,8 @@ export const PlayerCheckInPage: React.FC = () => {
                       required
                       value={inputCode}
                       onChange={(e) => setInputCode(e.target.value)}
-                      placeholder="مثال: SYN-101 أو 01012345678"
+                      placeholder="مثال: 102938 أو 01012345678"
+                      inputMode="numeric"
                       className="w-full bg-slate-900 border-2 border-emerald-500/40 rounded-2xl px-4 py-3.5 text-center text-sm font-black text-white font-mono placeholder:text-slate-600 focus:outline-none focus:border-emerald-400 transition tracking-wider"
                       autoFocus
                     />
