@@ -25,7 +25,11 @@ interface GymDataContextType {
   updateMember: (id: string, updates: Partial<Member>) => void;
   toggleMemberAsDoctor: (id: string) => void;
   findMemberByCode: (code: string) => Member | undefined;
-  performCheckIn: (memberId: string, method?: 'qr' | 'manual') => { success: boolean; member?: Member; message?: string };
+  performCheckIn: (
+    memberId: string,
+    method?: 'qr' | 'manual',
+    fallbackMember?: Partial<Member>
+  ) => { success: boolean; member?: Member; message?: string };
   cancelCheckIn: (checkInLogId: string) => { success: boolean };
   wipeAllDataToCleanSlate: () => void;
 
@@ -318,10 +322,47 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return saved ? saved : 'أكتوبر 2026';
   });
 
-  // Persistence effects
+  // Persistence effects & Backend Directory Sync
   useEffect(() => {
     localStorage.setItem('synapse_members', JSON.stringify(members));
+    if (members.length > 0) {
+      try {
+        fetch('/api/members', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(members),
+        }).catch(() => {});
+      } catch {
+        // ignore
+      }
+    }
   }, [members]);
+
+  useEffect(() => {
+    const fetchRemoteMembers = async () => {
+      try {
+        const res = await fetch('/api/members');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.members) && data.members.length > 0) {
+            setMembers((prev) => {
+              const map = new Map<string, Member>();
+              data.members.forEach((m: Member) => {
+                if (m && m.id) map.set(m.id, m);
+              });
+              prev.forEach((m) => {
+                if (m && m.id) map.set(m.id, m);
+              });
+              return Array.from(map.values());
+            });
+          }
+        }
+      } catch {
+        // ignore
+      }
+    };
+    fetchRemoteMembers();
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('synapse_sessions', JSON.stringify(sessions));
@@ -600,8 +641,32 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     );
   };
 
-  const performCheckIn = (memberId: string, method: 'qr' | 'manual' = 'qr') => {
-    const member = members.find((m) => m.id === memberId);
+  const performCheckIn = (
+    memberId: string,
+    method: 'qr' | 'manual' = 'qr',
+    fallbackMember?: Partial<Member>
+  ) => {
+    let member = members.find((m) => m.id === memberId || m.code === memberId);
+    if (!member && fallbackMember && (fallbackMember.name || fallbackMember.code)) {
+      member = {
+        id: memberId || `mem-${Date.now()}`,
+        code: fallbackMember.code || `SYN-${Math.floor(100 + Math.random() * 900)}`,
+        name: fallbackMember.name || 'عضو سينابس',
+        phone: fallbackMember.phone || '',
+        type: fallbackMember.type || 'member',
+        subscriptionPlan: fallbackMember.subscriptionPlan || 'اشتراك جيم عام',
+        subscriptionFee: fallbackMember.subscriptionFee || 100,
+        startDate: fallbackMember.startDate || new Date().toISOString().split('T')[0],
+        endDate: fallbackMember.endDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+        totalDays: fallbackMember.totalDays || 30,
+        remainingDays: fallbackMember.remainingDays !== undefined ? fallbackMember.remainingDays : 30,
+        totalSessions: fallbackMember.totalSessions !== undefined ? fallbackMember.totalSessions : 12,
+        remainingSessions: fallbackMember.remainingSessions !== undefined ? fallbackMember.remainingSessions : 12,
+        active: fallbackMember.active !== undefined ? fallbackMember.active : true,
+      };
+      setMembers((prev) => [member!, ...prev]);
+    }
+
     if (!member) {
       return { success: false, message: 'عضو غير موجود' };
     }
