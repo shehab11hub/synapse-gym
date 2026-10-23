@@ -16,7 +16,15 @@ import {
   MasterReportEntry,
   MonthlyBillingCycle,
   SessionCategory,
+  YearlyArchive,
+  DailyShiftClosing,
 } from '../types';
+import {
+  exportMasterReportToXLSX,
+  exportDailyShiftToXLSX,
+  exportYearlyArchiveToXLSX,
+  exportYearlyArchiveToJSON,
+} from '../utils/excelExport';
 
 interface GymDataContextType {
   // Members
@@ -185,6 +193,21 @@ interface GymDataContextType {
   deleteMasterReportEntry: (id: string) => void;
   startNewMonth: (newMonthName: string) => void;
   exportMasterReportToCSV: (month?: string) => void;
+  exportMasterReportXLSX: (month?: string) => Promise<void>;
+
+  // YEARLY ARCHIVES & DATA PURGING
+  yearlyArchives: YearlyArchive[];
+  archiveYear: (yearToArchive: number, adminUsername: string) => YearlyArchive;
+  getYearlyArchive: (year: number) => YearlyArchive | undefined;
+  purgeActiveLogsForYear: (year: number) => void;
+  exportYearlyArchiveXLSX: (year: number) => Promise<void>;
+  exportYearlyArchiveJSON: (year: number) => void;
+
+  // DAILY SHIFT CLOSING (تقفيل اليومية والدرج)
+  dailyShiftClosings: DailyShiftClosing[];
+  closeDailyShift: (closingData: Omit<DailyShiftClosing, 'id' | 'closedAt'>) => DailyShiftClosing;
+  getTodayShiftStatus: () => { isClosedToday: boolean; lastClosing?: DailyShiftClosing };
+  exportDailyShiftXLSX: (closingId?: string) => Promise<void>;
 }
 
 // Production Clean Slate & Cache Busting
@@ -321,6 +344,26 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const saved = localStorage.getItem('synapse_current_month');
     return saved ? saved : 'أكتوبر 2026';
   });
+
+  // Yearly Archives
+  const [yearlyArchives, setYearlyArchives] = useState<YearlyArchive[]>(() => {
+    const saved = localStorage.getItem('synapse_yearly_archives');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  // Daily Shift Closings
+  const [dailyShiftClosings, setDailyShiftClosings] = useState<DailyShiftClosing[]>(() => {
+    const saved = localStorage.getItem('synapse_daily_closings');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('synapse_yearly_archives', JSON.stringify(yearlyArchives));
+  }, [yearlyArchives]);
+
+  useEffect(() => {
+    localStorage.setItem('synapse_daily_closings', JSON.stringify(dailyShiftClosings));
+  }, [dailyShiftClosings]);
 
   // Persistence effects & Backend Directory Sync
   useEffect(() => {
@@ -1575,6 +1618,14 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // Calculate Net Cash Drawer ("صافي النقدية في الدرج بالجنيه - كل جنيه محسوب")
   const getDrawerStats = () => {
     const todayStr = new Date().toISOString().slice(0, 10);
+    const todayClosings = dailyShiftClosings.filter((c) => c.date === todayStr);
+    const lastClosingTime = todayClosings.length > 0 ? todayClosings[0].closedAt : null;
+
+    const isAfterLastClosing = (dateStr?: string) => {
+      if (!dateStr || !dateStr.startsWith(todayStr)) return false;
+      if (!lastClosingTime) return true;
+      return new Date(dateStr).getTime() > new Date(lastClosingTime).getTime();
+    };
 
     // Only Cash items affect the physical cash drawer
     const totalCashIn = cashInflows
@@ -1587,13 +1638,13 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     const netCashInDrawer = totalCashIn - totalCashOut;
 
-    // Today's movements
+    // Today's active movements (reset after daily shift closing)
     const todayCashIn = cashInflows
-      .filter((inf) => inf.paymentMethod === 'cash' && inf.date.startsWith(todayStr))
+      .filter((inf) => inf.paymentMethod === 'cash' && isAfterLastClosing(inf.date))
       .reduce((acc, inf) => acc + inf.amount, 0);
 
     const todayCashOut = expenses
-      .filter((exp) => exp.paymentMethod === 'cash' && exp.date.startsWith(todayStr))
+      .filter((exp) => exp.paymentMethod === 'cash' && isAfterLastClosing(exp.date))
       .reduce((acc, exp) => acc + exp.amount, 0);
 
     const todayNetInDrawer = todayCashIn - todayCashOut;
@@ -2315,6 +2366,220 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     document.body.removeChild(link);
   };
 
+  // EXCEL XLSX MASTER REPORT EXPORT (.xlsx)
+  const exportMasterReportXLSX = async (filterMonth?: string) => {
+    const targetMonth = filterMonth || currentMonth;
+    const entries = masterReportEntries.filter(
+      (e) => !targetMonth || targetMonth === 'all' || e.month === targetMonth
+    );
+    const directEntries = entries.filter((e) => e.paymentMethod !== 'coach_collected');
+    const coachEntries = entries.filter((e) => e.paymentMethod === 'coach_collected');
+    const coachRepayments = cashInflows.filter((i) => i.type === 'coach_settlement');
+
+    const directTotal = directEntries.reduce((s, e) => s + e.amount, 0);
+    const coachDebtTotal = coachEntries.reduce((s, e) => s + e.amount, 0);
+    const repaymentsTotal = coachRepayments.reduce((s, e) => s + e.amount, 0);
+    const expensesTotal = expenses.reduce((s, e) => s + e.amount, 0);
+    const netCash = directTotal + repaymentsTotal - expensesTotal;
+
+    await exportMasterReportToXLSX({
+      selectedMonth: targetMonth,
+      entries,
+      expenses,
+      repayments: coachRepayments,
+      totalDirectRevenue: directTotal,
+      totalCoachDebtRevenue: coachDebtTotal,
+      grandTotalPlayerRevenue: directTotal + coachDebtTotal,
+      totalExpensesAmount: expensesTotal,
+      totalRepaymentsAmount: repaymentsTotal,
+      netPeriodCash: netCash,
+    });
+  };
+
+  // YEARLY DATA ARCHIVING ARCHITECTURE
+  const archiveYear = (yearToArchive: number, adminUsername: string): YearlyArchive => {
+    const yearStr = String(yearToArchive);
+
+    const checkInsSnapshot = checkInLogs.filter((l) => l.timestamp.startsWith(yearStr));
+    const masterEntriesSnapshot = masterReportEntries.filter(
+      (e) => e.date?.startsWith(yearStr) || e.month?.includes(yearStr)
+    );
+    const expensesSnapshot = expenses.filter((e) => e.date.startsWith(yearStr));
+    const inflowsSnapshot = cashInflows.filter((i) => i.date.startsWith(yearStr));
+
+    const directSubs = masterEntriesSnapshot
+      .filter((e) => e.paymentMethod !== 'coach_collected')
+      .reduce((sum, e) => sum + e.amount, 0);
+
+    const coachDebtsLoaded = masterEntriesSnapshot
+      .filter((e) => e.paymentMethod === 'coach_collected')
+      .reduce((sum, e) => sum + e.amount, 0);
+
+    const coachSettlements = inflowsSnapshot
+      .filter((i) => i.type === 'coach_settlement')
+      .reduce((sum, i) => sum + i.amount, 0);
+
+    const totalExp = expensesSnapshot.reduce((sum, e) => sum + e.amount, 0);
+    const totalRev = inflowsSnapshot.reduce((sum, i) => sum + i.amount, 0);
+    const netProf = totalRev - totalExp;
+
+    const monthNames = [
+      'يناير', 'فبراير', 'مارس', 'إبريل', 'مايو', 'يونيو',
+      'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'
+    ];
+
+    const monthlyStats = monthNames.map((name, idx) => {
+      const monthPrefix = `${yearStr}-${String(idx + 1).padStart(2, '0')}`;
+      const mRev = inflowsSnapshot
+        .filter((i) => i.date.startsWith(monthPrefix))
+        .reduce((sum, i) => sum + i.amount, 0);
+      const mExp = expensesSnapshot
+        .filter((e) => e.date.startsWith(monthPrefix))
+        .reduce((sum, e) => sum + e.amount, 0);
+      const mCheckIns = checkInsSnapshot.filter((l) => l.timestamp.startsWith(monthPrefix)).length;
+
+      return {
+        monthName: name,
+        monthIndex: idx + 1,
+        revenue: mRev,
+        expenses: mExp,
+        netProfit: mRev - mExp,
+        checkInsCount: mCheckIns,
+      };
+    });
+
+    const newArchive: YearlyArchive = {
+      id: `archive-${yearToArchive}-${Date.now()}`,
+      year: yearToArchive,
+      archivedAt: new Date().toISOString(),
+      archivedBy: adminUsername,
+      totalRevenue: totalRev,
+      totalExpenses: totalExp,
+      netProfit: netProf,
+      totalCheckIns: checkInsSnapshot.length,
+      totalDirectSubscriptions: directSubs,
+      totalCoachDebtsLoaded: coachDebtsLoaded,
+      totalCoachSettlements: coachSettlements,
+      monthlyStats,
+      checkInLogsSnapshot: checkInsSnapshot,
+      masterEntriesSnapshot,
+      expensesSnapshot,
+      cashInflowsSnapshot: inflowsSnapshot,
+    };
+
+    setYearlyArchives((prev) => [newArchive, ...prev.filter((a) => a.year !== yearToArchive)]);
+
+    // 3. تفريغ البيانات النشطة (Purge Active Logs): مسح أسطر الحضور والعمليات القديمة
+    setCheckInLogs((prev) => prev.filter((l) => !l.timestamp.startsWith(yearStr)));
+
+    return newArchive;
+  };
+
+  const getYearlyArchive = (year: number) => {
+    return yearlyArchives.find((a) => a.year === year);
+  };
+
+  const purgeActiveLogsForYear = (year: number) => {
+    const yearStr = String(year);
+    setCheckInLogs((prev) => prev.filter((l) => !l.timestamp.startsWith(yearStr)));
+  };
+
+  const exportYearlyArchiveXLSX = async (year: number) => {
+    let archive = yearlyArchives.find((a) => a.year === year);
+    if (!archive) {
+      archive = archiveYear(year, 'الإدارة');
+    }
+    await exportYearlyArchiveToXLSX(archive);
+  };
+
+  const exportYearlyArchiveJSON = (year: number) => {
+    let archive = yearlyArchives.find((a) => a.year === year);
+    if (!archive) {
+      archive = archiveYear(year, 'الإدارة');
+    }
+    exportYearlyArchiveToJSON(archive);
+  };
+
+  // DAILY SHIFT CLOSING (تقفيل اليومية والدرج)
+  const closeDailyShift = (closingData: Omit<DailyShiftClosing, 'id' | 'closedAt'>): DailyShiftClosing => {
+    const newClosing: DailyShiftClosing = {
+      ...closingData,
+      id: `shift-close-${Date.now()}`,
+      closedAt: new Date().toISOString(),
+    };
+
+    setDailyShiftClosings((prev) => [newClosing, ...prev]);
+
+    // Handle discrepancy audit log
+    if (newClosing.difference && newClosing.difference !== 0) {
+      if (newClosing.difference < 0) {
+        const deficitExpense: ExpenseItem = {
+          id: `exp-deficit-${Date.now()}`,
+          title: `عجز نقدية مقيد بتقفيل وردية ${newClosing.date}`,
+          category: 'other',
+          amount: Math.abs(newClosing.difference),
+          date: new Date().toISOString(),
+          recordedBy: newClosing.closedBy,
+          notes: `تسوية عجز جرد فعلي للوردية`,
+          paymentMethod: 'cash',
+          autoGenerated: true,
+        };
+        setExpenses((prev) => [deficitExpense, ...prev]);
+      } else {
+        const surplusInflow: CashInflowItem = {
+          id: `inf-surplus-${Date.now()}`,
+          type: 'manual_deposit',
+          title: `فائض نقدية مقيد بتقفيل وردية ${newClosing.date}`,
+          amount: newClosing.difference,
+          date: new Date().toISOString(),
+          paymentMethod: 'cash',
+          recordedBy: newClosing.closedBy,
+        };
+        setCashInflows((prev) => [surplusInflow, ...prev]);
+      }
+    }
+
+    return newClosing;
+  };
+
+  const getTodayShiftStatus = () => {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayClosings = dailyShiftClosings.filter((c) => c.date === todayStr);
+    return {
+      isClosedToday: todayClosings.length > 0,
+      lastClosing: todayClosings[0],
+    };
+  };
+
+  const exportDailyShiftXLSX = async (closingId?: string) => {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const targetClosing = closingId
+      ? dailyShiftClosings.find((c) => c.id === closingId)
+      : dailyShiftClosings[0];
+
+    const fallbackClosing: DailyShiftClosing = targetClosing || {
+      id: `shift-${Date.now()}`,
+      date: todayStr,
+      closedAt: new Date().toISOString(),
+      closedBy: 'الاستقبال',
+      totalDirectCash: 0,
+      totalRepayments: 0,
+      totalPosCash: 0,
+      totalPhysioCash: 0,
+      totalExpenses: 0,
+      expectedNetDrawerCash: 0,
+      actualCountedCash: 0,
+      difference: 0,
+      totalCoachDebtsLoadedToday: 0,
+    };
+
+    const todayEntries = masterReportEntries.filter((e) => e.date?.startsWith(fallbackClosing.date));
+    const todayExpenses = expenses.filter((e) => e.date.startsWith(fallbackClosing.date));
+    const todayInflows = cashInflows.filter((i) => i.date.startsWith(fallbackClosing.date));
+
+    await exportDailyShiftToXLSX(fallbackClosing, todayEntries, todayExpenses, todayInflows);
+  };
+
   return (
     <GymDataContext.Provider
       value={{
@@ -2382,6 +2647,17 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         deleteMasterReportEntry,
         startNewMonth,
         exportMasterReportToCSV,
+        exportMasterReportXLSX,
+        yearlyArchives,
+        archiveYear,
+        getYearlyArchive,
+        purgeActiveLogsForYear,
+        exportYearlyArchiveXLSX,
+        exportYearlyArchiveJSON,
+        dailyShiftClosings,
+        closeDailyShift,
+        getTodayShiftStatus,
+        exportDailyShiftXLSX,
       }}
     >
       {children}

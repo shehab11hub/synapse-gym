@@ -24,6 +24,12 @@ import {
   Activity,
   Layers,
   Building,
+  Lock,
+  ShieldCheck,
+  Archive,
+  Database,
+  FileCheck,
+  X,
 } from 'lucide-react';
 import { useGymData } from '../context/GymDataContext';
 import { useAuth } from '../context/AuthContext';
@@ -61,14 +67,23 @@ export const MasterReportPage: React.FC = () => {
     currentMonth,
     startNewMonth,
     exportMasterReportToCSV,
+    exportMasterReportXLSX,
     addMasterReportEntry,
     deleteMasterReportEntry,
     coaches,
     expenses,
     cashInflows,
+    yearlyArchives,
+    archiveYear,
+    exportYearlyArchiveXLSX,
+    exportYearlyArchiveJSON,
+    dailyShiftClosings,
+    closeDailyShift,
+    getTodayShiftStatus,
+    exportDailyShiftXLSX,
   } = useGymData();
 
-  const { currentUser } = useAuth();
+  const { currentUser, users } = useAuth();
 
   // Active Month & Year filters (default to current month and all years)
   const [selectedMonth, setSelectedMonth] = useState<string>(currentMonth);
@@ -85,6 +100,54 @@ export const MasterReportPage: React.FC = () => {
   const [selectedNewMonthName, setSelectedNewMonthName] = useState<string>('نوفمبر');
   const [selectedNewMonthYear, setSelectedNewMonthYear] = useState<number>(new Date().getFullYear());
   const [isAddEntryModalOpen, setIsAddEntryModalOpen] = useState(false);
+
+  // Shift Closing Modals & States (تقفيل اليومية والدرج)
+  const [isShiftAuthModalOpen, setIsShiftAuthModalOpen] = useState(false);
+  const [isShiftClosingModalOpen, setIsShiftClosingModalOpen] = useState(false);
+  const [shiftAuthUsername, setShiftAuthUsername] = useState(currentUser?.username || '');
+  const [shiftAuthPassword, setShiftAuthPassword] = useState('');
+  const [shiftAuthError, setShiftAuthError] = useState('');
+  const [actualCountedCashInput, setActualCountedCashInput] = useState<string>('');
+  const [shiftNotes, setShiftNotes] = useState('');
+  const [isExportingShift, setIsExportingShift] = useState(false);
+
+  // Yearly Archive Modal & States (أرشفة السنة وبدء سنة جديدة)
+  const [isYearArchiveModalOpen, setIsYearArchiveModalOpen] = useState(false);
+  const [yearToArchiveInput, setYearToArchiveInput] = useState<number>(new Date().getFullYear());
+
+  // XLSX export loading state
+  const [isExportingXLSX, setIsExportingXLSX] = useState(false);
+
+  // Today's shift financial calculations
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayShiftStatus = getTodayShiftStatus();
+
+  // Today's direct cash collected at reception
+  const todayDirectEntries = masterReportEntries.filter(
+    (e) => e.date?.startsWith(todayIso) && e.paymentMethod !== 'coach_collected'
+  );
+  const todayDirectCash = todayDirectEntries.reduce((sum, e) => sum + e.amount, 0);
+
+  // Today's coach repayments
+  const todayRepayments = cashInflows.filter(
+    (i) => i.type === 'coach_settlement' && i.date.startsWith(todayIso)
+  );
+  const todayRepaymentsAmount = todayRepayments.reduce((sum, i) => sum + i.amount, 0);
+
+  // Today's expenses from drawer
+  const todayExpenses = expenses.filter(
+    (e) => e.date.startsWith(todayIso) && e.paymentMethod === 'cash'
+  );
+  const todayExpensesAmount = todayExpenses.reduce((sum, e) => sum + e.amount, 0);
+
+  // Expected Net Drawer Cash today
+  const todayExpectedNetCash = todayDirectCash + todayRepaymentsAmount - todayExpensesAmount;
+
+  // Today's coach debts loaded
+  const todayCoachDebts = masterReportEntries.filter(
+    (e) => e.date?.startsWith(todayIso) && e.paymentMethod === 'coach_collected'
+  );
+  const todayCoachDebtsAmount = todayCoachDebts.reduce((sum, e) => sum + e.amount, 0);
 
   // Available years dynamically extracted from cycles, entries, and current year
   const availableYears = Array.from(
@@ -216,6 +279,86 @@ export const MasterReportPage: React.FC = () => {
   const handleExportCSV = () => {
     exportMasterReportToCSV(selectedMonth);
     sounds.playSuccessDing();
+  };
+
+  const handleExportXLSX = async () => {
+    setIsExportingXLSX(true);
+    try {
+      await exportMasterReportXLSX(selectedMonth);
+      sounds.playSuccessDing();
+    } catch {
+      // ignore
+    } finally {
+      setIsExportingXLSX(false);
+    }
+  };
+
+  const handleShiftAuthSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setShiftAuthError('');
+
+    const matchedUser = users.find(
+      (u) =>
+        u.username.toLowerCase() === shiftAuthUsername.trim().toLowerCase() &&
+        u.password === shiftAuthPassword &&
+        u.active
+    );
+
+    if (!matchedUser) {
+      setShiftAuthError('بيانات الدخول غير صحيحة، يرجى التأكد من اسم المستخدم وكلمة المرور');
+      return;
+    }
+
+    sounds.playSuccessDing();
+    setIsShiftAuthModalOpen(false);
+    setActualCountedCashInput(String(todayExpectedNetCash));
+    setIsShiftClosingModalOpen(true);
+  };
+
+  const handleConfirmShiftClose = (e: React.FormEvent) => {
+    e.preventDefault();
+    const actualCashNum = parseFloat(actualCountedCashInput) || 0;
+    const diff = actualCashNum - todayExpectedNetCash;
+
+    closeDailyShift({
+      date: todayIso,
+      closedBy: currentUser?.name || shiftAuthUsername || 'المدير العام',
+      totalDirectCash: todayDirectCash,
+      totalRepayments: todayRepaymentsAmount,
+      totalPosCash: 0,
+      totalPhysioCash: 0,
+      totalExpenses: todayExpensesAmount,
+      expectedNetDrawerCash: todayExpectedNetCash,
+      actualCountedCash: actualCashNum,
+      difference: diff,
+      totalCoachDebtsLoadedToday: todayCoachDebtsAmount,
+      notes: shiftNotes.trim() || undefined,
+    });
+
+    sounds.playCashRegister();
+    setIsShiftClosingModalOpen(false);
+    setShiftAuthPassword('');
+    setShiftNotes('');
+  };
+
+  const handleExportDailyShiftFile = async () => {
+    setIsExportingShift(true);
+    try {
+      await exportDailyShiftXLSX();
+      sounds.playSuccessDing();
+    } catch {
+      // ignore
+    } finally {
+      setIsExportingShift(false);
+    }
+  };
+
+  const handleConfirmYearArchive = (e: React.FormEvent) => {
+    e.preventDefault();
+    archiveYear(yearToArchiveInput, currentUser?.name || 'المدير العام');
+    sounds.playCashRegister();
+    setIsYearArchiveModalOpen(false);
+    setSelectedYearFilter(String(yearToArchiveInput));
   };
 
   const handleStartNewMonthSubmit = (e: React.FormEvent) => {
@@ -378,19 +521,42 @@ export const MasterReportPage: React.FC = () => {
 
           {/* Action Buttons */}
           <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
-            {/* Export to CSV (Excel) */}
+            {/* Export to XLSX (Excel) */}
             <button
-              onClick={handleExportCSV}
-              className="flex-1 sm:flex-none py-3.5 px-6 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 transition cursor-pointer"
+              onClick={handleExportXLSX}
+              disabled={isExportingXLSX}
+              className="flex-1 sm:flex-none py-3.5 px-6 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 transition cursor-pointer disabled:opacity-60"
             >
               <Download className="w-4 h-4" />
-              <span>تحميل شيت إكسيل منظم (Excel CSV)</span>
+              <span>{isExportingXLSX ? 'جارِ إنشاء شيت الإكسيل...' : 'تحميل شيت إكسيل احترافي (.xlsx)'}</span>
+            </button>
+
+            {/* Daily Shift Closing Button */}
+            <button
+              onClick={() => {
+                setShiftAuthError('');
+                setShiftAuthPassword('');
+                setIsShiftAuthModalOpen(true);
+              }}
+              className="flex-1 sm:flex-none py-3.5 px-5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25 transition cursor-pointer"
+            >
+              <Lock className="w-4 h-4" />
+              <span>تقفيل اليومية والدرج</span>
+            </button>
+
+            {/* Yearly Archive Button */}
+            <button
+              onClick={() => setIsYearArchiveModalOpen(true)}
+              className="flex-1 sm:flex-none py-3.5 px-4 rounded-2xl bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/40 font-black text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+            >
+              <Archive className="w-4 h-4" />
+              <span>أرشفة وبدء سنة جديدة</span>
             </button>
 
             {/* Start New Month Button */}
             <button
               onClick={() => setIsNewMonthModalOpen(true)}
-              className="flex-1 sm:flex-none py-3.5 px-5 rounded-2xl bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 border border-teal-500/40 font-black text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+              className="flex-1 sm:flex-none py-3.5 px-4 rounded-2xl bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 border border-teal-500/40 font-black text-xs flex items-center justify-center gap-2 transition cursor-pointer"
             >
               <Calendar className="w-4 h-4" />
               <span>بدء شهر جديد</span>
@@ -452,6 +618,33 @@ export const MasterReportPage: React.FC = () => {
                 ))}
               </select>
             </div>
+
+            {/* Year Archive Status Banner if selected year is archived */}
+            {(() => {
+              const yrNum = parseInt(selectedYearFilter);
+              const arch = yearlyArchives.find((a) => a.year === yrNum);
+              if (!arch) return null;
+              return (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-indigo-950/70 border border-indigo-500/40 text-xs">
+                  <Archive className="w-3.5 h-3.5 text-indigo-400" />
+                  <span className="text-indigo-300 font-bold">
+                    أرشيف {arch.year} ({arch.totalCheckIns} حضور)
+                  </span>
+                  <button
+                    onClick={() => exportYearlyArchiveXLSX(arch.year)}
+                    className="px-2 py-0.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-slate-950 font-black text-[10px] cursor-pointer"
+                  >
+                    إكسيل (.xlsx)
+                  </button>
+                  <button
+                    onClick={() => exportYearlyArchiveJSON(arch.year)}
+                    className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-[10px] border border-slate-700 cursor-pointer"
+                  >
+                    JSON
+                  </button>
+                </div>
+              );
+            })()}
           </div>
 
           <div className="flex flex-wrap items-center gap-4 text-xs text-slate-400">
@@ -1254,6 +1447,378 @@ export const MasterReportPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* 1. Shift Auth Modal (Authentication Guard) */}
+      {isShiftAuthModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-[#0f172a] border border-amber-500/30 rounded-3xl max-w-md w-full p-6 shadow-2xl relative">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                  <ShieldCheck className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white">التحقق الأمني - تقفيل اليومية والدرج</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">يتطلب صلاحيات إدارية (Admin / Manager)</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setIsShiftAuthModalOpen(false);
+                  setShiftAuthError('');
+                }}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {shiftAuthError && (
+              <div className="mt-4 p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                <span>{shiftAuthError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleShiftAuthSubmit} className="space-y-4 mt-5">
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1.5">اسم المستخدم (المسؤول)</label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    required
+                    value={shiftAuthUsername}
+                    onChange={(e) => setShiftAuthUsername(e.target.value)}
+                    placeholder="اسم المستخدم"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500 transition"
+                  />
+                  <User className="w-4 h-4 text-slate-500 absolute left-3 top-3 pointer-events-none" />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1.5">كلمة المرور الإدارية</label>
+                <div className="relative">
+                  <input
+                    type="password"
+                    required
+                    autoFocus
+                    value={shiftAuthPassword}
+                    onChange={(e) => setShiftAuthPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white font-mono focus:outline-none focus:border-amber-500 transition dir-ltr text-right"
+                  />
+                  <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-3 pointer-events-none" />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 pt-3">
+                <button
+                  type="submit"
+                  className="flex-1 py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-amber-500/20 transition flex items-center justify-center gap-2"
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>متابعة لمطابقة النقدية والتقفيل</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsShiftAuthModalOpen(false);
+                    setShiftAuthError('');
+                  }}
+                  className="py-3 px-4 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs cursor-pointer hover:bg-slate-700 transition"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 2. Daily Shift Reconciliation Modal */}
+      {isShiftClosingModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in overflow-y-auto">
+          <div className="bg-[#0f172a] border border-slate-700 rounded-3xl max-w-2xl w-full p-6 md:p-8 shadow-2xl my-8">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                  <Banknote className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-white">تقفيل اليومية ومطابقة النقدية بالدرج</h3>
+                  <div className="flex items-center gap-2 mt-1 text-xs text-slate-400">
+                    <span className="flex items-center gap-1 font-mono text-amber-300">
+                      <Clock className="w-3.5 h-3.5" />
+                      {todayIso}
+                    </span>
+                    <span>•</span>
+                    <span>المسؤول: {currentUser?.name || shiftAuthUsername || 'الإدارة'}</span>
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsShiftClosingModalOpen(false)}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {todayShiftStatus.isClosedToday && (
+              <div className="mt-4 p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2.5">
+                <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
+                <span>
+                  تنبيه: تم تسجيل تقفيل لليومية مسبقاً في تمام الساعة{' '}
+                  <strong className="font-mono">{new Date(todayShiftStatus.lastClosing!.closedAt).toLocaleTimeString('ar-EG')}</strong>{' '}
+                  بواسطة ({todayShiftStatus.lastClosing?.closedBy}). إعادة التقفيل ستحدث المحضر الحالي.
+                </span>
+              </div>
+            )}
+
+            {/* Financial Reconciliation KPI Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-5">
+              <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800">
+                <p className="text-[11px] font-bold text-slate-400">كاش اشتراكات الاستقبال</p>
+                <p className="text-base font-black text-emerald-400 font-mono mt-1">
+                  +{formatEGP(todayDirectCash)}
+                </p>
+                <span className="text-[10px] text-slate-500">{todayDirectEntries.length} حركة اشتراك مباشر</span>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800">
+                <p className="text-[11px] font-bold text-slate-400">سدادات الكباتن للدرج</p>
+                <p className="text-base font-black text-cyan-400 font-mono mt-1">
+                  +{formatEGP(todayRepaymentsAmount)}
+                </p>
+                <span className="text-[10px] text-slate-500">{todayRepayments.length} إيداع سداد مديونية</span>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800">
+                <p className="text-[11px] font-bold text-slate-400">مصاريف مسحوبة من الدرج</p>
+                <p className="text-base font-black text-rose-400 font-mono mt-1">
+                  -{formatEGP(todayExpensesAmount)}
+                </p>
+                <span className="text-[10px] text-slate-500">{todayExpenses.length} بنود مصاريف نقدية</span>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/80">
+                <p className="text-[11px] font-bold text-slate-400">تحميلات مديونيات الكباتن</p>
+                <p className="text-base font-black text-amber-400 font-mono mt-1">
+                  {formatEGP(todayCoachDebtsAmount)}
+                </p>
+                <span className="text-[10px] text-slate-500">لا تدخل الدرج ككاش (تثبت كمديونية)</span>
+              </div>
+
+              <div className="col-span-2 p-4 rounded-2xl bg-gradient-to-r from-teal-950/40 to-emerald-950/30 border-2 border-teal-500/40 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-black text-teal-300">الصافي النقدي المتوقع بالدرج (Expected Cash)</p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    (كاش الاشتراكات + سدادات الكباتن) - مصاريف الدرج
+                  </p>
+                </div>
+                <div className="text-left">
+                  <p className="text-xl font-black text-teal-400 font-mono">
+                    {formatEGP(todayExpectedNetCash)}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <form onSubmit={handleConfirmShiftClose} className="space-y-4 mt-6">
+              {/* Actual counted cash field */}
+              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
+                <label className="block text-xs font-bold text-slate-200">
+                  النقدية الفعلية المحصورة داخل الدرج الآن (العد الفعلي اليدوي):
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="0.5"
+                    required
+                    value={actualCountedCashInput}
+                    onChange={(e) => setActualCountedCashInput(e.target.value)}
+                    placeholder="أدخل إجمالي النقدية المعدودة بالدرج"
+                    className="w-full bg-slate-950 border-2 border-slate-700 rounded-xl px-4 py-3 text-base text-teal-300 font-mono font-black focus:outline-none focus:border-teal-500 transition"
+                  />
+                  <span className="absolute left-4 top-3 text-xs text-slate-500 font-bold">ج.م نقداً</span>
+                </div>
+
+                {/* Discrepancy indicator */}
+                {(() => {
+                  const actualNum = parseFloat(actualCountedCashInput) || 0;
+                  const diff = actualNum - todayExpectedNetCash;
+                  if (actualCountedCashInput === '') return null;
+                  if (diff === 0) {
+                    return (
+                      <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-400 font-bold text-xs flex items-center justify-between">
+                        <span>حالة المطابقة:</span>
+                        <span className="flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          مطابق تماماً (لا يوجد أي عجز أو زيادة)
+                        </span>
+                      </div>
+                    );
+                  }
+                  if (diff > 0) {
+                    return (
+                      <div className="p-3 bg-cyan-500/10 border border-cyan-500/30 rounded-xl text-cyan-400 font-bold text-xs flex items-center justify-between">
+                        <span>فائض نقدي بالدرج (زيادة):</span>
+                        <span className="font-mono font-black text-sm">+{formatEGP(diff)}</span>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-400 font-bold text-xs flex items-center justify-between">
+                      <span>عجز نقدي بالدرج (نقص):</span>
+                      <span className="font-mono font-black text-sm">-{formatEGP(Math.abs(diff))}</span>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  ملاحظات تقفيل الوردية (اختياري)
+                </label>
+                <textarea
+                  rows={2}
+                  value={shiftNotes}
+                  onChange={(e) => setShiftNotes(e.target.value)}
+                  placeholder="أي ملاحظات حول العجز/الفائض أو استلام النقدية أو تسليم الوردية التالية..."
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-teal-500 transition"
+                />
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-blue-500/10 border border-blue-500/20 text-xs text-blue-300 flex items-start gap-2.5">
+                <Sparkles className="w-4 h-4 shrink-0 text-blue-400 mt-0.5" />
+                <p className="leading-relaxed">
+                  <strong>تأثير تقفيل اليومية:</strong> يتم حفظ تقرير الإغلاق واعتماده رسمياً، وإعادة ضبط حسابات الدرج اليومية لتبدأ غداً برصيد جديد ونظيف، مع بقاء كافة مديونيات الكباتن واشتراكات الأعضاء محفوظة بدون أي مساس.
+                </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-center gap-3 pt-3">
+                <button
+                  type="button"
+                  onClick={handleExportDailyShiftFile}
+                  disabled={isExportingShift}
+                  className="w-full sm:w-auto py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-teal-400 border border-teal-500/30 font-bold text-xs cursor-pointer flex items-center justify-center gap-2 transition disabled:opacity-60"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>{isExportingShift ? 'جارِ التحميل...' : 'تحميل شيت إكسيل للوردية (.xlsx)'}</span>
+                </button>
+
+                <div className="flex items-center gap-3 w-full sm:flex-1">
+                  <button
+                    type="submit"
+                    className="flex-1 py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-amber-500/20 transition flex items-center justify-center gap-2"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>تأكيد إغلاق الوردية وتصفير الدرج</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsShiftClosingModalOpen(false)}
+                    className="py-3 px-4 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs cursor-pointer hover:bg-slate-700 transition"
+                  >
+                    إلغاء
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Yearly Archive Modal */}
+      {isYearArchiveModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-[#0f172a] border border-indigo-500/30 rounded-3xl max-w-lg w-full p-6 md:p-8 shadow-2xl relative">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-2xl bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+                  <Archive className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white">أرشفة وبدء سنة مالية جديدة</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    تجميع البيانات السنوية وحفظ سرعة وخفة السيستم
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsYearArchiveModalOpen(false)}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmYearArchive} className="space-y-4 mt-5">
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                  حدد السنة المراد أرشفتها وإغلاق سنتها المالية
+                </label>
+                <select
+                  value={yearToArchiveInput}
+                  onChange={(e) => setYearToArchiveInput(Number(e.target.value))}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500 transition"
+                >
+                  {availableYears.map((y) => (
+                    <option key={y} value={y}>
+                      سنة {y} {String(y) === String(new Date().getFullYear()) ? '(السنة الحالية)' : ''}
+                    </option>
+                  ))}
+                  <option value={new Date().getFullYear() + 1}>
+                    سنة {new Date().getFullYear() + 1} (السنة القادمة)
+                  </option>
+                </select>
+              </div>
+
+              {/* Explanatory benefit boxes */}
+              <div className="space-y-2.5 text-xs">
+                <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 flex items-start gap-2.5 text-slate-300">
+                  <Database className="w-4 h-4 shrink-0 text-indigo-400 mt-0.5" />
+                  <span>
+                    <strong>تجميع شامل:</strong> يتم تحزيم وحساب إجمالي إيرادات ومصاريف وأرباح شهور سنة {yearToArchiveInput} وحفظها في جدول <code className="text-indigo-300">yearly_archives</code>.
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 flex items-start gap-2.5 text-slate-300">
+                  <FileSpreadsheet className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
+                  <span>
+                    <strong>تصدير فوري دائم:</strong> يمكنك تصفح سنة {yearToArchiveInput} في أي وقت وتحميل شيت إكسيل احترافي (.xlsx) أو ملف JSON متكامل بنقرة واحدة.
+                  </span>
+                </div>
+                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-start gap-2.5 text-amber-300">
+                  <Sparkles className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
+                  <span>
+                    <strong>تفريغ السجلات النشطة (Purge Logs):</strong> يتم مسح سجلات الحضور النشطة الخاصة بسنة {yearToArchiveInput} فقط بعد حفظ لقطة كاملة منها في الأرشيف لتخفيف قاعدة البيانات والحفاظ على سرعة السيستم.
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 pt-3">
+                <button
+                  type="submit"
+                  className="flex-1 py-3 px-4 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-indigo-500/20 transition flex items-center justify-center gap-2"
+                >
+                  <Archive className="w-4 h-4" />
+                  <span>تأكيد أرشفة سنة {yearToArchiveInput} وبدء الدورة</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsYearArchiveModalOpen(false)}
+                  className="py-3 px-4 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs cursor-pointer hover:bg-slate-700 transition"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+

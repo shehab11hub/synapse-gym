@@ -258,3 +258,50 @@ export interface MonthlyBillingCycle {
   totalCollected: number;
   totalPendingOnCoaches: number;
 }
+
+// YEARLY DATA ARCHIVE TYPES
+export interface YearlyArchiveMonthlyStat {
+  monthName: string;
+  monthIndex: number;
+  revenue: number;
+  expenses: number;
+  netProfit: number;
+  checkInsCount: number;
+}
+
+export interface YearlyArchive {
+  id: string;
+  year: number;
+  archivedAt: string;
+  archivedBy: string;
+  totalRevenue: number;
+  totalExpenses: number;
+  netProfit: number;
+  totalCheckIns: number;
+  totalDirectSubscriptions: number;
+  totalCoachDebtsLoaded: number;
+  totalCoachSettlements: number;
+  monthlyStats: YearlyArchiveMonthlyStat[];
+  checkInLogsSnapshot: CheckInLog[];
+  masterEntriesSnapshot: MasterReportEntry[];
+  expensesSnapshot: ExpenseItem[];
+  cashInflowsSnapshot: CashInflowItem[];
+}
+
+// DAILY SHIFT CLOSING TYPES (تقفيل اليومية والدرج)
+export interface DailyShiftClosing {
+  id: string;
+  date: string; // YYYY-MM-DD
+  closedAt: string;
+  closedBy: string;
+  totalDirectCash: number;
+  totalRepayments: number;
+  totalPosCash: number;
+  totalPhysioCash: number;
+  totalExpenses: number;
+  expectedNetDrawerCash: number;
+  actualCountedCash?: number;
+  difference?: number; // actual - expected (عجز / زيادة)
+  totalCoachDebtsLoadedToday: number;
+  notes?: string;
+}

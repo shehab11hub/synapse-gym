@@ -36,7 +36,7 @@ const ARABIC_MONTH_LABELS = [
 ];
 
 export const AnalyticsPage: React.FC = () => {
-  const { expenses, cashInflows, transactions, physioBookings } = useGymData();
+  const { expenses, cashInflows, transactions, physioBookings, yearlyArchives } = useGymData();
 
   // Period mode: 'day' | 'month' | 'year'
   const [periodMode, setPeriodMode] = useState<PeriodMode>('month');
@@ -118,6 +118,12 @@ export const AnalyticsPage: React.FC = () => {
     selectedYear,
   ]);
 
+  // Check if current periodMode === 'year' matches an archived year
+  const archivedYearData = useMemo(() => {
+    if (periodMode !== 'year') return undefined;
+    return yearlyArchives?.find((a) => a.year === selectedYear);
+  }, [periodMode, yearlyArchives, selectedYear]);
+
   // 2. LIVE REVENUE CALCULATIONS (Strictly real data, zero fake numbers)
   const totalSubRevenue = filteredData.inflows
     .filter(
@@ -138,31 +144,37 @@ export const AnalyticsPage: React.FC = () => {
     0
   );
 
-  const totalRevenue = totalSubRevenue + totalPosRevenue + totalPhysioRevenue;
+  const liveTotalRevenue = totalSubRevenue + totalPosRevenue + totalPhysioRevenue;
+  const totalRevenue = archivedYearData ? archivedYearData.totalRevenue : liveTotalRevenue;
 
   // 3. LIVE EXPENSE CALCULATIONS (Strictly real data)
-  const totalCoachExpense = filteredData.expenses
+  const currentExpensesList = archivedYearData
+    ? archivedYearData.expensesSnapshot || []
+    : filteredData.expenses;
+
+  const totalCoachExpense = currentExpensesList
     .filter((e) => e.category === 'trainer_payout')
     .reduce((acc, e) => acc + e.amount, 0);
 
-  const totalElectricityExpense = filteredData.expenses
+  const totalElectricityExpense = currentExpensesList
     .filter((e) => e.category === 'electricity')
     .reduce((acc, e) => acc + e.amount, 0);
 
-  const totalWaterExpense = filteredData.expenses
+  const totalWaterExpense = currentExpensesList
     .filter((e) => e.category === 'water')
     .reduce((acc, e) => acc + e.amount, 0);
 
-  const totalMaintenanceExpense = filteredData.expenses
+  const totalMaintenanceExpense = currentExpensesList
     .filter((e) => e.category === 'maintenance')
     .reduce((acc, e) => acc + e.amount, 0);
 
-  const totalOtherExpenses = filteredData.expenses
+  const totalOtherExpenses = currentExpensesList
     .filter((e) => ['rent', 'supplies', 'other'].includes(e.category))
     .reduce((acc, e) => acc + e.amount, 0);
 
-  const totalExpenses = filteredData.expenses.reduce((acc, e) => acc + e.amount, 0);
-  const netProfit = totalRevenue - totalExpenses;
+  const liveTotalExpenses = filteredData.expenses.reduce((acc, e) => acc + e.amount, 0);
+  const totalExpenses = archivedYearData ? archivedYearData.totalExpenses : liveTotalExpenses;
+  const netProfit = archivedYearData ? archivedYearData.netProfit : totalRevenue - totalExpenses;
   const profitMargin = totalRevenue > 0 ? Math.round((netProfit / totalRevenue) * 100) : 0;
 
   // 4. DYNAMIC BAR CHART DATASET ACCORDING TO PERIOD
@@ -276,7 +288,17 @@ export const AnalyticsPage: React.FC = () => {
       });
     }
 
-    // Yearly: 12 months
+    // Yearly: check if archived snapshot exists
+    if (periodMode === 'year' && archivedYearData?.monthlyStats && archivedYearData.monthlyStats.length > 0) {
+      return archivedYearData.monthlyStats.map((stat) => ({
+        label: stat.monthName,
+        revenue: stat.revenue,
+        expense: stat.expenses,
+        profit: stat.netProfit,
+      }));
+    }
+
+    // Yearly: 12 months live
     return ARABIC_MONTH_LABELS.map((monthName, idx) => {
       const monthPrefix = `${selectedYear}-${String(idx + 1).padStart(2, '0')}`;
 
@@ -312,7 +334,7 @@ export const AnalyticsPage: React.FC = () => {
         profit: rev - exp,
       };
     });
-  }, [periodMode, selectedDate, selectedMonth, selectedYear, filteredData]);
+  }, [periodMode, selectedDate, selectedMonth, selectedYear, filteredData, archivedYearData]);
 
   // Dynamic Scale for Bars
   const rawMax = Math.max(
@@ -323,21 +345,30 @@ export const AnalyticsPage: React.FC = () => {
   const isAllZeroData = rawMax === 0;
 
   // 5. REVENUE BREAKDOWN (Zero-fake numbers)
-  const revenueBreakdown = [
-    { name: 'اشتراكات وتحصيلات الجيم', amount: totalSubRevenue, color: '#14b8a6' },
-    { name: 'مبيعات المتجر (POS)', amount: totalPosRevenue, color: '#06b6d4' },
-    { name: 'جلسات العلاج الطبيعي والمساج', amount: totalPhysioRevenue, color: '#a855f7' },
-  ];
+  const revenueBreakdown = useMemo(() => {
+    if (archivedYearData) {
+      return [
+        { name: 'اشتراكات وتحصيلات الجيم', amount: archivedYearData.totalDirectSubscriptions || 0, color: '#14b8a6' },
+        { name: 'سدادات مديونيات الكباتن', amount: archivedYearData.totalCoachSettlements || 0, color: '#06b6d4' },
+        { name: 'تحميلات المدربين المسجلة', amount: archivedYearData.totalCoachDebtsLoaded || 0, color: '#a855f7' },
+      ];
+    }
+    return [
+      { name: 'اشتراكات وتحصيلات الجيم', amount: totalSubRevenue, color: '#14b8a6' },
+      { name: 'مبيعات المتجر (POS)', amount: totalPosRevenue, color: '#06b6d4' },
+      { name: 'جلسات العلاج الطبيعي والمساج', amount: totalPhysioRevenue, color: '#a855f7' },
+    ];
+  }, [archivedYearData, totalSubRevenue, totalPosRevenue, totalPhysioRevenue]);
   const sumRevenue = revenueBreakdown.reduce((acc, r) => acc + r.amount, 0);
 
   // 6. EXPENSE BREAKDOWN (Zero-fake numbers)
-  const expenseBreakdown = [
+  const expenseBreakdown = useMemo(() => [
     { name: 'حسابات ورواتب المدربين', amount: totalCoachExpense, color: '#f43f5e' },
     { name: 'كهرباء ومكيفات', amount: totalElectricityExpense, color: '#f59e0b' },
     { name: 'صيانة المشايات والأجهزة', amount: totalMaintenanceExpense, color: '#f97316' },
     { name: 'استهلاك مياه ومرافق', amount: totalWaterExpense, color: '#38bdf8' },
     { name: 'إيجار ونظافة ونثريات', amount: totalOtherExpenses, color: '#8b5cf6' },
-  ];
+  ], [totalCoachExpense, totalElectricityExpense, totalMaintenanceExpense, totalWaterExpense, totalOtherExpenses]);
   const sumExpenses = expenseBreakdown.reduce((acc, e) => acc + e.amount, 0);
 
   // Formatted Period Description
@@ -537,9 +568,17 @@ export const AnalyticsPage: React.FC = () => {
           </div>
 
           {/* Active Period Label Display */}
-          <div className="flex items-center gap-2 text-xs font-bold px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 text-slate-300 shadow-sm">
-            <span className="text-slate-500">الفترة المعروضة:</span>
-            <span className="text-cyan-300 font-bold">{formattedPeriodTitle}</span>
+          <div className="flex flex-wrap items-center gap-2">
+            {archivedYearData && (
+              <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-black shadow-sm">
+                <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                <span>أرشيف سنوي معتمد ({archivedYearData.archivedAt?.slice(0, 10)})</span>
+              </span>
+            )}
+            <div className="flex items-center gap-2 text-xs font-bold px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 text-slate-300 shadow-sm">
+              <span className="text-slate-500">الفترة المعروضة:</span>
+              <span className="text-cyan-300 font-bold">{formattedPeriodTitle}</span>
+            </div>
           </div>
         </div>
       </div>
