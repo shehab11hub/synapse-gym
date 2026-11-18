@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User, UserRole } from '../types';
+import { supabaseService } from '../services/supabaseService';
+import { isSupabaseConfigured } from '../lib/supabase';
 
 interface AuthContextType {
   currentUser: User | null;
@@ -66,6 +68,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.setItem('synapse_users', JSON.stringify(users));
   }, [users]);
 
+  // Sync users with Supabase when configured
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    const loadUsers = async () => {
+      try {
+        const remote = await supabaseService.fetchUsers();
+        if (remote && remote.length > 0) {
+          setUsers((prev) => {
+            const map = new Map<string, User>();
+            remote.forEach((u) => map.set(u.username.toLowerCase(), u));
+            prev.forEach((u) => {
+              if (!map.has(u.username.toLowerCase())) {
+                map.set(u.username.toLowerCase(), u);
+              }
+            });
+            return Array.from(map.values());
+          });
+        }
+      } catch (err) {
+        console.warn('Supabase fetchUsers fallback to local:', err);
+      }
+    };
+    loadUsers();
+  }, []);
+
   useEffect(() => {
     if (currentUser) {
       localStorage.setItem('synapse_current_user', JSON.stringify(currentUser));
@@ -108,6 +135,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     setUsers((prev) => [...prev, newUser]);
+    if (isSupabaseConfigured) {
+      supabaseService.upsertUser(newUser).catch(() => {});
+    }
     return true;
   };
 
@@ -115,14 +145,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Don't delete master admin
     if (id === 'usr-admin-master') return false;
     setUsers((prev) => prev.filter((u) => u.id !== id));
+    if (isSupabaseConfigured) {
+      supabaseService.deleteUser(id).catch(() => {});
+    }
     return true;
   };
 
   const updateUserStatus = (id: string, active: boolean) => {
     if (id === 'usr-admin-master') return;
-    setUsers((prev) =>
-      prev.map((u) => (u.id === id ? { ...u, active } : u))
-    );
+    setUsers((prev) => {
+      const updated = prev.map((u) => (u.id === id ? { ...u, active } : u));
+      const target = updated.find((u) => u.id === id);
+      if (target && isSupabaseConfigured) {
+        supabaseService.upsertUser(target).catch(() => {});
+      }
+      return updated;
+    });
   };
 
   const canAccessPage = (page: string): boolean => {
@@ -130,7 +168,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (currentUser.role === 'admin') return true;
 
     // Receptionist access permissions:
-    // Page 1 (reception), Page 2 (sessions), Page 3 (physio), Page 4 (trainers - requested), expenses, master_report, pos, analytics
+    // Page 1 (reception), Page 2 (sessions), Page 3 (physio), Page 4 (trainers), expenses, master_report, pos
+    // Analytics is strictly restricted to manager (admin) only!
     const receptionistAllowed = [
       'reception',
       'sessions',
@@ -139,7 +178,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       'expenses',
       'master_report',
       'pos',
-      'analytics',
     ];
     return receptionistAllowed.includes(page);
   };

@@ -77,8 +77,11 @@ export interface GymSession {
   coachIds: string[]; // 1 or 2 coaches
   sessionCategory?: SessionCategory; // نوع السيشن: برايفت، جروب، مساج، إلخ
   price: number; // سعر تذكرة العميل / المتدرب للحصة (Client Ticket Price)
-  startTime: string; // e.g. "17:00"
-  endTime: string; // e.g. "18:30"
+  startTime?: string; // e.g. "17:00"
+  endTime?: string; // e.g. "18:30"
+  status?: 'idle' | 'in-progress' | 'completed'; // زرار بداية ونهاية الحصة
+  startedAt?: string; // توقيت بدء الحصة الفعلي
+  endedAt?: string; // توقيت إنهاء الحصة الفعلي
   daysOfWeek: number[]; // 0=Sunday, 1=Monday...
   enrolledPlayerIds: string[]; // Persistent players (تسكين دائم)
   temporaryPlayerIds?: string[]; // Temporary drop-in players for today (تسكين مؤقت)
@@ -121,6 +124,7 @@ export interface POSProduct {
   buyPrice: number;
   sellPrice: number;
   stock: number;
+  lowStockThreshold?: number; // إشعار عند اقتراب النفاذ (default 5)
   barcode?: string;
   image?: string;
 }
@@ -161,6 +165,11 @@ export interface CheckInLog {
   assignedSessionId?: string;
   assignedSessionTitle?: string;
   paymentMode?: 'coach_charge' | 'cash_drawer' | 'instapay';
+  seatingPathway?: 'coach_debt' | 'gym_with_coach_share' | 'gym_direct_no_coach';
+  coachShareType?: 'fixed' | 'percentage';
+  coachShareValue?: number;
+  coachShareAmount?: number;
+  gymShareAmount?: number;
   chargedAmount?: number;
 }
 
@@ -259,6 +268,28 @@ export interface MonthlyBillingCycle {
   totalPendingOnCoaches: number;
 }
 
+// MONTHLY DATA ARCHIVE TYPES (أرشيف الشهر الشامل لحسابات المدربين والتحليلات أوفلاين)
+export interface MonthlyArchive {
+  id: string;
+  month: string; // e.g. "أكتوبر 2026"
+  closedAt: string;
+  closedBy: string;
+  totalRevenue: number;
+  totalExpenses: number;
+  netProfit: number;
+  totalPosCash: number;
+  masterEntriesSnapshot: MasterReportEntry[];
+  expensesSnapshot: ExpenseItem[];
+  cashInflowsSnapshot: CashInflowItem[];
+  trainerTransactionsSnapshot: TrainerTransaction[];
+  posTransactionsSnapshot: POSTransaction[];
+  coachDebtCarryOver: {
+    coachId: string;
+    coachName: string;
+    remainingDebt: number;
+  }[];
+}
+
 // YEARLY DATA ARCHIVE TYPES
 export interface YearlyArchiveMonthlyStat {
   monthName: string;
@@ -303,5 +334,6 @@ export interface DailyShiftClosing {
   actualCountedCash?: number;
   difference?: number; // actual - expected (عجز / زيادة)
   totalCoachDebtsLoadedToday: number;
+  totalCoachEarningsToday?: number; // مستحقات وأرباح الكباتن الناشئة اليوم من تحصيلات الاستقبال
   notes?: string;
 }

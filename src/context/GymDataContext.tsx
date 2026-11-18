@@ -18,6 +18,7 @@ import {
   SessionCategory,
   YearlyArchive,
   DailyShiftClosing,
+  MonthlyArchive,
 } from '../types';
 import {
   exportMasterReportToXLSX,
@@ -25,6 +26,9 @@ import {
   exportYearlyArchiveToXLSX,
   exportYearlyArchiveToJSON,
 } from '../utils/excelExport';
+import { sounds } from '../utils/sound';
+import { supabaseService } from '../services/supabaseService';
+import { isSupabaseConfigured } from '../lib/supabase';
 
 interface GymDataContextType {
   // Members
@@ -46,6 +50,8 @@ interface GymDataContextType {
   addSession: (session: Omit<GymSession, 'id'>) => void;
   updateSession: (id: string, updates: Partial<GymSession>) => void;
   deleteSession: (id: string) => void;
+  startSession: (sessionId: string) => void;
+  endSession: (sessionId: string) => void;
   assignPlayerToSession: (sessionId: string, memberId: string, isTemporary?: boolean) => void;
   removePlayerFromSession: (sessionId: string, memberId: string) => void;
   toggleSessionCoachCompletion: (sessionId: string, coachId: string) => void;
@@ -92,9 +98,14 @@ interface GymDataContextType {
     sessionId?: string,
     notes?: string,
     paymentDetails?: {
-      paymentMode: 'coach_charge' | 'cash_drawer' | 'instapay';
-      amount: number;
+      paymentMode?: 'coach_charge' | 'cash_drawer' | 'instapay';
+      amount?: number;
       roomName?: string;
+      seatingPathway?: 'coach_debt' | 'gym_with_coach_share' | 'gym_direct_no_coach';
+      coachShareType?: 'fixed' | 'percentage';
+      coachShareValue?: number;
+      coachShareAmount?: number;
+      gymShareAmount?: number;
     }
   ) => void;
 
@@ -174,6 +185,14 @@ interface GymDataContextType {
     notes?: string,
     authorizedBy?: string
   ) => { success: boolean; repaidAmount: number };
+  addCoachManualMovement: (data: {
+    coach_id: string;
+    movement_type: 'payout' | 'deposit' | 'charge';
+    amount: number;
+    reason: string;
+    payment_method?: 'cash' | 'instapay';
+    authorized_by?: string;
+  }) => { success: boolean; type: 'payout' | 'deposit' | 'charge' };
   getCoachMonthlyBreakdown: (coachId: string, month: string) => {
     currentMonthCharges: number;
     previousCarriedDebt: number;
@@ -192,6 +211,8 @@ interface GymDataContextType {
   updateMasterReportEntry: (id: string, updates: Partial<MasterReportEntry>) => void;
   deleteMasterReportEntry: (id: string) => void;
   startNewMonth: (newMonthName: string) => void;
+  monthlyArchives: MonthlyArchive[];
+  closeMonthlyBillingCycle: (adminUsername: string, nextMonthName?: string) => { success: boolean; archive?: MonthlyArchive; error?: string };
   exportMasterReportToCSV: (month?: string) => void;
   exportMasterReportXLSX: (month?: string) => Promise<void>;
 
@@ -205,38 +226,51 @@ interface GymDataContextType {
 
   // DAILY SHIFT CLOSING (تقفيل اليومية والدرج)
   dailyShiftClosings: DailyShiftClosing[];
+  getRunningOperations: () => { runningSessions: GymSession[]; runningPhysio: PhysioBooking[]; hasRunning: boolean };
   closeDailyShift: (closingData: Omit<DailyShiftClosing, 'id' | 'closedAt'>) => DailyShiftClosing;
   getTodayShiftStatus: () => { isClosedToday: boolean; lastClosing?: DailyShiftClosing };
   exportDailyShiftXLSX: (closingId?: string) => Promise<void>;
 }
 
 // Production Clean Slate & Cache Busting
-const CURRENT_DATA_VERSION = 'synapse_v3_production_clean';
+const CURRENT_DATA_VERSION = 'synapse_v5_complete_clean_slate_2026';
+
+const ALL_STORAGE_KEYS = [
+  'synapse_members',
+  'synapse_sessions',
+  'synapse_coaches',
+  'synapse_physio',
+  'synapse_products',
+  'synapse_transactions',
+  'synapse_expenses',
+  'synapse_cash_inflows',
+  'synapse_checkin_logs',
+  'synapse_settlement_logs',
+  'synapse_trainer_transactions',
+  'synapse_master_report',
+  'synapse_billing_cycles',
+  'synapse_current_month',
+  'synapse_monthly_archives',
+  'synapse_yearly_archives',
+  'synapse_daily_closings',
+  'synapse_daily_shift_closings',
+];
 
 if (typeof window !== 'undefined') {
   const currentVer = localStorage.getItem('synapse_data_version');
   if (currentVer !== CURRENT_DATA_VERSION) {
-    [
-      'synapse_members',
-      'synapse_sessions',
-      'synapse_coaches',
-      'synapse_physio',
-      'synapse_products',
-      'synapse_transactions',
-      'synapse_expenses',
-      'synapse_cash_inflows',
-      'synapse_checkin_logs',
-      'synapse_settlement_logs',
-      'synapse_trainer_transactions',
-      'synapse_master_report',
-      'synapse_billing_cycles',
-      'synapse_current_month',
-    ].forEach((key) => localStorage.removeItem(key));
+    ALL_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
     localStorage.setItem('synapse_data_version', CURRENT_DATA_VERSION);
+    if (isSupabaseConfigured) {
+      supabaseService.wipeAllOperationalData().catch(() => {});
+    }
   }
 }
 
-// Clean Initial Data
+// Dynamic Current Month Name
+const dynamicCurrentMonth = new Date().toLocaleDateString('ar-EG', { month: 'long', year: 'numeric' });
+
+// Clean Slate Initial Data (Zeroed)
 const INITIAL_MEMBERS: Member[] = [];
 const INITIAL_SESSIONS: GymSession[] = [];
 const INITIAL_COACHES: Coach[] = [];
@@ -250,7 +284,7 @@ const INITIAL_MASTER_ENTRIES: MasterReportEntry[] = [];
 const INITIAL_BILLING_CYCLES: MonthlyBillingCycle[] = [
   {
     id: `cycle-${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`,
-    name: new Date().toLocaleDateString('ar-EG', { month: 'long', year: 'numeric' }),
+    name: dynamicCurrentMonth,
     startDate: new Date().toISOString(),
     isActive: true,
     totalCollected: 0,
@@ -342,7 +376,13 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // Current Month
   const [currentMonth, setCurrentMonth] = useState<string>(() => {
     const saved = localStorage.getItem('synapse_current_month');
-    return saved ? saved : 'أكتوبر 2026';
+    return saved ? saved : dynamicCurrentMonth;
+  });
+
+  // Monthly Archives (أرشيف الشهور السابق للرجوع إليها أوفلاين)
+  const [monthlyArchives, setMonthlyArchives] = useState<MonthlyArchive[]>(() => {
+    const saved = localStorage.getItem('synapse_monthly_archives');
+    return saved ? JSON.parse(saved) : [];
   });
 
   // Yearly Archives
@@ -356,6 +396,10 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const saved = localStorage.getItem('synapse_daily_closings');
     return saved ? JSON.parse(saved) : [];
   });
+
+  useEffect(() => {
+    localStorage.setItem('synapse_monthly_archives', JSON.stringify(monthlyArchives));
+  }, [monthlyArchives]);
 
   useEffect(() => {
     localStorage.setItem('synapse_yearly_archives', JSON.stringify(yearlyArchives));
@@ -405,6 +449,69 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     };
     fetchRemoteMembers();
+  }, []);
+
+  // INITIAL SUPABASE FULL DATA SYNC (When online & configured)
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+
+    const syncFromSupabase = async () => {
+      try {
+        const [
+          remoteMembers,
+          remoteCoaches,
+          remoteSessions,
+          remotePhysio,
+          remoteProducts,
+          remotePosTx,
+          remoteCheckIns,
+          remoteTrainerTx,
+          remoteExpenses,
+          remoteInflows,
+          remoteMasterEntries,
+          remoteBillingCycles,
+          remoteDailyClosings,
+          remoteMonthlyArchives,
+          remoteYearlyArchives,
+        ] = await Promise.all([
+          supabaseService.fetchMembers(),
+          supabaseService.fetchCoaches(),
+          supabaseService.fetchSessions(),
+          supabaseService.fetchPhysioBookings(),
+          supabaseService.fetchProducts(),
+          supabaseService.fetchPOSTransactions(),
+          supabaseService.fetchCheckInLogs(),
+          supabaseService.fetchTrainerTransactions(),
+          supabaseService.fetchExpenses(),
+          supabaseService.fetchCashInflows(),
+          supabaseService.fetchMasterReportEntries(),
+          supabaseService.fetchBillingCycles(),
+          supabaseService.fetchDailyShiftClosings(),
+          supabaseService.fetchMonthlyArchives(),
+          supabaseService.fetchYearlyArchives(),
+        ]);
+
+        if (remoteMembers && remoteMembers.length > 0) setMembers(remoteMembers);
+        if (remoteCoaches && remoteCoaches.length > 0) setCoaches(remoteCoaches);
+        if (remoteSessions && remoteSessions.length > 0) setSessions(remoteSessions);
+        if (remotePhysio && remotePhysio.length > 0) setPhysioBookings(remotePhysio);
+        if (remoteProducts && remoteProducts.length > 0) setProducts(remoteProducts);
+        if (remotePosTx && remotePosTx.length > 0) setTransactions(remotePosTx);
+        if (remoteCheckIns && remoteCheckIns.length > 0) setCheckInLogs(remoteCheckIns);
+        if (remoteTrainerTx && remoteTrainerTx.length > 0) setTrainerTransactions(remoteTrainerTx);
+        if (remoteExpenses && remoteExpenses.length > 0) setExpenses(remoteExpenses);
+        if (remoteInflows && remoteInflows.length > 0) setCashInflows(remoteInflows);
+        if (remoteMasterEntries && remoteMasterEntries.length > 0) setMasterReportEntries(remoteMasterEntries);
+        if (remoteBillingCycles && remoteBillingCycles.length > 0) setBillingCycles(remoteBillingCycles);
+        if (remoteDailyClosings && remoteDailyClosings.length > 0) setDailyShiftClosings(remoteDailyClosings);
+        if (remoteMonthlyArchives && remoteMonthlyArchives.length > 0) setMonthlyArchives(remoteMonthlyArchives);
+        if (remoteYearlyArchives && remoteYearlyArchives.length > 0) setYearlyArchives(remoteYearlyArchives);
+      } catch (err) {
+        console.warn('Initial Supabase sync skipped or failed (using local cache):', err);
+      }
+    };
+
+    syncFromSupabase();
   }, []);
 
   useEffect(() => {
@@ -547,30 +654,10 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     );
     const coachName = coach ? coach.name : 'الكابتن';
 
-    // AUTOMATIC FINANCIAL ROUTING: Cash Drawer vs Coach Debt vs InstaPay
+    // AUTOMATIC FINANCIAL ROUTING: Cash Drawer vs InstaPay vs Session
     if (fee > 0) {
       if (memberData.paymentMethod === 'coach_collected') {
-        // Player paid the Coach directly -> Gym Receivable from Coach (عليه فلوس للجيم)!
-        if (coach) {
-          const newTrx: TrainerTransaction = {
-            transaction_id: `TRX-${Math.floor(1000 + Math.random() * 9000)}`,
-            coach_id: coach.id,
-            coach_name: coach.name,
-            amount: fee,
-            collected_by: 'coach',
-            payer_type: `اشتراك لاعب (${newMember.subscriptionPlan})`,
-            payer_name: newMember.name,
-            gym_share: fee, // Gym's membership fee owed by the coach
-            coach_share: 0,
-            status: 'pending',
-            created_at: new Date().toISOString(),
-            payment_method: 'cash',
-            notes: `اشتراك تم تحصيله بواسطة الكابتن ${coach.name} - مديونية لحين توريد الكابتن للجيم`,
-          };
-          setTrainerTransactions((prev) => [newTrx, ...prev]);
-        }
-
-        // Auto add to Master Report
+        // لا يتم تحميل أي مديونية على الكابتن هنا - التحميل يتم حصراً عند بدء وإنهاء الحصة (endSession)
         const newEntry: MasterReportEntry = {
           id: `rep-${Date.now()}`,
           month: currentMonth,
@@ -583,11 +670,14 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           sessionCategory: memberData.sessionCategory || 'gym',
           sessionTitle: newMember.subscriptionPlan,
           paymentMethod: 'coach_collected',
-          paymentStatus: 'pending_on_coach',
-          notes: `محصل مع الكابتن ${coachName} - مطلوب توريده للجيم`,
+          paymentStatus: 'paid',
+          notes: `اشتراك مع الكابتن ${coachName}`,
           sourceType: 'subscription',
         };
         setMasterReportEntries((prev) => [newEntry, ...prev]);
+        if (isSupabaseConfigured) {
+          supabaseService.upsertMasterReportEntry(newEntry).catch(() => {});
+        }
       } else if (memberData.paymentMethod === 'instapay') {
         const inflow: CashInflowItem = {
           id: `inf-${Date.now()}`,
@@ -652,25 +742,39 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     }
 
+    if (isSupabaseConfigured) {
+      supabaseService.upsertMember(newMember).catch(() => {});
+    }
+
     return newMember;
   };
 
   const updateMember = (id: string, updates: Partial<Member>) => {
-    setMembers((prev) =>
-      prev.map((m) => (m.id === id ? { ...m, ...updates } : m))
-    );
+    setMembers((prev) => {
+      const updated = prev.map((m) => (m.id === id ? { ...m, ...updates } : m));
+      const target = updated.find((m) => m.id === id);
+      if (target && isSupabaseConfigured) {
+        supabaseService.upsertMember(target).catch(() => {});
+      }
+      return updated;
+    });
   };
 
   const toggleMemberAsDoctor = (id: string) => {
-    setMembers((prev) =>
-      prev.map((m) => {
+    setMembers((prev) => {
+      const updated: Member[] = prev.map((m) => {
         if (m.id === id) {
-          const newType = m.type === 'doctor' ? 'member' : 'doctor';
+          const newType: Member['type'] = m.type === 'doctor' ? 'member' : 'doctor';
           return { ...m, type: newType };
         }
         return m;
-      })
-    );
+      });
+      const target = updated.find((m) => m.id === id);
+      if (target && isSupabaseConfigured) {
+        supabaseService.upsertMember(target).catch(() => {});
+      }
+      return updated;
+    });
   };
 
   const findMemberByCode = (code: string): Member | undefined => {
@@ -737,6 +841,10 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
     setCheckInLogs((prev) => [log, ...prev.slice(0, 49)]);
 
+    if (isSupabaseConfigured) {
+      supabaseService.insertCheckInLog(log).catch(() => {});
+    }
+
     // Broadcast check-in to serverless relay
     try {
       fetch('/api/checkin', {
@@ -766,16 +874,180 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       temporaryPlayerIds: [],
     };
     setSessions((prev) => [...prev, newSession]);
+    if (isSupabaseConfigured) {
+      supabaseService.upsertSession(newSession).catch(() => {});
+    }
   };
 
   const updateSession = (id: string, updates: Partial<GymSession>) => {
-    setSessions((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, ...updates } : s))
-    );
+    setSessions((prev) => {
+      const updated = prev.map((s) => (s.id === id ? { ...s, ...updates } : s));
+      const target = updated.find((s) => s.id === id);
+      if (target && isSupabaseConfigured) {
+        supabaseService.upsertSession(target).catch(() => {});
+      }
+      return updated;
+    });
   };
 
   const deleteSession = (id: string) => {
     setSessions((prev) => prev.filter((s) => s.id !== id));
+    if (isSupabaseConfigured) {
+      supabaseService.deleteSession(id).catch(() => {});
+    }
+  };
+
+  const startSession = (id: string) => {
+    setSessions((prev) => {
+      const updated = prev.map((s) => {
+        if (s.id === id) {
+          return {
+            ...s,
+            status: 'in-progress' as const,
+            startedAt: new Date().toISOString(),
+            endedAt: undefined,
+          };
+        }
+        return s;
+      });
+      const target = updated.find((s) => s.id === id);
+      if (target && isSupabaseConfigured) {
+        supabaseService.upsertSession(target).catch(() => {});
+      }
+      return updated;
+    });
+    sounds.playSuccessDing();
+  };
+
+  const endSession = (id: string) => {
+    const session = sessions.find((s) => s.id === id);
+    if (!session) return;
+
+    // 1. حساب عدد الحضور الفعلي للحصة (المسكنين دائماً + المسكنين مؤقتاً لليوم)
+    const totalAttendees = Math.max(
+      1,
+      session.enrolledPlayerIds.length + (session.temporaryPlayerIds?.length || 0)
+    );
+
+    // استثناء المتدربين الذين سددوا تذكرتهم بالاستقبال لحساب الجيم (لعدم تكرار تحميل قيمتهم على الكابتن)
+    const receptionPaidPlayerIds = checkInLogs
+      .filter((l) => l.assignedSessionId === session.id && l.seatingPathway === 'gym_with_coach_share')
+      .map((l) => l.memberId);
+
+    const coachDebtAttendeesCount = Math.max(
+      0,
+      totalAttendees - receptionPaidPlayerIds.length
+    );
+    const sessionTotalRev = coachDebtAttendeesCount * session.price;
+
+    const compMap: { [coachId: string]: boolean } = {};
+    const assignedCoaches = coaches.filter((c) => session.coachIds.includes(c.id));
+    const coachShareAmount =
+      assignedCoaches.length > 1
+        ? Math.round(sessionTotalRev / assignedCoaches.length)
+        : sessionTotalRev;
+
+    assignedCoaches.forEach((coach) => {
+      compMap[coach.id] = true;
+
+      // أجر المدرب للحصة إذا كان تعاقده بنظام الحصة (Per Session)
+      if (coach.paymentType === 'per_session') {
+        const rate = coach.ratePerSession || 150;
+        setCoaches((prevCoaches) =>
+          prevCoaches.map((c) =>
+            c.id === coach.id
+              ? {
+                  ...c,
+                  currentBalance: c.currentBalance + rate,
+                }
+              : c
+          )
+        );
+      }
+
+      // ⚠️ المكان الحصري لتحميل الفلوس على الكابتن: عند بدء الحصة وإنهاؤها رسمياً فقط!
+      if (sessionTotalRev > 0) {
+        const newTrx: TrainerTransaction = {
+          transaction_id: `TRX-SESS-${Date.now()}-${coach.id}`,
+          coach_id: coach.id,
+          coach_name: coach.name,
+          amount: coachShareAmount,
+          collected_by: 'coach',
+          payer_type: `حصة ${session.title}`,
+          payer_name: `${coachDebtAttendeesCount} متدربين (${session.sport})`,
+          gym_share: coachShareAmount,
+          coach_share: 0,
+          status: 'pending',
+          created_at: new Date().toISOString(),
+          month: currentMonth,
+          type: 'session_charge',
+          payment_method: 'coach_collected',
+          notes: `تحميل قيمة الحصة بعد اكتمالها وإنهاؤها (${coachDebtAttendeesCount} متدربين × ${session.price} ج.م)`,
+        };
+        setTrainerTransactions((prev) => [newTrx, ...prev]);
+
+        // إدراج إشعار مديونية بالدرج
+        const inflowRecord: CashInflowItem = {
+          id: `inf-cch-${Date.now()}-${coach.id}`,
+          type: 'coach_settlement',
+          title: `تحميل على كابتن ${coach.name} مبلغ ${coachShareAmount} ج.م (حصة: ${session.title}) بعد إنهائها`,
+          amount: coachShareAmount,
+          date: new Date().toISOString(),
+          memberName: coach.name,
+          paymentMethod: 'cash',
+          recordedBy: 'السيستم (إنهاء الحصة)',
+        };
+        setCashInflows((prev) => [inflowRecord, ...prev]);
+
+        // إدراج قيد بالتقرير الشامل
+        const repEntry: MasterReportEntry = {
+          id: `rep-sess-${Date.now()}-${coach.id}`,
+          month: currentMonth,
+          date: new Date().toISOString(),
+          playerName: `${coachDebtAttendeesCount} متدربين (${session.title})`,
+          playerCode: `SESS-${session.id.slice(-4)}`,
+          amount: coachShareAmount,
+          coachId: coach.id,
+          coachName: coach.name,
+          sessionCategory: session.sessionCategory || 'group',
+          sessionTitle: session.title,
+          paymentMethod: 'coach_collected',
+          paymentStatus: 'pending_on_coach',
+          notes: `تحميل بعد إنهاء الحصة (${coachDebtAttendeesCount} لاعب)`,
+          sourceType: 'session',
+        };
+        setMasterReportEntries((prev) => [repEntry, ...prev]);
+
+        if (isSupabaseConfigured) {
+          supabaseService.upsertTrainerTransaction(newTrx).catch(() => {});
+          supabaseService.insertCashInflow(inflowRecord).catch(() => {});
+          supabaseService.upsertMasterReportEntry(repEntry).catch(() => {});
+        }
+      }
+    });
+
+    setSessions((prev) => {
+      const updated = prev.map((s) => {
+        if (s.id === id) {
+          return {
+            ...s,
+            status: 'completed' as const,
+            endedAt: new Date().toISOString(),
+            completedTodayByCoach: {
+              ...(s.completedTodayByCoach || {}),
+              ...compMap,
+            },
+          };
+        }
+        return s;
+      });
+      const target = updated.find((s) => s.id === id);
+      if (target && isSupabaseConfigured) {
+        supabaseService.upsertSession(target).catch(() => {});
+      }
+      return updated;
+    });
+    sounds.playCashRegister();
   };
 
   const assignPlayerToSession = (sessionId: string, memberId: string, isTemporary = false) => {
@@ -824,117 +1096,26 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const toggleSessionCoachCompletion = (sessionId: string, coachId: string) => {
-    const session = sessions.find((s) => s.id === sessionId);
-    const coach = coaches.find((c) => c.id === coachId);
-    if (!session || !coach) return;
-
-    const currentStatus = !!session.completedTodayByCoach?.[coachId];
-    const newStatus = !currentStatus;
-
-    const attendeesCount = Math.max(
-      1,
-      session.enrolledPlayerIds.length + (session.temporaryPlayerIds?.length || 0)
-    );
-    const sessionTotalRev = attendeesCount * session.price;
-
-    setSessions((prev) =>
-      prev.map((s) => {
+    setSessions((prev) => {
+      const updated = prev.map((s) => {
         if (s.id === sessionId) {
+          const currentStatus = !!s.completedTodayByCoach?.[coachId];
           return {
             ...s,
             completedTodayByCoach: {
               ...(s.completedTodayByCoach || {}),
-              [coachId]: newStatus,
+              [coachId]: !currentStatus,
             },
           };
         }
         return s;
-      })
-    );
-
-    if (newStatus) {
-      // 1. FULL SESSION CHARGE ON COACH (مديونية للجيم عند المدرب / تحميل كامل)
-      const newTrx: TrainerTransaction = {
-        transaction_id: `TRX-SESS-${Date.now()}`,
-        coach_id: coach.id,
-        coach_name: coach.name,
-        amount: sessionTotalRev,
-        collected_by: 'coach',
-        payer_type: `حصة ${session.title}`,
-        payer_name: `${attendeesCount} متدربين (${session.sport})`,
-        gym_share: sessionTotalRev,
-        coach_share: 0,
-        status: 'pending',
-        created_at: new Date().toISOString(),
-        month: currentMonth,
-        type: 'session_charge',
-        payment_method: 'coach_collected',
-        notes: `تحميل قيمة الحصة بالكامل (${attendeesCount} متدربين × ${session.price} ج.م) على كابتن ${coach.name}`,
-      };
-      setTrainerTransactions((prev) => [newTrx, ...prev]);
-
-      // 2. Automatically log to Cash Drawer & Expenses page
-      const inflowRecord: CashInflowItem = {
-        id: `inf-cch-${Date.now()}`,
-        type: 'coach_settlement',
-        title: `تحميل على كابتن ${coach.name} مبلغ ${sessionTotalRev} ج.م (حصة: ${session.title}) اليوم`,
-        amount: sessionTotalRev,
-        date: new Date().toISOString(),
-        memberName: coach.name,
-        paymentMethod: 'cash',
-        recordedBy: 'السيستم التلقائي',
-      };
-      setCashInflows((prev) => [inflowRecord, ...prev]);
-
-      // 3. Automatically add to Master Report
-      const allPlayerIds = [
-        ...session.enrolledPlayerIds,
-        ...(session.temporaryPlayerIds || []),
-      ];
-      const targetPids = allPlayerIds.length > 0 ? allPlayerIds : ['mem-sample'];
-      const repEntries: MasterReportEntry[] = targetPids.map((pid, idx) => {
-        const playerObj = members.find((m) => m.id === pid);
-        return {
-          id: `rep-sess-${Date.now()}-${idx}`,
-          month: currentMonth,
-          date: new Date().toISOString(),
-          playerName: playerObj ? playerObj.name : `متدرب (${idx + 1})`,
-          playerCode:
-            playerObj ? playerObj.code : Math.floor(100000 + Math.random() * 900000).toString(),
-          amount: session.price,
-          coachId: coach.id,
-          coachName: coach.name,
-          sessionCategory: session.sessionCategory || 'group',
-          sessionTitle: session.title,
-          paymentMethod: 'coach_collected',
-          paymentStatus: 'pending_on_coach',
-          notes: `تحميل على كابتن ${coach.name}`,
-          sourceType: 'session',
-        };
       });
-      setMasterReportEntries((prev) => [...repEntries, ...prev]);
-    } else {
-      // Revert matching pending charge
-      setTrainerTransactions((prev) =>
-        prev.filter(
-          (t) =>
-            !(
-              t.coach_id === coach.id &&
-              t.type === 'session_charge' &&
-              t.payer_type.includes(session.title)
-            )
-        )
-      );
-      setCashInflows((prev) =>
-        prev.filter(
-          (inf) =>
-            !(
-              inf.memberName === coach.name &&
-              inf.title.includes(session.title)
-            )
-        )
-      );
-    }
+      const target = updated.find((s) => s.id === sessionId);
+      if (target && isSupabaseConfigured) {
+        supabaseService.upsertSession(target).catch(() => {});
+      }
+      return updated;
+    });
   };
 
   // Coach logic & Automatic Expense Logging on Settlement!
@@ -946,12 +1127,20 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       totalPaidToday: 0,
     };
     setCoaches((prev) => [...prev, newCoach]);
+    if (isSupabaseConfigured) {
+      supabaseService.upsertCoach(newCoach).catch(() => {});
+    }
   };
 
   const updateCoach = (id: string, updates: Partial<Coach>) => {
-    setCoaches((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, ...updates } : c))
-    );
+    setCoaches((prev) => {
+      const updated = prev.map((c) => (c.id === id ? { ...c, ...updates } : c));
+      const target = updated.find((c) => c.id === id);
+      if (target && isSupabaseConfigured) {
+        supabaseService.upsertCoach(target).catch(() => {});
+      }
+      return updated;
+    });
   };
 
   // AUTOMATIC HOOK 1: Settle coach account and automatically deduct in Expenses page & Drawer!
@@ -1002,6 +1191,15 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
     setExpenses((prev) => [autoExpense, ...prev]);
 
+    if (isSupabaseConfigured) {
+      supabaseService.upsertCoach({
+        ...coach,
+        currentBalance: 0,
+        totalPaidToday: coach.totalPaidToday + settled,
+      }).catch(() => {});
+      supabaseService.insertExpense(autoExpense).catch(() => {});
+    }
+
     return { success: true, settledAmount: settled };
   };
 
@@ -1042,6 +1240,16 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
     setExpenses((prev) => [autoExpense, ...prev]);
 
+    if (isSupabaseConfigured) {
+      supabaseService.upsertCoach({
+        ...coach,
+        monthlySalaryPaidThisMonth: true,
+        lastSalaryPaymentDate: new Date().toISOString().slice(0, 10),
+        totalPaidToday: coach.totalPaidToday + salary,
+      }).catch(() => {});
+      supabaseService.insertExpense(autoExpense).catch(() => {});
+    }
+
     return { success: true, salaryAmount: salary };
   };
 
@@ -1073,37 +1281,50 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       paid: false,
     };
     setPhysioBookings((prev) => [newBooking, ...prev]);
+    if (isSupabaseConfigured) {
+      supabaseService.upsertPhysioBooking(newBooking).catch(() => {});
+    }
     return newBooking;
   };
 
   const beginPhysioSession = (id: string) => {
-    setPhysioBookings((prev) =>
-      prev.map((b) =>
+    setPhysioBookings((prev) => {
+      const updated = prev.map((b) =>
         b.id === id
           ? {
               ...b,
-              status: 'active',
+              status: 'active' as const,
               startTime: new Date().toISOString(),
               elapsedMinutes: 1,
             }
           : b
-      )
-    );
+      );
+      const target = updated.find((b) => b.id === id);
+      if (target && isSupabaseConfigured) {
+        supabaseService.upsertPhysioBooking(target).catch(() => {});
+      }
+      return updated;
+    });
   };
 
   const finishPhysioSession = (id: string) => {
-    setPhysioBookings((prev) =>
-      prev.map((b) =>
+    setPhysioBookings((prev) => {
+      const updated = prev.map((b) =>
         b.id === id
           ? {
               ...b,
-              status: 'completed',
+              status: 'completed' as const,
               endTime: new Date().toISOString(),
               isPaused: false,
             }
           : b
-      )
-    );
+      );
+      const target = updated.find((b) => b.id === id);
+      if (target && isSupabaseConfigured) {
+        supabaseService.upsertPhysioBooking(target).catch(() => {});
+      }
+      return updated;
+    });
   };
 
   const completePhysioSession = (id: string) => {
@@ -1111,8 +1332,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const addExtraFeeToPhysio = (id: string, extraAmount: number, reason?: string) => {
-    setPhysioBookings((prev) =>
-      prev.map((b) => {
+    setPhysioBookings((prev) => {
+      const updated = prev.map((b) => {
         if (b.id !== id) return b;
         const currentExtra = b.extraFee || 0;
         const newExtra = currentExtra + extraAmount;
@@ -1122,28 +1343,38 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           totalFee: b.totalFee + extraAmount,
           extraFeeReason: reason || b.extraFeeReason || 'تكلفة وقت إضافي (تجاوز الساعة)',
         };
-      })
-    );
+      });
+      const target = updated.find((b) => b.id === id);
+      if (target && isSupabaseConfigured) {
+        supabaseService.upsertPhysioBooking(target).catch(() => {});
+      }
+      return updated;
+    });
   };
 
   const pausePhysioSession = (id: string) => {
-    setPhysioBookings((prev) =>
-      prev.map((b) =>
+    setPhysioBookings((prev) => {
+      const updated = prev.map((b) =>
         b.id === id
           ? {
               ...b,
               isPaused: true,
               pausedAt: new Date().toISOString(),
-              status: 'paused',
+              status: 'paused' as const,
             }
           : b
-      )
-    );
+      );
+      const target = updated.find((b) => b.id === id);
+      if (target && isSupabaseConfigured) {
+        supabaseService.upsertPhysioBooking(target).catch(() => {});
+      }
+      return updated;
+    });
   };
 
   const resumePhysioSession = (id: string) => {
-    setPhysioBookings((prev) =>
-      prev.map((b) => {
+    setPhysioBookings((prev) => {
+      const updated = prev.map((b) => {
         if (b.id !== id) return b;
         const pausedAtTime = b.pausedAt ? new Date(b.pausedAt).getTime() : Date.now();
         const pauseDurationSec = Math.round((Date.now() - pausedAtTime) / 1000);
@@ -1151,11 +1382,16 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           ...b,
           isPaused: false,
           pausedAt: undefined,
-          status: 'active',
+          status: 'active' as const,
           totalPausedSeconds: (b.totalPausedSeconds || 0) + pauseDurationSec,
         };
-      })
-    );
+      });
+      const target = updated.find((b) => b.id === id);
+      if (target && isSupabaseConfigured) {
+        supabaseService.upsertPhysioBooking(target).catch(() => {});
+      }
+      return updated;
+    });
   };
 
   const billPhysioSession = (
@@ -1171,12 +1407,12 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const booking = physioBookings.find((b) => b.id === id);
     if (!booking) return;
 
-    setPhysioBookings((prev) =>
-      prev.map((b) =>
+    setPhysioBookings((prev) => {
+      const updated = prev.map((b) =>
         b.id === id
           ? {
               ...b,
-              status: 'completed',
+              status: 'completed' as const,
               endTime: new Date().toISOString(),
               isPaused: false,
               billedTo: billingData.billedTo,
@@ -1187,8 +1423,13 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
               notes: billingData.notes,
             }
           : b
-      )
-    );
+      );
+      const target = updated.find((b) => b.id === id);
+      if (target && isSupabaseConfigured) {
+        supabaseService.upsertPhysioBooking(target).catch(() => {});
+      }
+      return updated;
+    });
 
     // If paid cash -> record to Cash Drawer
     if (billingData.paymentMethod === 'cash') {
@@ -1216,30 +1457,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       };
       setCashInflows((prev) => [inflow, ...prev]);
     } else if (billingData.paymentMethod === 'coach_debt') {
-      // SMART SYSTEM: Automatically charge to coach/doctor balance as receivable (عليه فلوس للجيم)!
-      const targetCoach =
-        coaches.find((c) => c.id === billingData.chargedToCoachId) ||
-        coaches.find((c) => c.name.includes(booking.doctorName)) ||
-        coaches[0];
-
-      if (targetCoach) {
-        const newTrx: TrainerTransaction = {
-          transaction_id: `TRX-${Math.floor(1000 + Math.random() * 9000)}`,
-          coach_id: targetCoach.id,
-          coach_name: targetCoach.name,
-          amount: booking.totalFee,
-          collected_by: 'coach',
-          payer_type: `جلسة علاج طبيعي (${booking.roomName}) - مريض: ${booking.patientName}`,
-          payer_name: booking.patientName,
-          gym_share: booking.totalFee,
-          coach_share: 0,
-          status: 'pending',
-          created_at: new Date().toISOString(),
-          payment_method: 'cash',
-          notes: `تحميل مديونية علاج طبيعي على حساب الدكتور/الكابتن ${targetCoach.name} - تسدد بنهاية الشهر`,
-        };
-        setTrainerTransactions((prev) => [newTrx, ...prev]);
-      }
+      // لا يتم تحميل أي مديونية على الكابتن من العلاج الطبيعي - التحميل فقط عند بدء وإنهاء الحصص (endSession)
     }
 
     // Auto record into Master Report!
@@ -1270,43 +1488,38 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     sessionId?: string,
     notes?: string,
     paymentDetails?: {
-      paymentMode: 'coach_charge' | 'cash_drawer' | 'instapay';
-      amount: number;
+      paymentMode?: 'coach_charge' | 'cash_drawer' | 'instapay';
+      amount?: number;
       roomName?: string;
+      seatingPathway?: 'coach_debt' | 'gym_with_coach_share' | 'gym_direct_no_coach';
+      coachShareType?: 'fixed' | 'percentage';
+      coachShareValue?: number;
+      coachShareAmount?: number;
+      gymShareAmount?: number;
     }
   ) => {
+    const pathway = paymentDetails?.seatingPathway || (category === 'gym' ? 'gym_direct_no_coach' : 'coach_debt');
     const coach = coaches.find((c) => c.id === coachId);
-    const coachName = coach ? coach.name : 'الكابتن';
+    const coachName = coach ? coach.name : (pathway === 'gym_direct_no_coach' ? 'بدون مدرب' : 'الكابتن');
     const log = checkInLogs.find((l) => l.id === checkInLogId);
     const member = members.find((m) => m.id === log?.memberId);
     const matchingSession = sessionId
       ? sessions.find((s) => s.id === sessionId)
-      : sessions.find((s) => s.coachIds.includes(coachId));
+      : undefined;
 
-    const paymentMode = paymentDetails?.paymentMode || 'coach_charge';
-
-    // Compute fee amount
-    let feeAmount = paymentDetails?.amount;
-    if (feeAmount === undefined || feeAmount <= 0) {
-      if (category === 'massage') {
-        feeAmount = coach?.ratePerSession || 180;
-      } else if (category === 'physio') {
-        feeAmount = 150;
-      } else if (matchingSession) {
-        feeAmount = matchingSession.price || 100;
-      } else if (category === 'private') {
-        feeAmount = coach?.ratePerSession || 200;
-      } else {
-        feeAmount = 80;
-      }
-    }
+    let feeAmount = paymentDetails?.amount ?? 0;
+    const coachShareAmount = paymentDetails?.coachShareAmount ?? 0;
+    const gymShareAmount = paymentDetails?.gymShareAmount ?? Math.max(0, feeAmount - coachShareAmount);
 
     const activityTitle =
-      category === 'massage'
-        ? 'جلسة مساج واستشفاء'
-        : category === 'physio'
-        ? 'جلسة علاج طبيعي'
-        : matchingSession?.title || (category === 'private' ? 'تدريب خاص (Private PT)' : 'تمرين جيم عام');
+      pathway === 'gym_direct_no_coach'
+        ? 'تمرين حر بالجيم (اشتراك عام / بدون مدرب)'
+        : matchingSession?.title || 'حصة تدريبية مع الكابتن';
+
+    const effectivePaymentMode =
+      pathway === 'coach_debt'
+        ? 'coach_charge'
+        : paymentDetails?.paymentMode || 'cash_drawer';
 
     // 1. Update CheckIn Log with seating details & payment status
     setCheckInLogs((prev) =>
@@ -1316,11 +1529,16 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
               ...l,
               seatingStatus: 'assigned',
               assignedCategory: category,
-              assignedCoachId: coachId,
+              assignedCoachId: pathway === 'gym_direct_no_coach' ? undefined : coachId,
               assignedCoachName: coachName,
-              assignedSessionId: sessionId || matchingSession?.id,
+              assignedSessionId: pathway === 'gym_direct_no_coach' ? undefined : (sessionId || matchingSession?.id),
               assignedSessionTitle: activityTitle,
-              paymentMode,
+              paymentMode: effectivePaymentMode,
+              seatingPathway: pathway,
+              coachShareType: paymentDetails?.coachShareType,
+              coachShareValue: paymentDetails?.coachShareValue,
+              coachShareAmount: coachShareAmount,
+              gymShareAmount: gymShareAmount,
               chargedAmount: feeAmount,
             }
           : l
@@ -1329,172 +1547,130 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     if (!member) return;
 
-    // 2. FINANCIAL FLOW: Charge to Coach vs Cash to Drawer
-    if (paymentMode === 'coach_charge') {
-      // Flow A: تحميل على المدرب (مديونية مستحقة على الكابتن للجيم)
-      const newTrx: TrainerTransaction = {
-        transaction_id: `TRX-${Date.now()}`,
-        coach_id: coachId,
-        coach_name: coachName,
-        amount: feeAmount,
-        collected_by: 'coach',
-        payer_type: `تسكين ${activityTitle}`,
-        payer_name: member.name,
-        gym_share: feeAmount, // full session charge in boutique gym model
-        coach_share: 0,
-        status: 'pending',
-        created_at: new Date().toISOString(),
-        month: currentMonth,
-        type: category === 'massage' || category === 'physio' ? 'physio_charge' : 'session_charge',
-        payment_method: 'coach_collected',
-        notes: `تحميل تسكين اللاعب ${member.name} (${member.code}) على كابتن ${coachName}`,
-      };
-      setTrainerTransactions((prev) => [newTrx, ...prev]);
+    // 2. FINANCIAL FLOW: Cash to Drawer / InstaPay / Coach Dues
+    if (pathway === 'coach_debt') {
+      // المسار 1: الحساب على الكابتن
+      // لا يتم خصم أو إضافة شيء بالدرج الآن. التحميل الفعلي يتم تلقائياً فقط عند بدء وإنهاء الحصة (endSession)
+    } else if (pathway === 'gym_with_coach_share') {
+      // المسار 2: اللاعب دفع للجيم بالاستقبال مع نسبة أو قيمة ثابتة للكابتن (الكابتن ليه فلوس)
+      if (feeAmount > 0) {
+        // أ. توريد الكاش كاملاً للدرج
+        const cashInflowItem: CashInflowItem = {
+          id: `inf-seat-${Date.now()}`,
+          type: 'subscription',
+          title: `تحصيل كاش بالاستقبال (حصة: ${activityTitle}) - متدرب: ${member.name} مع كابتن ${coachName}`,
+          amount: feeAmount,
+          date: new Date().toISOString(),
+          memberName: member.name,
+          paymentMethod: 'cash',
+          recordedBy: 'الاستقبال',
+        };
+        setCashInflows((prev) => [cashInflowItem, ...prev]);
 
-      // Automatically register to Cash Drawer & Expenses list as debt notice
-      const inflowRecord: CashInflowItem = {
-        id: `inf-cch-${Date.now()}`,
-        type: 'coach_settlement',
-        title: `تحميل على كابتن ${coachName} مبلغ ${feeAmount} ج.م (تسكين: ${member.name} - ${activityTitle}) اليوم`,
-        amount: feeAmount,
-        date: new Date().toISOString(),
-        memberName: coachName,
-        paymentMethod: 'cash',
-        recordedBy: 'الاستقبال',
-      };
-      setCashInflows((prev) => [inflowRecord, ...prev]);
+        // ب. تسجيل استحقاق الكابتن كمعاملة دائنة (الكابتن ليه فلوس)
+        if (coach && coachShareAmount > 0) {
+          const coachEarningsTrx: TrainerTransaction = {
+            transaction_id: `TRX-EARN-${Date.now()}-${coach.id}`,
+            coach_id: coach.id,
+            coach_name: coach.name,
+            amount: feeAmount,
+            collected_by: 'gym',
+            payer_type: `حصة ${activityTitle}`,
+            payer_name: member.name,
+            gym_share: gymShareAmount,
+            coach_share: coachShareAmount,
+            status: 'pending',
+            created_at: new Date().toISOString(),
+            month: currentMonth,
+            type: 'session_charge',
+            payment_method: 'cash',
+            notes: `مستحقات كابتن ${coach.name} عن تسكين متدرب (${member.name}) بالاستقبال (نصيب الكابتن: ${coachShareAmount} ج.م)`,
+          };
+          setTrainerTransactions((prev) => [coachEarningsTrx, ...prev]);
 
-      // Automatically add to Master Report with status: تحميل
-      const repEntry: MasterReportEntry = {
-        id: `rep-seat-${Date.now()}`,
-        month: currentMonth,
-        date: new Date().toISOString(),
-        playerName: member.name,
-        playerCode: member.code,
-        amount: feeAmount,
-        coachId: coachId,
-        coachName: coachName,
-        sessionCategory: category,
-        sessionTitle: activityTitle,
-        paymentMethod: 'coach_collected',
-        paymentStatus: 'pending_on_coach',
-        notes: `تحميل تسكين على كابتن ${coachName}`,
-        sourceType: category === 'massage' || category === 'physio' ? 'physio' : 'session',
-      };
-      setMasterReportEntries((prev) => [repEntry, ...prev]);
-    } else if (paymentMode === 'cash_drawer') {
-      // Flow B: دفع نقدي (كاش بالدرج) -> يذهب فوراً لصفحة المصاريف وإدارة الدرج
-      const cashInflowItem: CashInflowItem = {
-        id: `inf-seat-${Date.now()}`,
-        type: category === 'massage' || category === 'physio' ? 'physio' : 'subscription',
-        title: `تحصيل كاش بالاستقبال - تسكين ${member.name} (${activityTitle})`,
-        amount: feeAmount,
-        date: new Date().toISOString(),
-        memberName: member.name,
-        paymentMethod: 'cash',
-        recordedBy: 'الاستقبال',
-      };
-      setCashInflows((prev) => [cashInflowItem, ...prev]);
+          // زيادة رصيد الكابتن (له فلوس في حسابه)
+          setCoaches((prev) =>
+            prev.map((c) =>
+              c.id === coach.id
+                ? { ...c, currentBalance: c.currentBalance + coachShareAmount }
+                : c
+            )
+          );
 
-      // Add to Master Report as Direct Subscription / Immediate Cash at the top
-      const repEntry: MasterReportEntry = {
-        id: `rep-seat-${Date.now()}`,
-        month: currentMonth,
-        date: new Date().toISOString(),
-        playerName: member.name,
-        playerCode: member.code,
-        amount: feeAmount,
-        coachId: coachId,
-        coachName: coachName || 'اشتراك عام بالخزينة',
-        sessionCategory: category,
-        sessionTitle: `${activityTitle} (سداد فوري كاش بالدرج)`,
-        paymentMethod: 'cash',
-        paymentStatus: 'paid',
-        notes: `سداد فوري كاش بالاستقبال (مورد للدرج)`,
-        sourceType: category === 'massage' || category === 'physio' ? 'physio' : 'session',
-      };
-      setMasterReportEntries((prev) => [repEntry, ...prev]);
-    } else if (paymentMode === 'instapay') {
-      // Flow C: إنستاباي
-      const instaInflow: CashInflowItem = {
-        id: `inf-seat-insta-${Date.now()}`,
-        type: category === 'massage' || category === 'physio' ? 'physio' : 'subscription',
-        title: `تحصيل إنستاباي بالاستقبال - تسكين ${member.name} (${activityTitle})`,
-        amount: feeAmount,
-        date: new Date().toISOString(),
-        memberName: member.name,
-        paymentMethod: 'instapay',
-        recordedBy: 'الاستقبال',
-      };
-      setCashInflows((prev) => [instaInflow, ...prev]);
+          if (isSupabaseConfigured) {
+            supabaseService.upsertTrainerTransaction(coachEarningsTrx).catch(() => {});
+          }
+        }
 
-      const repEntry: MasterReportEntry = {
-        id: `rep-seat-${Date.now()}`,
-        month: currentMonth,
-        date: new Date().toISOString(),
-        playerName: member.name,
-        playerCode: member.code,
-        amount: feeAmount,
-        coachId: coachId,
-        coachName: coachName,
-        sessionCategory: category,
-        sessionTitle: `${activityTitle} (تحويل إنستاباي)`,
-        paymentMethod: 'instapay',
-        paymentStatus: 'paid',
-        notes: `مسدد عبر إنستاباي`,
-        sourceType: category === 'massage' || category === 'physio' ? 'physio' : 'session',
-      };
-      setMasterReportEntries((prev) => [repEntry, ...prev]);
+        // ج. إدراج قيد بالتقرير الشامل
+        const repEntry: MasterReportEntry = {
+          id: `rep-seat-${Date.now()}`,
+          month: currentMonth,
+          date: new Date().toISOString(),
+          playerName: member.name,
+          playerCode: member.code,
+          amount: feeAmount,
+          coachId: coach?.id,
+          coachName: coachName,
+          sessionCategory: category,
+          sessionTitle: `${activityTitle} (تحصيل جيم - مستحق للكابتن: ${coachShareAmount} ج.م)`,
+          paymentMethod: 'cash',
+          paymentStatus: 'paid',
+          notes: `محصل بالاستقبال: ${feeAmount} ج.م | نصيب الكابتن: ${coachShareAmount} ج.م | صافي الجيم: ${gymShareAmount} ج.م`,
+          sourceType: 'session',
+        };
+        setMasterReportEntries((prev) => [repEntry, ...prev]);
+
+        if (isSupabaseConfigured) {
+          supabaseService.insertCashInflow(cashInflowItem).catch(() => {});
+          supabaseService.upsertMasterReportEntry(repEntry).catch(() => {});
+        }
+      }
+    } else if (pathway === 'gym_direct_no_coach') {
+      // المسار 3: تمرين حر أو اشتراك عام للجيم فقط بدون مدرب
+      if (feeAmount > 0) {
+        const cashInflowItem: CashInflowItem = {
+          id: `inf-seat-${Date.now()}`,
+          type: 'subscription',
+          title: `تحصيل تمرين حر / اشتراك مباشر بالاستقبال - متدرب: ${member.name}`,
+          amount: feeAmount,
+          date: new Date().toISOString(),
+          memberName: member.name,
+          paymentMethod: 'cash',
+          recordedBy: 'الاستقبال',
+        };
+        setCashInflows((prev) => [cashInflowItem, ...prev]);
+
+        const repEntry: MasterReportEntry = {
+          id: `rep-seat-${Date.now()}`,
+          month: currentMonth,
+          date: new Date().toISOString(),
+          playerName: member.name,
+          playerCode: member.code,
+          amount: feeAmount,
+          coachId: undefined,
+          coachName: 'اشتراك مباشر / تمرين حر',
+          sessionCategory: 'gym',
+          sessionTitle: 'تمرين حر بالصالة العامة (بدون مدرب)',
+          paymentMethod: 'cash',
+          paymentStatus: 'paid',
+          notes: 'سداد فوري كاش لحساب الجيم مباشرة',
+          sourceType: 'subscription',
+        };
+        setMasterReportEntries((prev) => [repEntry, ...prev]);
+
+        if (isSupabaseConfigured) {
+          supabaseService.insertCashInflow(cashInflowItem).catch(() => {});
+          supabaseService.upsertMasterReportEntry(repEntry).catch(() => {});
+        }
+      }
     }
 
-    // 3. Perform Placement into Target Module (Massage, Physio, or Session)
-    if (category === 'massage') {
-      const newMassage: PhysioBooking = {
-        id: `massage-${Date.now()}`,
-        doctorName: coachName,
-        doctorCode: coach?.id || 'CCH',
-        patientName: member.name,
-        patientCode: member.code,
-        roomName: paymentDetails?.roomName || 'غرفة المساج والاستشفاء 1',
-        hourlyRate: feeAmount,
-        startTime: new Date().toISOString(),
-        elapsedMinutes: 0,
-        totalFee: feeAmount,
-        serviceType: 'massage',
-        status: 'waiting',
-        paid: paymentMode !== 'coach_charge',
-        billedTo: paymentMode === 'coach_charge' ? 'coach' : 'patient',
-        chargedToCoachId: paymentMode === 'coach_charge' ? coachId : undefined,
-        paymentMethod: paymentMode === 'coach_charge' ? 'coach_debt' : paymentMode === 'cash_drawer' ? 'cash' : 'instapay',
-        notes: notes || (paymentMode === 'coach_charge' ? `تحميل على كابتن ${coachName}` : 'مسدد بالاستقبال'),
-      };
-      setPhysioBookings((prev) => [newMassage, ...prev]);
-    } else if (category === 'physio') {
-      const newPhysio: PhysioBooking = {
-        id: `physio-${Date.now()}`,
-        doctorName: coachName,
-        doctorCode: coach?.id || 'DOC',
-        patientName: member.name,
-        patientCode: member.code,
-        roomName: paymentDetails?.roomName || 'عيادة التأهيل الطبي 1',
-        hourlyRate: feeAmount,
-        startTime: new Date().toISOString(),
-        elapsedMinutes: 0,
-        totalFee: feeAmount,
-        serviceType: 'physio',
-        status: 'waiting',
-        paid: paymentMode !== 'coach_charge',
-        billedTo: paymentMode === 'coach_charge' ? 'coach' : 'patient',
-        chargedToCoachId: paymentMode === 'coach_charge' ? coachId : undefined,
-        paymentMethod: paymentMode === 'coach_charge' ? 'coach_debt' : paymentMode === 'cash_drawer' ? 'cash' : 'instapay',
-        notes: notes || (paymentMode === 'coach_charge' ? `تحميل على كابتن ${coachName}` : 'مسدد بالاستقبال'),
-      };
-      setPhysioBookings((prev) => [newPhysio, ...prev]);
-    } else if (category === 'group' || category === 'private' || category === 'gym') {
-      if (sessionId) {
-        assignPlayerToSession(sessionId, member.id, true);
-      } else if (matchingSession) {
-        assignPlayerToSession(matchingSession.id, member.id, true);
+    // 3. التسكين الفعلي في الحصة المحددة (إذا كان المسار 1 أو 2)
+    if (pathway !== 'gym_direct_no_coach') {
+      const targetSessId = sessionId || matchingSession?.id;
+      if (targetSessId) {
+        assignPlayerToSession(targetSessId, member.id, true);
       }
     }
   };
@@ -1506,16 +1682,27 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       id: `prod-${Date.now()}`,
     };
     setProducts((prev) => [...prev, newProd]);
+    if (isSupabaseConfigured) {
+      supabaseService.upsertProduct(newProd).catch(() => {});
+    }
   };
 
   const updateProduct = (id: string, updates: Partial<POSProduct>) => {
-    setProducts((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, ...updates } : p))
-    );
+    setProducts((prev) => {
+      const updated = prev.map((p) => (p.id === id ? { ...p, ...updates } : p));
+      const target = updated.find((p) => p.id === id);
+      if (target && isSupabaseConfigured) {
+        supabaseService.upsertProduct(target).catch(() => {});
+      }
+      return updated;
+    });
   };
 
   const deleteProduct = (id: string) => {
     setProducts((prev) => prev.filter((p) => p.id !== id));
+    if (isSupabaseConfigured) {
+      supabaseService.deleteProduct(id).catch(() => {});
+    }
   };
 
   const processSale = (saleData: Omit<POSTransaction, 'id' | 'timestamp'>) => {
@@ -1525,30 +1712,38 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       timestamp: new Date().toISOString(),
     };
 
-    setProducts((prev) =>
-      prev.map((p) => {
+    setProducts((prev) => {
+      const updated = prev.map((p) => {
         const bought = saleData.items.find((item) => item.productId === p.id);
         if (bought) {
-          return {
+          const newP = {
             ...p,
             stock: Math.max(0, p.stock - bought.quantity),
           };
+          if (isSupabaseConfigured) {
+            supabaseService.upsertProduct(newP).catch(() => {});
+          }
+          return newP;
         }
         return p;
-      })
-    );
+      });
+      return updated;
+    });
 
     setTransactions((prev) => [newTx, ...prev]);
+    if (isSupabaseConfigured) {
+      supabaseService.insertPOSTransaction(newTx).catch(() => {});
+    }
 
-    // If sale was cash, log inflow to drawer
-    if (saleData.paymentMethod === 'cash') {
+    // Log inflow to drawer for cash and instapay sales
+    if (saleData.paymentMethod === 'cash' || saleData.paymentMethod === 'instapay') {
       const inflow: CashInflowItem = {
         id: `inf-pos-${Date.now()}`,
         type: 'pos',
-        title: `مبيعات كاش بالمتجر - فاتورة #${newTx.id.slice(-4)}`,
+        title: `مبيعات ${saleData.paymentMethod === 'instapay' ? 'إنستاباي' : 'كاش'} بالمتجر - فاتورة #${newTx.id.slice(-4)}`,
         amount: newTx.totalAmount,
         date: new Date().toISOString(),
-        paymentMethod: 'cash',
+        paymentMethod: saleData.paymentMethod,
         recordedBy: saleData.cashierName,
       };
       setCashInflows((prev) => [inflow, ...prev]);
@@ -1565,11 +1760,17 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       date: new Date().toISOString(),
     };
     setExpenses((prev) => [newExp, ...prev]);
+    if (isSupabaseConfigured) {
+      supabaseService.insertExpense(newExp).catch(() => {});
+    }
     return newExp;
   };
 
   const deleteExpense = (id: string) => {
     setExpenses((prev) => prev.filter((e) => e.id !== id));
+    if (isSupabaseConfigured) {
+      supabaseService.deleteExpense(id).catch(() => {});
+    }
   };
 
   const addCashInflow = (infData: Omit<CashInflowItem, 'id' | 'date'>) => {
@@ -1579,39 +1780,49 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       date: new Date().toISOString(),
     };
     setCashInflows((prev) => [newInf, ...prev]);
+    if (isSupabaseConfigured) {
+      supabaseService.insertCashInflow(newInf).catch(() => {});
+    }
     return newInf;
   };
 
-  // Manual cash movement (إيداع نقدي أو سحب شخصي من الدرج)
+  // Manual cash movement (تسوية عهدة: إيداع نقدي أو سحب شخصي من الدرج)
   const addManualCashMovement = (
     type: 'deposit' | 'withdrawal',
     amount: number,
     title: string,
     notes?: string
   ) => {
+    const reasonText = (title || '').trim();
     if (type === 'deposit') {
       const inflow: CashInflowItem = {
         id: `inf-manual-${Date.now()}`,
         type: 'manual_deposit',
-        title: title || 'إيداع نقدي إضافي بالخزينة',
+        title: `[تسوية عهدة - إيداع بالدرج]: ${reasonText || 'إيداع نقدي بالخزينة'}`,
         amount,
         date: new Date().toISOString(),
         paymentMethod: 'cash',
-        recordedBy: 'المدير العام',
+        recordedBy: 'الاستقبال',
       };
       setCashInflows((prev) => [inflow, ...prev]);
+      if (isSupabaseConfigured) {
+        supabaseService.insertCashInflow(inflow).catch(() => {});
+      }
     } else {
       const expense: ExpenseItem = {
         id: `exp-manual-${Date.now()}`,
-        title: title || 'سحب نقدي / مسحوبات شخصية من الدرج',
+        title: `[تسوية عهدة - سحب من الدرج]: ${reasonText || 'سحب نقدي من الدرج'}`,
         category: 'other',
         amount,
         date: new Date().toISOString(),
-        notes,
+        notes: notes || reasonText,
         paymentMethod: 'cash',
-        recordedBy: 'المدير العام',
+        recordedBy: 'الاستقبال',
       };
       setExpenses((prev) => [expense, ...prev]);
+      if (isSupabaseConfigured) {
+        supabaseService.insertExpense(expense).catch(() => {});
+      }
     }
   };
 
@@ -1649,6 +1860,9 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     const todayNetInDrawer = todayCashIn - todayCashOut;
 
+    // Physical Drawer Balance: resets immediately to 0.00 after daily shift closing is audited
+    const activeDrawerCash = todayNetInDrawer;
+
     // InstaPay Ledger Total
     const totalInstapayIn = cashInflows
       .filter((inf) => inf.paymentMethod === 'instapay')
@@ -1663,7 +1877,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return {
       totalCashIn,
       totalCashOut,
-      netCashInDrawer,
+      netCashInDrawer: activeDrawerCash, // متصفر تلقائياً بعد كل تقفيل يومية
       todayCashIn,
       todayCashOut,
       todayNetInDrawer,
@@ -2042,7 +2256,198 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
     setCashInflows((prev) => [inflowItem, ...prev]);
 
+    if (isSupabaseConfigured) {
+      supabaseService.upsertTrainerTransaction(repaymentTrx).catch(() => {});
+      supabaseService.insertCashInflow(inflowItem).catch(() => {});
+    }
+
     return { success: true, repaidAmount: amount };
+  };
+
+  // MANUAL COACH MOVEMENT (تسجيل حركة يدوية لحساب الكابتن مع ربط الدرج والمصاريف)
+  const addCoachManualMovement = (data: {
+    coach_id: string;
+    movement_type: 'payout' | 'deposit' | 'charge';
+    amount: number;
+    reason: string;
+    payment_method?: 'cash' | 'instapay';
+    authorized_by?: string;
+  }) => {
+    const coach = coaches.find((c) => c.id === data.coach_id);
+    const coachName = coach ? coach.name : 'مدرب';
+    const authUser = data.authorized_by || 'الاستقبال';
+    const method = data.payment_method || 'cash';
+    const nowIso = new Date().toISOString();
+
+    if (data.movement_type === 'payout') {
+      // 1. صرف نقدية للكابتن من الدرج (سلفة / دفعة نقدية / مكافأة)
+      // يخصم المبلغ أوتوماتيكياً من الدرج ويسجل فوراً في جدول المصاريف بند "مستحقات ومدفوعات كباتن"
+      const newExp: ExpenseItem = {
+        id: `exp-coach-${Date.now()}`,
+        title: `صرف مستحقات/سلفة كابتن ${coachName}: ${data.reason}`,
+        category: 'trainer_payout',
+        amount: data.amount,
+        date: nowIso,
+        recordedBy: authUser,
+        notes: `حركة يدوية بحساب الكابتن - السبب: ${data.reason}`,
+        paymentMethod: method,
+        autoGenerated: false,
+        relatedEntityId: data.coach_id,
+      };
+      setExpenses((prev) => [newExp, ...prev]);
+
+      // تحديث مدفوعات اليوم للمدرب
+      setCoaches((prev) =>
+        prev.map((c) => (c.id === data.coach_id ? { ...c, totalPaidToday: c.totalPaidToday + data.amount } : c))
+      );
+
+      // تسجيل في دفتر معاملات الكابتن
+      const newTrx: TrainerTransaction = {
+        transaction_id: `TRX-PAY-${Date.now()}`,
+        coach_id: data.coach_id,
+        coach_name: coachName,
+        amount: data.amount,
+        collected_by: 'gym',
+        payer_type: `صرف يدوي (${data.reason})`,
+        payer_name: coachName,
+        gym_share: 0,
+        coach_share: data.amount,
+        status: 'settled',
+        created_at: nowIso,
+        settled_at: nowIso,
+        settled_by: authUser,
+        payment_method: method,
+        month: currentMonth,
+        notes: data.reason,
+      };
+      setTrainerTransactions((prev) => [newTrx, ...prev]);
+
+      if (isSupabaseConfigured) {
+        supabaseService.insertExpense(newExp).catch(() => {});
+        supabaseService.upsertTrainerTransaction(newTrx).catch(() => {});
+        if (coach) {
+          supabaseService.upsertCoach({ ...coach, totalPaidToday: coach.totalPaidToday + data.amount }).catch(() => {});
+        }
+      }
+
+      return { success: true, type: 'payout' as const };
+    } else if (data.movement_type === 'deposit') {
+      // 2. توريد / سداد نقدية من الكابتن للدرج (إيداع نقدي)
+      // يضاف المبلغ أوتوماتيكياً للدرج ويسجل فوراً في إيرادات الدرج تحت بند "سداد تحميل من كابتن"
+      const inflow: CashInflowItem = {
+        id: `inf-coach-${Date.now()}`,
+        type: 'coach_settlement',
+        title: `توريد وسداد من كابتن ${coachName}: ${data.reason}`,
+        amount: data.amount,
+        date: nowIso,
+        memberName: coachName,
+        paymentMethod: method,
+        recordedBy: authUser,
+      };
+      setCashInflows((prev) => [inflow, ...prev]);
+
+      let remaining = data.amount;
+      const newTrx: TrainerTransaction = {
+        transaction_id: `TRX-DEP-${Date.now()}`,
+        coach_id: data.coach_id,
+        coach_name: coachName,
+        amount: data.amount,
+        collected_by: 'gym',
+        payer_type: `توريد وسداد يدوي (${data.reason})`,
+        payer_name: `كابتن ${coachName}`,
+        gym_share: data.amount,
+        coach_share: 0,
+        status: 'settled',
+        created_at: nowIso,
+        settled_at: nowIso,
+        settled_by: authUser,
+        payment_method: method,
+        month: currentMonth,
+        type: 'coach_repayment',
+        notes: data.reason,
+      };
+
+      setTrainerTransactions((prev) => {
+        const updated = prev.map((t) => {
+          if (
+            t.coach_id === data.coach_id &&
+            t.collected_by === 'coach' &&
+            t.status === 'pending' &&
+            remaining > 0
+          ) {
+            if (remaining >= t.gym_share) {
+              remaining -= t.gym_share;
+              return {
+                ...t,
+                status: 'settled' as const,
+                settled_at: nowIso,
+                settled_by: authUser,
+              };
+            } else {
+              const left = t.gym_share - remaining;
+              remaining = 0;
+              return {
+                ...t,
+                gym_share: left,
+              };
+            }
+          }
+          return t;
+        });
+        return [newTrx, ...updated];
+      });
+
+      if (isSupabaseConfigured) {
+        supabaseService.insertCashInflow(inflow).catch(() => {});
+        supabaseService.upsertTrainerTransaction(newTrx).catch(() => {});
+      }
+
+      return { success: true, type: 'deposit' as const };
+    } else {
+      // 3. تحميل مديونية على الكابتن (فلوس أخذها الكابتن لحساب الجيم)
+      const newTrx: TrainerTransaction = {
+        transaction_id: `TRX-CHG-${Date.now()}`,
+        coach_id: data.coach_id,
+        coach_name: coachName,
+        amount: data.amount,
+        collected_by: 'coach',
+        payer_type: `تحميل يدوي: ${data.reason}`,
+        payer_name: coachName,
+        gym_share: data.amount,
+        coach_share: 0,
+        status: 'pending',
+        created_at: nowIso,
+        payment_method: 'coach_collected',
+        month: currentMonth,
+        notes: data.reason,
+      };
+      setTrainerTransactions((prev) => [newTrx, ...prev]);
+
+      const repEntry: MasterReportEntry = {
+        id: `rep-coach-chg-${Date.now()}`,
+        month: currentMonth,
+        date: nowIso,
+        playerName: `تسوية كابتن ${coachName}`,
+        playerCode: coach?.id || 'COACH',
+        amount: data.amount,
+        coachId: data.coach_id,
+        coachName: coachName,
+        sessionCategory: 'private',
+        sessionTitle: `تحميل يدوي (${data.reason})`,
+        paymentMethod: 'coach_collected',
+        paymentStatus: 'pending_on_coach',
+        notes: data.reason,
+        sourceType: 'manual',
+      };
+      setMasterReportEntries((prev) => [repEntry, ...prev]);
+
+      if (isSupabaseConfigured) {
+        supabaseService.upsertTrainerTransaction(newTrx).catch(() => {});
+        supabaseService.upsertMasterReportEntry(repEntry).catch(() => {});
+      }
+
+      return { success: true, type: 'charge' as const };
+    }
   };
 
   const getCoachMonthlyBreakdown = (coachId: string, month: string) => {
@@ -2115,16 +2520,27 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       id: `rep-${Date.now()}`,
     };
     setMasterReportEntries((prev) => [newEntry, ...prev]);
+    if (isSupabaseConfigured) {
+      supabaseService.upsertMasterReportEntry(newEntry).catch(() => {});
+    }
   };
 
   const updateMasterReportEntry = (id: string, updates: Partial<MasterReportEntry>) => {
-    setMasterReportEntries((prev) =>
-      prev.map((e) => (e.id === id ? { ...e, ...updates } : e))
-    );
+    setMasterReportEntries((prev) => {
+      const updated = prev.map((e) => (e.id === id ? { ...e, ...updates } : e));
+      const target = updated.find((e) => e.id === id);
+      if (target && isSupabaseConfigured) {
+        supabaseService.upsertMasterReportEntry(target).catch(() => {});
+      }
+      return updated;
+    });
   };
 
   const deleteMasterReportEntry = (id: string) => {
     setMasterReportEntries((prev) => prev.filter((e) => e.id !== id));
+    if (isSupabaseConfigured) {
+      supabaseService.deleteMasterReportEntry(id).catch(() => {});
+    }
   };
 
   const startNewMonth = (newMonthName: string) => {
@@ -2150,6 +2566,121 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     // 3. Set current active month
     setCurrentMonth(newMonthName);
+  };
+
+  const getNextMonthName = (current: string): string => {
+    const arabicMonths = [
+      'يناير', 'فبراير', 'مارس', 'إبريل', 'مايو', 'يونيو',
+      'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'
+    ];
+    const parts = current.trim().split(' ');
+    const mName = parts[0];
+    let year = parts[1] ? parseInt(parts[1], 10) : new Date().getFullYear();
+    const idx = arabicMonths.indexOf(mName);
+    if (idx === -1) {
+      const nextIdx = (new Date().getMonth() + 1) % 12;
+      return `${arabicMonths[nextIdx]} ${year}`;
+    }
+    const nextIdx = (idx + 1) % 12;
+    if (nextIdx === 0) {
+      year += 1;
+    }
+    return `${arabicMonths[nextIdx]} ${year}`;
+  };
+
+  // تقفيل الشهر وأرشفة البيانات وترحيل مديونيات الكباتن للشهر الجديد
+  const closeMonthlyBillingCycle = (adminUsername: string, nextMonthName?: string) => {
+    const targetNextMonth = nextMonthName || getNextMonthName(currentMonth);
+
+    // 1. حساب مديونية كل مدرب متبقية لنهاية الشهر
+    const coachDebtCarryOver = coaches.map((coach) => {
+      const breakdown = getCoachMonthlyBreakdown(coach.id, currentMonth);
+      return {
+        coachId: coach.id,
+        coachName: coach.name,
+        remainingDebt: breakdown.remainingTotalDebt,
+      };
+    });
+
+    // 2. أخذ لقطة كاملة لبيانات الشهر المؤرشف للحفظ أوفلاين
+    const monthEntries = masterReportEntries.filter((e) => !e.month || e.month === currentMonth);
+    const monthExpenses = expenses;
+    const monthInflows = cashInflows;
+    const monthPos = transactions;
+    const monthTrainerTrx = trainerTransactions.filter((t) => !t.month || t.month === currentMonth);
+
+    const totalRev = monthEntries.reduce((s, e) => s + e.amount, 0);
+    const totalExp = monthExpenses.reduce((s, e) => s + e.amount, 0);
+
+    const archive: MonthlyArchive = {
+      id: `month-archive-${Date.now()}`,
+      month: currentMonth,
+      closedAt: new Date().toISOString(),
+      closedBy: adminUsername,
+      totalRevenue: totalRev,
+      totalExpenses: totalExp,
+      netProfit: totalRev - totalExp,
+      totalPosCash: monthPos.reduce((s, t) => s + t.totalAmount, 0),
+      masterEntriesSnapshot: monthEntries,
+      expensesSnapshot: monthExpenses,
+      cashInflowsSnapshot: monthInflows,
+      trainerTransactionsSnapshot: monthTrainerTrx,
+      posTransactionsSnapshot: monthPos,
+      coachDebtCarryOver,
+    };
+
+    setMonthlyArchives((prev) => [archive, ...prev.filter((a) => a.month !== currentMonth)]);
+
+    // 3. ترحيل أي مديونية متبقية على المدربين إلى الشهر الجديد كرصيد افتتاحي
+    const carriedTransactions: TrainerTransaction[] = [];
+    coachDebtCarryOver.forEach((c) => {
+      if (c.remainingDebt > 0) {
+        carriedTransactions.push({
+          transaction_id: `trx-carry-${c.coachId}-${Date.now()}`,
+          coach_id: c.coachId,
+          coach_name: c.coachName,
+          amount: c.remainingDebt,
+          gym_share: c.remainingDebt,
+          coach_share: 0,
+          collected_by: 'coach',
+          payer_type: 'coach_debt',
+          payer_name: c.coachName,
+          payment_method: 'coach_collected',
+          status: 'pending',
+          month: targetNextMonth,
+          created_at: new Date().toISOString(),
+          notes: `[مديونية مرحلة من شهر ${currentMonth}] - رصيد افتتاحي مستحق للجيم`,
+        });
+      }
+    });
+
+    // 4. تحديث سجل حركات المدربين ببدء الشهر الجديد نظيفاً مع الحفاظ على المديونيات المرحلة
+    setTrainerTransactions((prev) => [
+      ...carriedTransactions,
+      ...prev,
+    ]);
+
+    // 5. تصفير المدفوع اليوم والراتب الشهري للمدربين للشهر الجديد
+    setCoaches((prev) =>
+      prev.map((c) => ({
+        ...c,
+        totalPaidToday: 0,
+        monthlySalaryPaidThisMonth: false,
+      }))
+    );
+
+    // 6. بدء الدورة الشهرية الجديدة
+    startNewMonth(targetNextMonth);
+
+    if (isSupabaseConfigured) {
+      supabaseService.insertMonthlyArchive(archive).catch(() => {});
+      supabaseService.clearSettledTrainerTransactions().catch(() => {});
+      carriedTransactions.forEach((t) => {
+        supabaseService.upsertTrainerTransaction(t).catch(() => {});
+      });
+    }
+
+    return { success: true, archive };
   };
 
 
@@ -2243,32 +2774,24 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setSettlementLogs([]);
     setTrainerTransactions([]);
     setMasterReportEntries([]);
+    setMonthlyArchives([]);
+    setYearlyArchives([]);
+    setDailyShiftClosings([]);
     const freshCycle: MonthlyBillingCycle = {
       id: `cycle-${Date.now()}`,
-      name: new Date().toLocaleDateString('ar-EG', { month: 'long', year: 'numeric' }),
+      name: dynamicCurrentMonth,
       startDate: new Date().toISOString(),
       isActive: true,
       totalCollected: 0,
       totalPendingOnCoaches: 0,
     };
     setBillingCycles([freshCycle]);
-    [
-      'synapse_members',
-      'synapse_sessions',
-      'synapse_coaches',
-      'synapse_physio',
-      'synapse_products',
-      'synapse_transactions',
-      'synapse_expenses',
-      'synapse_cash_inflows',
-      'synapse_checkin_logs',
-      'synapse_settlement_logs',
-      'synapse_trainer_transactions',
-      'synapse_master_report',
-      'synapse_billing_cycles',
-      'synapse_current_month',
-    ].forEach((k) => localStorage.removeItem(k));
-    localStorage.setItem('synapse_data_version', 'synapse_v3_production_clean');
+    setCurrentMonth(dynamicCurrentMonth);
+    ALL_STORAGE_KEYS.forEach((k) => localStorage.removeItem(k));
+    localStorage.setItem('synapse_data_version', CURRENT_DATA_VERSION);
+    if (isSupabaseConfigured) {
+      supabaseService.wipeAllOperationalData().catch(() => {});
+    }
   };
 
   const exportMasterReportToCSV = (filterMonth?: string) => {
@@ -2372,9 +2895,10 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const entries = masterReportEntries.filter(
       (e) => !targetMonth || targetMonth === 'all' || e.month === targetMonth
     );
+    const coachRepayments = cashInflows.filter((i) => i.type === 'coach_settlement');
+
     const directEntries = entries.filter((e) => e.paymentMethod !== 'coach_collected');
     const coachEntries = entries.filter((e) => e.paymentMethod === 'coach_collected');
-    const coachRepayments = cashInflows.filter((i) => i.type === 'coach_settlement');
 
     const directTotal = directEntries.reduce((s, e) => s + e.amount, 0);
     const coachDebtTotal = coachEntries.reduce((s, e) => s + e.amount, 0);
@@ -2387,6 +2911,9 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       entries,
       expenses,
       repayments: coachRepayments,
+      cashInflows,
+      posTransactions: transactions,
+      coaches,
       totalDirectRevenue: directTotal,
       totalCoachDebtRevenue: coachDebtTotal,
       grandTotalPlayerRevenue: directTotal + coachDebtTotal,
@@ -2472,6 +2999,10 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     // 3. تفريغ البيانات النشطة (Purge Active Logs): مسح أسطر الحضور والعمليات القديمة
     setCheckInLogs((prev) => prev.filter((l) => !l.timestamp.startsWith(yearStr)));
 
+    if (isSupabaseConfigured) {
+      supabaseService.insertYearlyArchive(newArchive).catch(() => {});
+    }
+
     return newArchive;
   };
 
@@ -2500,10 +3031,45 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     exportYearlyArchiveToJSON(archive);
   };
 
+  // Check for any currently running sessions or physiotherapy
+  const getRunningOperations = () => {
+    const runningSessions = sessions.filter((s) => s.status === 'in-progress');
+    const runningPhysio = physioBookings.filter(
+      (p) => p.status === 'active' || p.status === 'paused'
+    );
+    return {
+      runningSessions,
+      runningPhysio,
+      hasRunning: runningSessions.length > 0 || runningPhysio.length > 0,
+    };
+  };
+
   // DAILY SHIFT CLOSING (تقفيل اليومية والدرج)
   const closeDailyShift = (closingData: Omit<DailyShiftClosing, 'id' | 'closedAt'>): DailyShiftClosing => {
+    const running = getRunningOperations();
+    if (running.hasRunning) {
+      const runningNames = [
+        ...running.runningSessions.map((s) => `حصة: ${s.title}`),
+        ...running.runningPhysio.map((p) => `جلسة تأهيل: ${p.patientName} (${p.roomName})`),
+      ].join('، ');
+      throw new Error(`لا يمكن تقفيل اليومية! يوجد حالياً حصص تدريبية أو جلسات علاج طبيعي جارية: ${runningNames}`);
+    }
+
+    const todayCoachEarnings =
+      closingData.totalCoachEarningsToday !== undefined
+        ? closingData.totalCoachEarningsToday
+        : trainerTransactions
+            .filter(
+              (t) =>
+                t.created_at?.startsWith(closingData.date) &&
+                t.collected_by === 'gym' &&
+                t.coach_share > 0
+            )
+            .reduce((sum, t) => sum + t.coach_share, 0);
+
     const newClosing: DailyShiftClosing = {
       ...closingData,
+      totalCoachEarningsToday: todayCoachEarnings,
       id: `shift-close-${Date.now()}`,
       closedAt: new Date().toISOString(),
     };
@@ -2537,6 +3103,26 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         };
         setCashInflows((prev) => [surplusInflow, ...prev]);
       }
+    }
+
+    // 1. تصفير ومسح حضور وتسجيلات الاستقبال اليومية لتبدأ اليومية الجديدة نظيفة
+    setCheckInLogs((prev) => prev.filter((l) => !l.timestamp.startsWith(newClosing.date)));
+
+    // 2. إعادة ضبط كافة الحصص لوضع الاستعداد (idle) وإفراغ التسكين المؤقت لليوم
+    setSessions((prev) =>
+      prev.map((s) => ({
+        ...s,
+        status: 'idle',
+        startedAt: undefined,
+        endedAt: undefined,
+        completedTodayByCoach: {},
+        temporaryPlayerIds: [],
+      }))
+    );
+
+    if (isSupabaseConfigured) {
+      supabaseService.insertDailyShiftClosing(newClosing).catch(() => {});
+      supabaseService.clearCheckInLogsForDate(newClosing.date).catch(() => {});
     }
 
     return newClosing;
@@ -2576,8 +3162,19 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const todayEntries = masterReportEntries.filter((e) => e.date?.startsWith(fallbackClosing.date));
     const todayExpenses = expenses.filter((e) => e.date.startsWith(fallbackClosing.date));
     const todayInflows = cashInflows.filter((i) => i.date.startsWith(fallbackClosing.date));
+    const todayTransactions = transactions.filter((t) => t.timestamp.startsWith(fallbackClosing.date));
+    const todayTrainerTransactions = trainerTransactions.filter((t) => t.created_at?.startsWith(fallbackClosing.date));
+    const todayCheckInLogs = checkInLogs.filter((l) => l.timestamp.startsWith(fallbackClosing.date));
 
-    await exportDailyShiftToXLSX(fallbackClosing, todayEntries, todayExpenses, todayInflows);
+    await exportDailyShiftToXLSX(
+      fallbackClosing,
+      todayEntries,
+      todayExpenses,
+      todayInflows,
+      todayTransactions,
+      todayTrainerTransactions,
+      todayCheckInLogs
+    );
   };
 
   return (
@@ -2595,6 +3192,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         addSession,
         updateSession,
         deleteSession,
+        startSession,
+        endSession,
         assignPlayerToSession,
         removePlayerFromSession,
         toggleSessionCoachCompletion,
@@ -2637,6 +3236,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         getCoachFinancialSummary,
         getAllTrainersFinancialSummary,
         repayCoachDebt,
+        addCoachManualMovement,
         getCoachMonthlyBreakdown,
         masterReportEntries,
         billingCycles,
@@ -2646,6 +3246,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         updateMasterReportEntry,
         deleteMasterReportEntry,
         startNewMonth,
+        monthlyArchives,
+        closeMonthlyBillingCycle,
         exportMasterReportToCSV,
         exportMasterReportXLSX,
         yearlyArchives,
@@ -2655,6 +3257,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         exportYearlyArchiveXLSX,
         exportYearlyArchiveJSON,
         dailyShiftClosings,
+        getRunningOperations,
         closeDailyShift,
         getTodayShiftStatus,
         exportDailyShiftXLSX,

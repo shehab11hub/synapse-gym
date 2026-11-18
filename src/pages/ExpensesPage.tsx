@@ -125,12 +125,19 @@ export const ExpensesPage: React.FC = () => {
 
   const handleManualMovementSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (manualMovementForm.amount <= 0) return;
+    if (!manualMovementForm.title.trim()) {
+      alert('يرجى إدخال سبب أو بيان تسوية العهدة بوضوح لضمان دقة التقارير المالية واليومية.');
+      return;
+    }
+    if (manualMovementForm.amount <= 0) {
+      alert('يرجى إدخال مبلغ صحيح أكبر من الصفر');
+      return;
+    }
 
     addManualCashMovement(
       manualMovementForm.type,
       Number(manualMovementForm.amount),
-      manualMovementForm.title || (manualMovementForm.type === 'deposit' ? 'إيداع نقدي بالخزينة' : 'سحب نقدي من الدرج'),
+      manualMovementForm.title.trim(),
       manualMovementForm.notes
     );
 
@@ -745,10 +752,10 @@ export const ExpensesPage: React.FC = () => {
           <div className="bg-[#0f172a] border border-cyan-500/40 rounded-3xl max-w-md w-full p-6 shadow-2xl">
             <h3 className="text-lg font-black text-white mb-2 flex items-center gap-2">
               <WalletCards className="w-5 h-5 text-cyan-400" />
-              <span>تسوية حركة نقدية يدوية بالدرج</span>
+              <span>تسوية عهدة (سحب أو إيداع نقدي بالدرج)</span>
             </h3>
             <p className="text-xs text-slate-400 mb-4">
-              تسجيل إيداع نقدي إضافي بالخزينة أو سحب نقدية ومسحوبات شخصية
+              تسوية العهدة تتطلب إدخال السبب أو البيان بوضوح، وتسمع أوتوماتيكياً في تقفيل اليومية والتقرير الشامل.
             </p>
 
             <form onSubmit={handleManualMovementSubmit} className="space-y-4">
@@ -763,7 +770,7 @@ export const ExpensesPage: React.FC = () => {
                   }`}
                 >
                   <ArrowDownCircle className="w-4 h-4" />
-                  <span>إيداع نقدي بالدرج (+)</span>
+                  <span>إيداع عهدة بالدرج (+)</span>
                 </button>
                 <button
                   type="button"
@@ -775,18 +782,20 @@ export const ExpensesPage: React.FC = () => {
                   }`}
                 >
                   <ArrowUpCircle className="w-4 h-4" />
-                  <span>سحب نقدي من الدرج (-)</span>
+                  <span>سحب عهدة من الدرج (-)</span>
                 </button>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">بيان الحركة / السبب</label>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  بيان تسوية العهدة / السبب <span className="text-rose-400">* (إلزامي للتقارير)</span>
+                </label>
                 <input
                   type="text"
                   required
                   value={manualMovementForm.title}
                   onChange={(e) => setManualMovementForm({ ...manualMovementForm, title: e.target.value })}
-                  placeholder={manualMovementForm.type === 'deposit' ? 'مثال: إيداع فكة الصباح أو دعم الخزينة' : 'مثال: مسحوبات المالك أو عهدة نثرية'}
+                  placeholder={manualMovementForm.type === 'deposit' ? 'مثال: إيداع فكة الصباح أو دعم الخزينة' : 'مثال: مسحوبات المالك أو عهدة نثرية ومشتريات'}
                   className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-500"
                 />
               </div>

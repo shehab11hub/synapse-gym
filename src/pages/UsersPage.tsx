@@ -68,7 +68,7 @@ export const UsersPage: React.FC = () => {
     { name: '3. صفحة تأجير العلاج الطبيعي', key: 'physiotherapy', admin: true, reception: true },
     { name: '4. صفحة حسابات وتصفية المدربين', key: 'trainers', admin: true, reception: true },
     { name: '5. صفحة المصاريف وإدارة الدرج', key: 'expenses', admin: true, reception: true },
-    { name: '6. صفحة التقارير والرسومات البيانية', key: 'analytics', admin: true, reception: true },
+    { name: '6. صفحة التقارير والرسومات البيانية', key: 'analytics', admin: true, reception: false },
     { name: '7. صفحة المتجر ونقطة البيع (POS)', key: 'pos', admin: true, reception: true },
     { name: '8. صفحة إدارة المستخدمين والصلاحيات', key: 'users', admin: true, reception: false },
   ];

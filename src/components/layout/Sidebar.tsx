@@ -83,6 +83,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       sublabel: 'مقارنة الأسبوع، الشهر، والسنة',
       icon: BarChart3,
       pageKey: 'analytics',
+      adminOnly: true,
     },
     {
       id: 'pos',

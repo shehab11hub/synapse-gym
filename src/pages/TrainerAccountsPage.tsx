@@ -55,9 +55,12 @@ export const TrainerAccountsPage: React.FC = () => {
     getCoachFinancialSummary,
     getAllTrainersFinancialSummary,
     repayCoachDebt,
+    addCoachManualMovement,
     getCoachMonthlyBreakdown,
     billingCycles,
     currentMonth,
+    monthlyArchives,
+    closeMonthlyBillingCycle,
   } = useGymData();
 
   const { currentUser } = useAuth();
@@ -94,19 +97,13 @@ export const TrainerAccountsPage: React.FC = () => {
   const [ledgerCollectorFilter, setLedgerCollectorFilter] = useState<'all' | 'gym' | 'coach'>('all');
   const [ledgerStatusFilter, setLedgerStatusFilter] = useState<'all' | 'pending' | 'settled'>('all');
 
-  // New Transaction Form state
+  // New Manual Movement Form state (صرف، توريد، تحميل)
   const [trxForm, setTrxForm] = useState({
     coach_id: coaches[0]?.id || '',
-    amount: 1000,
-    collected_by: 'coach' as CollectedBy,
-    payer_type: 'حصة تدريب خاصة PT',
-    payer_name: '',
-    splitMode: 'percent' as 'percent' | 'manual',
-    gym_percentage: 100,
-    manual_gym_share: 1000,
-    manual_coach_share: 0,
-    payment_method: 'coach_collected' as 'cash' | 'card' | 'instapay' | 'coach_collected',
-    notes: '',
+    amount: 500,
+    movement_type: 'payout' as 'payout' | 'deposit' | 'charge',
+    reason: '',
+    payment_method: 'cash' as 'cash' | 'instapay',
   });
 
   // New Coach Form state
@@ -119,17 +116,6 @@ export const TrainerAccountsPage: React.FC = () => {
     monthlySalary: 6000,
     commissionRate: 30,
   });
-
-  // Calculate live preview shares for the transaction modal
-  const computedGymShare =
-    trxForm.splitMode === 'percent'
-      ? Math.round((trxForm.amount * trxForm.gym_percentage) / 100)
-      : trxForm.manual_gym_share;
-
-  const computedCoachShare =
-    trxForm.splitMode === 'percent'
-      ? trxForm.amount - computedGymShare
-      : trxForm.manual_coach_share;
 
   // Aggregate monthly stats across all coaches for the selected month
   const monthlyCoachesStats = coaches.map((c) => ({
@@ -184,38 +170,77 @@ export const TrainerAccountsPage: React.FC = () => {
     }
   };
 
+  const allMonthOptions = Array.from(
+    new Set([
+      currentMonth,
+      ...billingCycles.map((c) => c.name),
+      ...monthlyArchives.map((a) => a.month),
+      ...trainerTransactions.map((t) => t.month).filter(Boolean),
+    ])
+  );
+
+  const handleCloseMonth = () => {
+    if (
+      !confirm(
+        `هل أنت متأكد من تقفيل شهر (${currentMonth})؟\n\n` +
+        `• سيتم أرشفة معاملات الشهر الحالي وحفظها أوفلاين على الجهاز.\n` +
+        `• أي مدرب عليه مديونية متبقية سيتم ترحيلها تلقائياً للشهر الجديد كرصيد افتتاحي.\n` +
+        `• سيبدأ الشهر الجديد في صفحة المدربين نظيفاً مع بقاء المديونيات المرحلة فقط.`
+      )
+    ) {
+      return;
+    }
+
+    const res = closeMonthlyBillingCycle(currentUser?.name || 'المدير العام');
+    if (res.success) {
+      setSelectedMonth(currentMonth);
+      alert(`✅ تم إقفال الشهر بنجاح وأرشفته أوفلاين، وبدء الشهر الجديد مع ترحيل مديونيات الكباتن!`);
+    }
+  };
+
   // Actions
   const handleCreateTransaction = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!trxForm.coach_id || trxForm.amount <= 0) return;
+    if (!trxForm.coach_id) {
+      alert('يرجى اختيار المدرب');
+      return;
+    }
+    if (!trxForm.reason.trim()) {
+      alert('يرجى إدخال سبب وبيان الحركة اليدوية بوضوح');
+      return;
+    }
+    if (trxForm.amount <= 0) {
+      alert('يرجى إدخال مبلغ صحيح أكبر من الصفر');
+      return;
+    }
 
-    addTrainerTransaction({
+    const res = addCoachManualMovement({
       coach_id: trxForm.coach_id,
+      movement_type: trxForm.movement_type,
       amount: Number(trxForm.amount),
-      collected_by: trxForm.collected_by,
-      payer_type: trxForm.payer_type,
-      payer_name: trxForm.payer_name || 'متدرب',
-      gym_share: computedGymShare,
-      coach_share: computedCoachShare,
+      reason: trxForm.reason.trim(),
       payment_method: trxForm.payment_method,
-      notes: trxForm.notes,
+      authorized_by: currentUser?.name || 'الاستقبال',
     });
 
-    sounds.playSuccessDing();
-    setIsAddTransactionModalOpen(false);
-    setTrxForm({
-      coach_id: coaches[0]?.id || '',
-      amount: 1000,
-      collected_by: 'coach',
-      payer_type: 'حصة تدريب خاصة PT',
-      payer_name: '',
-      splitMode: 'percent',
-      gym_percentage: 100,
-      manual_gym_share: 1000,
-      manual_coach_share: 0,
-      payment_method: 'coach_collected',
-      notes: '',
-    });
+    if (res.success) {
+      sounds.playCashRegister();
+      const msg =
+        trxForm.movement_type === 'payout'
+          ? `✅ تم صرف مبلغ ${formatEGP(trxForm.amount)} وخصمه أوتوماتيكياً من الدرج وقيده في المصاريف تحت بند (مستحقات ومدفوعات كباتن)!`
+          : trxForm.movement_type === 'deposit'
+          ? `✅ تم توريد مبلغ ${formatEGP(trxForm.amount)} وإضافته أوتوماتيكياً للدرج وقيده في الإيرادات بسجل سدادات الكباتن!`
+          : `✅ تم تحميل مبلغ ${formatEGP(trxForm.amount)} كمديونية على الكابتن وقيده في التقرير الشامل!`;
+      alert(msg);
+      setIsAddTransactionModalOpen(false);
+      setTrxForm({
+        coach_id: coaches[0]?.id || '',
+        amount: 500,
+        movement_type: 'payout',
+        reason: '',
+        payment_method: 'cash',
+      });
+    }
   };
 
   const handlePayMonthlySalary = (coach: Coach) => {
@@ -318,24 +343,38 @@ export const TrainerAccountsPage: React.FC = () => {
             </p>
           </div>
 
-          {/* Month Switcher Dropdown (الخانة للتحويل بين الشهور والترحيل) */}
-          <div className="flex items-center gap-3 bg-slate-900 border border-teal-500/40 p-2 rounded-2xl">
-            <Calendar className="w-5 h-5 text-teal-400" />
-            <div className="text-right">
-              <div className="text-[10px] text-slate-400 font-bold">الشهر المالي المعروض:</div>
-              <select
-                value={selectedMonth}
-                onChange={(e) => setSelectedMonth(e.target.value)}
-                className="bg-transparent text-sm font-black text-teal-300 focus:outline-none cursor-pointer dir-rtl"
-              >
-                <option value="all" className="bg-slate-900 text-white">كل الشهور (الرصيد التراكمي)</option>
-                {billingCycles.map((cycle) => (
-                  <option key={cycle.id} value={cycle.name} className="bg-slate-900 text-white">
-                    {cycle.name} {cycle.isActive ? '(الشهر الحالي)' : '(شهر سابق)'}
-                  </option>
-                ))}
-              </select>
+          {/* Month Switcher Dropdown & Close Month Button */}
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-3 bg-slate-900 border border-teal-500/40 p-2 rounded-2xl">
+              <Calendar className="w-5 h-5 text-teal-400" />
+              <div className="text-right">
+                <div className="text-[10px] text-slate-400 font-bold">الشهر المالي المعروض:</div>
+                <select
+                  value={selectedMonth}
+                  onChange={(e) => setSelectedMonth(e.target.value)}
+                  className="bg-transparent text-sm font-black text-teal-300 focus:outline-none cursor-pointer dir-rtl"
+                >
+                  <option value="all" className="bg-slate-900 text-white">كل الشهور (الرصيد التراكمي)</option>
+                  {allMonthOptions.map((mName) => (
+                    <option key={mName} value={mName} className="bg-slate-900 text-white">
+                      {mName} {mName === currentMonth ? '(الشهر الحالي النشط)' : '(أرشيف أوفلاين)'}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
+
+            {/* Monthly Close & Roll-over Button (Manager-Only) */}
+            {currentUser?.role === 'admin' && (
+              <button
+                onClick={handleCloseMonth}
+                className="py-3 px-4 rounded-2xl bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-400 hover:to-cyan-400 text-slate-950 font-black text-xs flex items-center gap-2 shadow-lg shadow-teal-500/20 transition cursor-pointer"
+                title="تقفيل الشهر، أرشفة المعاملات، وترحيل مديونيات الكباتن المتبقية للشهر الجديد"
+              >
+                <Calendar className="w-4 h-4" />
+                <span>تقفيل الشهر وترحيل المديونيات</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -1056,15 +1095,79 @@ export const TrainerAccountsPage: React.FC = () => {
       {/* Add Manual Transaction Modal */}
       {isAddTransactionModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-700 rounded-3xl max-w-md w-full p-6 shadow-2xl">
-            <h3 className="text-lg font-black text-white mb-4 flex items-center gap-2">
-              <Plus className="w-5 h-5 text-teal-400" />
-              <span>تسجيل حركة تحميل أو تحصيل يدوية</span>
-            </h3>
+          <div className="bg-[#0f172a] border border-slate-700 rounded-3xl max-w-lg w-full p-6 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-teal-500/20 text-teal-400">
+                  <Calculator className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white">تسجيل حركة يدوية لحساب الكابتن</h3>
+                  <p className="text-[11px] text-slate-400">
+                    ربط فوري ومباشر مع الخزينة والمصاريف والتقارير الشهرية
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsAddTransactionModalOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
 
             <form onSubmit={handleCreateTransaction} className="space-y-4">
+              {/* Movement Type Selector */}
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">اختر المدرب</label>
+                <label className="block text-xs font-bold text-slate-300 mb-1.5">نوع الحركة المالية:</label>
+                <div className="grid grid-cols-3 gap-1.5 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setTrxForm({ ...trxForm, movement_type: 'payout' })}
+                    className={`py-2 px-2 rounded-xl font-bold border transition flex flex-col items-center gap-1 cursor-pointer text-center ${
+                      trxForm.movement_type === 'payout'
+                        ? 'bg-rose-500/20 border-rose-500 text-rose-300 shadow-sm'
+                        : 'bg-slate-900 border-slate-800 text-slate-400'
+                    }`}
+                  >
+                    <ArrowUpRight className="w-4 h-4 text-rose-400" />
+                    <span className="text-[11px]">صرف للكابتن (-)</span>
+                    <span className="text-[9px] text-slate-500">خصم من الدرج ومصروف</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setTrxForm({ ...trxForm, movement_type: 'deposit' })}
+                    className={`py-2 px-2 rounded-xl font-bold border transition flex flex-col items-center gap-1 cursor-pointer text-center ${
+                      trxForm.movement_type === 'deposit'
+                        ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 shadow-sm'
+                        : 'bg-slate-900 border-slate-800 text-slate-400'
+                    }`}
+                  >
+                    <ArrowDownLeft className="w-4 h-4 text-emerald-400" />
+                    <span className="text-[11px]">توريد من الكابتن (+)</span>
+                    <span className="text-[9px] text-slate-500">إضافة للدرج وسداد</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setTrxForm({ ...trxForm, movement_type: 'charge' })}
+                    className={`py-2 px-2 rounded-xl font-bold border transition flex flex-col items-center gap-1 cursor-pointer text-center ${
+                      trxForm.movement_type === 'charge'
+                        ? 'bg-purple-500/20 border-purple-500 text-purple-300 shadow-sm'
+                        : 'bg-slate-900 border-slate-800 text-slate-400'
+                    }`}
+                  >
+                    <Receipt className="w-4 h-4 text-purple-400" />
+                    <span className="text-[11px]">تحميل مديونية</span>
+                    <span className="text-[9px] text-slate-500">تضاف لحساب الكابتن</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Coach Selector */}
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">اختر الكابتن / المدرب:</label>
                 <select
                   value={trxForm.coach_id}
                   onChange={(e) => setTrxForm({ ...trxForm, coach_id: e.target.value })}
@@ -1078,28 +1181,77 @@ export const TrainerAccountsPage: React.FC = () => {
                 </select>
               </div>
 
+              {/* Reason / Statement Input (Required) */}
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">بيان الحركة</label>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block text-xs font-bold text-slate-300">
+                    البيان أو السبب <span className="text-rose-400">* (إلزامي للتقارير)</span>
+                  </label>
+                  <span className="text-[10px] text-slate-500">يظهر بالاسم في شيت الإكسيل واليومية</span>
+                </div>
                 <input
                   type="text"
                   required
-                  value={trxForm.payer_type}
-                  onChange={(e) => setTrxForm({ ...trxForm, payer_type: e.target.value })}
-                  placeholder="مثال: حصة تدريب خاصة PT"
+                  value={trxForm.reason}
+                  onChange={(e) => setTrxForm({ ...trxForm, reason: e.target.value })}
+                  placeholder={
+                    trxForm.movement_type === 'payout'
+                      ? 'مثال: سلفة نقدية على الحساب، مكافأة تميز، أو صرف يدوي'
+                      : trxForm.movement_type === 'deposit'
+                      ? 'مثال: سداد نقدي يدوي من مديونية جلسات الشهر'
+                      : 'مثال: تحميل تمرين برايفت إضافي أخذ الكابتن قيمته'
+                  }
                   className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-teal-500"
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">إجمالي المبلغ (ج.م)</label>
-                <input
-                  type="number"
-                  min="1"
-                  required
-                  value={trxForm.amount}
-                  onChange={(e) => setTrxForm({ ...trxForm, amount: Number(e.target.value) })}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-teal-300 font-bold focus:outline-none focus:border-teal-500"
-                />
+              {/* Amount & Payment Method Grid */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1">المبلغ (ج.م):</label>
+                  <input
+                    type="number"
+                    min="1"
+                    required
+                    value={trxForm.amount}
+                    onChange={(e) => setTrxForm({ ...trxForm, amount: Number(e.target.value) })}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-teal-300 font-bold focus:outline-none focus:border-teal-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1">طريقة المعاملة:</label>
+                  <select
+                    value={trxForm.payment_method}
+                    onChange={(e) => setTrxForm({ ...trxForm, payment_method: e.target.value as 'cash' | 'instapay' })}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-teal-500"
+                  >
+                    <option value="cash">كاش (نقدي بالدرج)</option>
+                    <option value="instapay">إنستاباي (InstaPay)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Financial Impact Banner */}
+              <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 text-[11px] text-slate-300 flex items-start gap-2">
+                <Sparkles className="w-4 h-4 text-teal-400 shrink-0 mt-0.5" />
+                <div>
+                  {trxForm.movement_type === 'payout' && (
+                    <span>
+                      سيتم <strong>خصم {formatEGP(trxForm.amount)}</strong> من نقدية الدرج الفعلية فوراً وقيدها في جدول المصاريف تحت بند <strong>(مستحقات ومدفوعات كباتن)</strong>.
+                    </span>
+                  )}
+                  {trxForm.movement_type === 'deposit' && (
+                    <span>
+                      سيتم <strong>إضافة {formatEGP(trxForm.amount)}</strong> إلى نقدية الدرج الفعلية فوراً وتسجيلها في إيرادات الدرج وسدادات الكباتن.
+                    </span>
+                  )}
+                  {trxForm.movement_type === 'charge' && (
+                    <span>
+                      سيتم <strong>إضافة {formatEGP(trxForm.amount)}</strong> كمديونية على الكابتن للجيم وتظهر في التقرير الشامل.
+                    </span>
+                  )}
+                </div>
               </div>
 
               <div className="flex items-center gap-3 pt-2">
@@ -1107,7 +1259,7 @@ export const TrainerAccountsPage: React.FC = () => {
                   type="submit"
                   className="flex-1 py-3 px-4 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-teal-500/20"
                 >
-                  حفظ الحركة في الحساب
+                  تأكيد وتسجيل الحركة اليدوية
                 </button>
                 <button
                   type="button"

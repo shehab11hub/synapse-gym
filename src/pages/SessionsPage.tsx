@@ -13,10 +13,15 @@ import {
   UserPlus,
   Trash2,
   Stethoscope,
+  Play,
+  Square,
+  RotateCcw,
+  X,
+  Search,
 } from 'lucide-react';
 import { useGymData } from '../context/GymDataContext';
 import { GymSession, SessionCategory } from '../types';
-import { formatEGP, formatTime12h, isSessionActiveNow } from '../utils/formatters';
+import { formatEGP } from '../utils/formatters';
 
 export const SessionsPage: React.FC = () => {
   const {
@@ -25,6 +30,8 @@ export const SessionsPage: React.FC = () => {
     members,
     addSession,
     deleteSession,
+    startSession,
+    endSession,
     assignPlayerToSession,
     removePlayerFromSession,
     toggleSessionCoachCompletion,
@@ -34,11 +41,9 @@ export const SessionsPage: React.FC = () => {
   // Add Session modal state
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [selectedSessionForEnroll, setSelectedSessionForEnroll] = useState<string | null>(null);
+  const [enrollSearchQuery, setEnrollSearchQuery] = useState('');
 
-  // Time simulation toggle (Allows user to preview active vs inactive states easily)
-  const [forceActiveDemo, setForceActiveDemo] = useState<boolean | null>(null);
-
-  // New Session form
+  // New Session form (بدون إلزام بتوقيت محدد، زرار بداية ونهاية عند الطلب)
   const [form, setForm] = useState({
     title: '',
     sport: 'كروس فيت',
@@ -46,8 +51,7 @@ export const SessionsPage: React.FC = () => {
     sessionCategory: 'group' as SessionCategory,
     coachIds: [] as string[],
     price: 150,
-    startTime: '18:00',
-    endTime: '19:30',
+    durationMinutes: 60,
   });
 
   const handleCreateSession = (e: React.FormEvent) => {
@@ -64,8 +68,7 @@ export const SessionsPage: React.FC = () => {
       sessionCategory: form.sessionCategory,
       coachIds: form.coachIds,
       price: Number(form.price),
-      startTime: form.startTime,
-      endTime: form.endTime,
+      status: 'idle',
       daysOfWeek: [0, 1, 2, 3, 4],
       enrolledPlayerIds: [],
       temporaryPlayerIds: [],
@@ -79,8 +82,7 @@ export const SessionsPage: React.FC = () => {
       sessionCategory: 'group',
       coachIds: [],
       price: 150,
-      startTime: '18:00',
-      endTime: '19:30',
+      durationMinutes: 60,
     });
   };
 
@@ -108,44 +110,27 @@ export const SessionsPage: React.FC = () => {
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-[#0f172a]/90 border border-slate-800 rounded-3xl p-6 shadow-xl">
         <div>
           <div className="flex items-center gap-2">
-            <h2 className="text-xl font-black text-white">جدول الحصص والتمارين اليومية</h2>
+            <h2 className="text-xl font-black text-white">جدول الحصص والتمارين (بدء وإنهاء عند الطلب)</h2>
             <span className="text-xs px-2.5 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30 font-bold">
               {sessions.length} حصص
             </span>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            الحصص غير النشطة في الوقت الحالي تظهر بتأثير <span className="text-white font-bold underline">الأبيض والأسود</span>، بينما النشطة تظهر بألوانها الطبيعية
+            بدء وإنهاء الحصص يدويًا بنقرة زر واحدة دون تقيد بمواعيد ساعات محددة — الحصص الجارية تمنع تقفيل اليومية حتى إنهائها
           </p>
         </div>
 
         <div className="flex items-center gap-3">
-          {/* Demo toggle for active/inactive */}
-          <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 px-3 py-2 rounded-2xl text-xs text-slate-300">
-            <span className="text-[11px] text-slate-400">معاينة التأثير:</span>
-            <button
-              onClick={() => setForceActiveDemo(null)}
-              className={`px-2 py-1 rounded-lg transition text-[10px] font-bold ${
-                forceActiveDemo === null ? 'bg-teal-500 text-slate-950' : 'bg-slate-800 text-slate-400'
-              }`}
-            >
-              الوقت الحقيقي
-            </button>
-            <button
-              onClick={() => setForceActiveDemo(true)}
-              className={`px-2 py-1 rounded-lg transition text-[10px] font-bold ${
-                forceActiveDemo === true ? 'bg-emerald-500 text-slate-950' : 'bg-slate-800 text-slate-400'
-              }`}
-            >
-              الكل نشط
-            </button>
-            <button
-              onClick={() => setForceActiveDemo(false)}
-              className={`px-2 py-1 rounded-lg transition text-[10px] font-bold ${
-                forceActiveDemo === false ? 'bg-rose-500 text-white' : 'bg-slate-800 text-slate-400'
-              }`}
-            >
-              الكل أبيض وأسود
-            </button>
+          {/* Quick Active Tracker Badges */}
+          <div className="flex items-center gap-2.5 bg-slate-900 border border-slate-800 px-3.5 py-2 rounded-2xl text-xs">
+            <div className="flex items-center gap-1.5 text-emerald-400 font-bold">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span>جارية الآن: {sessions.filter((s) => s.status === 'in-progress').length}</span>
+            </div>
+            <span className="text-slate-600">|</span>
+            <div className="text-slate-400 font-medium">
+              <span>مكتملة: {sessions.filter((s) => s.status === 'completed').length}</span>
+            </div>
           </div>
 
           {/* Add Session Button */}
@@ -162,9 +147,8 @@ export const SessionsPage: React.FC = () => {
       {/* Sessions Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {sessions.map((session) => {
-          // Check if session is currently active based on real time or demo toggle
-          const isRealActive = isSessionActiveNow(session.startTime, session.endTime);
-          const isActive = forceActiveDemo !== null ? forceActiveDemo : isRealActive;
+          const isRunning = session.status === 'in-progress';
+          const isDone = session.status === 'completed';
 
           // Assigned coaches
           const assignedCoaches = coaches.filter((c) => session.coachIds.includes(c.id));
@@ -191,9 +175,11 @@ export const SessionsPage: React.FC = () => {
             <div
               key={session.id}
               className={`rounded-3xl border transition-all duration-300 relative overflow-hidden flex flex-col justify-between ${
-                isActive
-                  ? 'bg-gradient-to-b from-[#0f1d33] to-[#0c1626] border-teal-500/40 shadow-xl shadow-teal-500/10'
-                  : 'bg-[#0f172a]/60 border-slate-800/80 grayscale contrast-125 opacity-75 hover:grayscale-0 hover:opacity-100'
+                isRunning
+                  ? 'bg-gradient-to-b from-[#0f1d33] to-[#0c1626] border-emerald-500/60 shadow-xl shadow-emerald-500/15 ring-1 ring-emerald-500/30'
+                  : isDone
+                  ? 'bg-[#0f172a]/90 border-slate-700/80'
+                  : 'bg-[#0f172a]/60 border-slate-800/80 opacity-90 hover:opacity-100'
               }`}
             >
               {/* Top Card Bar with Price on Outside */}
@@ -207,14 +193,19 @@ export const SessionsPage: React.FC = () => {
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">
                         {categoryLabel}
                       </span>
-                      {isActive ? (
-                        <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
-                          حصة نشطة حالياً (Active)
+                      {isRunning ? (
+                        <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 flex items-center gap-1.5 animate-pulse">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                          <span>حصة جارية الآن (قيد التدريب)</span>
+                        </span>
+                      ) : isDone ? (
+                        <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3 text-blue-400" />
+                          <span>تم إتمام الحصة اليوم</span>
                         </span>
                       ) : (
                         <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
-                          غير نشطة حالياً (أبيض وأسود)
+                          في انتظار البدء
                         </span>
                       )}
                     </div>
@@ -230,7 +221,7 @@ export const SessionsPage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Info row: Hall & Time */}
+                {/* Info row: Hall & Start/End Info */}
                 <div className="grid grid-cols-2 gap-3 mt-4">
                   <div className="flex items-center gap-2 p-2.5 rounded-xl bg-slate-900/80 border border-slate-800 text-xs text-slate-300">
                     <MapPin className="w-3.5 h-3.5 text-teal-400 shrink-0" />
@@ -239,9 +230,49 @@ export const SessionsPage: React.FC = () => {
                   <div className="flex items-center gap-2 p-2.5 rounded-xl bg-slate-900/80 border border-slate-800 text-xs text-slate-300">
                     <Clock className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
                     <span>
-                      {formatTime12h(session.startTime)} - {formatTime12h(session.endTime)}
+                      {isRunning && session.startedAt
+                        ? `بدأت: ${new Date(session.startedAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}`
+                        : isDone && session.endedAt
+                        ? `انتهت: ${new Date(session.endedAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}`
+                        : 'جاهزة للبدء بنقرة زر'}
                     </span>
                   </div>
+                </div>
+
+                {/* START / END SESSION ACTION BUTTONS */}
+                <div className="mt-3">
+                  {isRunning ? (
+                    <button
+                      onClick={() => endSession(session.id)}
+                      className="w-full py-2.5 px-4 rounded-2xl bg-gradient-to-r from-rose-500 to-amber-600 hover:from-rose-600 hover:to-amber-700 text-white font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-rose-500/25 transition cursor-pointer"
+                    >
+                      <Square className="w-4 h-4 fill-current" />
+                      <span>إنهاء الحصة الآن (End Session)</span>
+                    </button>
+                  ) : isDone ? (
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 py-2 px-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                        <span>تم تنفيذ الحصة بالكامل</span>
+                      </div>
+                      <button
+                        onClick={() => startSession(session.id)}
+                        className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition cursor-pointer flex items-center gap-1"
+                        title="إعادة بدء جولة جديدة"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>إعادة بدء</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => startSession(session.id)}
+                      className="w-full py-2.5 px-4 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-teal-500/20 transition cursor-pointer"
+                    >
+                      <Play className="w-4 h-4 fill-current" />
+                      <span>بدء الحصة الآن (Start Session)</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -393,149 +424,182 @@ export const SessionsPage: React.FC = () => {
 
       {/* Add Session Modal */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-700 rounded-3xl max-w-lg w-full p-6 shadow-2xl">
-            <h3 className="text-lg font-black text-white mb-4 flex items-center gap-2">
-              <Plus className="w-5 h-5 text-teal-400" />
-              <span>إضافة كلاس / حصة تدريبية جديدة</span>
-            </h3>
-
-            <form onSubmit={handleCreateSession} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">اسم الحصة</label>
-                <input
-                  type="text"
-                  required
-                  value={form.title}
-                  onChange={(e) => setForm({ ...form, title: e.target.value })}
-                  placeholder="مثال: كروس فيت مكثف، كيك بوكسينغ"
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-teal-500"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-in fade-in">
+          <div className="bg-[#0f172a] border border-slate-700/80 rounded-3xl max-w-2xl w-full max-h-[88vh] flex flex-col shadow-2xl overflow-hidden">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-800 flex items-center justify-between shrink-0 bg-[#0f172a]">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-2xl bg-teal-500/20 text-teal-400 border border-teal-500/30">
+                  <Plus className="w-5 h-5" />
+                </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">نوع الرياضة</label>
+                  <h3 className="text-base sm:text-lg font-black text-white">إضافة كلاس / حصة تدريبية جديدة</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">حدد بيانات الحصة والمدربين المسؤولين وسعر التذكرة</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAddModalOpen(false)}
+                className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+                title="إغلاق"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Scrollable Body */}
+            <form onSubmit={handleCreateSession} className="flex-1 flex flex-col min-h-0">
+              <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4">
+                {/* Title */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5">اسم الحصة أو الكلاس *</label>
                   <input
                     type="text"
-                    value={form.sport}
-                    onChange={(e) => setForm({ ...form, sport: e.target.value })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-teal-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">القاعة أو الصالة</label>
-                  <input
-                    type="text"
-                    value={form.hall}
-                    onChange={(e) => setForm({ ...form, hall: e.target.value })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-teal-500"
-                  />
-                </div>
-              </div>
-
-              {/* Session Category Selector */}
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">
-                  تصنيف ونوع السيشن (Session Category):
-                </label>
-                <select
-                  value={form.sessionCategory}
-                  onChange={(e) => setForm({ ...form, sessionCategory: e.target.value as any })}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-teal-500 font-bold"
-                >
-                  <option value="group">كلاس جماعي (Group Class)</option>
-                  <option value="private">تدريب خاص (Private PT)</option>
-                  <option value="physio">علاج طبيعي وتأهيل (Physio)</option>
-                  <option value="massage">مساج واستشفاء (Massage)</option>
-                  <option value="gym">اشتراك جيم عام (Gym)</option>
-                </select>
-                <p className="text-[10px] text-slate-400 mt-1">
-                  يسمع هذا التصنيف تلقائياً في التقرير الشامل وإحصائيات المنصة
-                </p>
-              </div>
-
-              {/* Price on outside (CLIENT TICKET PRICE) */}
-              <div>
-                <label className="block text-xs font-bold text-teal-300 mb-1">
-                  سعر تذكرة العميل (Client Ticket Price) - EGP
-                </label>
-                <input
-                  type="number"
-                  required
-                  value={form.price}
-                  onChange={(e) => setForm({ ...form, price: Number(e.target.value) })}
-                  className="w-full bg-slate-900 border border-teal-500/50 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-teal-400 font-bold font-mono"
-                />
-                <p className="text-[10px] text-slate-400 mt-1">
-                  المبلغ الذي يدفعه العضو/اللاعب لحضور الكلاس (مستقل تماماً ومنفصل عن أجر وحسابات المدربين)
-                </p>
-              </div>
-
-              {/* Times */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">وقت البدء</label>
-                  <input
-                    type="time"
                     required
-                    value={form.startTime}
-                    onChange={(e) => setForm({ ...form, startTime: e.target.value })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-teal-500"
+                    value={form.title}
+                    onChange={(e) => setForm({ ...form, title: e.target.value })}
+                    placeholder="مثال: كروس فيت مكثف، كيك بوكسينغ، يوجا صباحية"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-500 transition"
                   />
                 </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">وقت الانتهاء</label>
+
+                {/* Sport & Hall */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1.5">نوع الرياضة / النشاط</label>
+                    <input
+                      type="text"
+                      value={form.sport}
+                      onChange={(e) => setForm({ ...form, sport: e.target.value })}
+                      placeholder="كروس فيت، لياقة، فنون قتال"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-500 transition"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1.5">القاعة أو الصالة</label>
+                    <input
+                      type="text"
+                      value={form.hall}
+                      onChange={(e) => setForm({ ...form, hall: e.target.value })}
+                      placeholder="القاعة الرئيسية A"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-500 transition"
+                    />
+                  </div>
+                </div>
+
+                {/* Session Category & Ticket Price */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                      تصنيف السيشن (Session Category)
+                    </label>
+                    <select
+                      value={form.sessionCategory}
+                      onChange={(e) => setForm({ ...form, sessionCategory: e.target.value as any })}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-teal-500 font-bold transition"
+                    >
+                      <option value="group">كلاس جماعي (Group Class)</option>
+                      <option value="private">تدريب خاص (Private PT)</option>
+                      <option value="physio">علاج طبيعي وتأهيل (Physio)</option>
+                      <option value="massage">مساج واستشفاء (Massage)</option>
+                      <option value="gym">اشتراك جيم عام (Gym)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-teal-300 mb-1.5">
+                      سعر تذكرة العميل (Client Ticket) - ج.م
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="0"
+                      value={form.price}
+                      onChange={(e) => setForm({ ...form, price: Number(e.target.value) })}
+                      className="w-full bg-slate-900 border border-teal-500/50 rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400 font-bold font-mono transition"
+                    />
+                  </div>
+                </div>
+
+                {/* Duration & Live Mode info */}
+                <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-300">
+                      المدة التقديرية للحصة (بالدقائق)
+                    </label>
+                    <span className="text-[11px] font-bold text-teal-400 bg-teal-500/10 px-2.5 py-0.5 rounded-lg border border-teal-500/20">
+                      {form.durationMinutes} دقيقة
+                    </span>
+                  </div>
                   <input
-                    type="time"
-                    required
-                    value={form.endTime}
-                    onChange={(e) => setForm({ ...form, endTime: e.target.value })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-teal-500"
+                    type="range"
+                    min="15"
+                    max="180"
+                    step="15"
+                    value={form.durationMinutes}
+                    onChange={(e) => setForm({ ...form, durationMinutes: Number(e.target.value) })}
+                    className="w-full accent-teal-400 cursor-pointer"
                   />
+                  <p className="text-[10px] text-slate-400">
+                    💡 <span className="text-teal-300 font-bold">تحكم مباشر:</span> تبدأ الحصة وتنتهي بنقرة زر (بدء الحصة / إنهاء الحصة) بدون أي قيود زمنية جامدة.
+                  </p>
+                </div>
+
+                {/* Coach Selection */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-bold text-slate-300">
+                      اختر المدربين المسؤولين (مدرب أو مدربين اثنين):
+                    </label>
+                    <span className="text-[10px] text-slate-400">
+                      تم اختيار {form.coachIds.length} كابتن
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto p-1 bg-slate-950/40 rounded-2xl border border-slate-800/80">
+                    {coaches.map((c) => {
+                      const isSelected = form.coachIds.includes(c.id);
+                      return (
+                        <button
+                          type="button"
+                          key={c.id}
+                          onClick={() => handleCoachSelect(c.id)}
+                          className={`p-2.5 rounded-xl text-right text-xs transition border flex items-center justify-between cursor-pointer ${
+                            isSelected
+                              ? 'bg-teal-500/20 border-teal-500/80 text-teal-300 font-bold shadow-sm'
+                              : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-teal-400"></span>
+                            <div>
+                              <div className="font-bold">{c.name}</div>
+                              <div className="text-[10px] text-slate-500">{c.specialty}</div>
+                            </div>
+                          </div>
+                          {isSelected && <CheckCircle2 className="w-4 h-4 text-teal-400 shrink-0" />}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 
-              {/* Select 1 or 2 coaches */}
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                  اختر المدربين للحصة (مدرب أو مدربين اثنين):
-                </label>
-                <div className="grid grid-cols-2 gap-2 max-h-36 overflow-y-auto p-1">
-                  {coaches.map((c) => {
-                    const isSelected = form.coachIds.includes(c.id);
-                    return (
-                      <button
-                        type="button"
-                        key={c.id}
-                        onClick={() => handleCoachSelect(c.id)}
-                        className={`p-2 rounded-xl text-right text-xs transition border flex items-center justify-between ${
-                          isSelected
-                            ? 'bg-teal-500/20 border-teal-500 text-teal-300 font-bold'
-                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        <span>{c.name}</span>
-                        {isSelected && <CheckCircle2 className="w-3.5 h-3.5 text-teal-400" />}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3 pt-3">
-                <button
-                  type="submit"
-                  className="flex-1 py-3 px-4 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-black text-xs"
-                >
-                  حفظ الحصة
-                </button>
+              {/* Modal Footer */}
+              <div className="p-4 sm:p-5 border-t border-slate-800 bg-[#0f172a] shrink-0 flex items-center justify-end gap-3">
                 <button
                   type="button"
                   onClick={() => setIsAddModalOpen(false)}
-                  className="py-3 px-4 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs"
+                  className="py-2.5 px-5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs cursor-pointer transition"
                 >
                   إلغاء
+                </button>
+                <button
+                  type="submit"
+                  className="py-2.5 px-6 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-teal-500/20 transition flex items-center gap-1.5"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>حفظ وإضافة الحصة</span>
                 </button>
               </div>
             </form>
@@ -545,83 +609,135 @@ export const SessionsPage: React.FC = () => {
 
       {/* Enroll Player Modal (التسكين الدائم vs التسكين المؤقت لليوم) */}
       {selectedSessionForEnroll && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-700 rounded-3xl max-w-lg w-full p-6 shadow-2xl">
-            <h3 className="text-base font-black text-white mb-1">
-              تسكين لاعب بالحصة (دائم أو مؤقت لحضور اليوم)
-            </h3>
-            <p className="text-xs text-slate-400 mb-4">
-              اختر نوع التسكين: <span className="text-teal-300 font-bold">تسكين دائم</span> لتثبيت اللاعب في الحصة كل أسبوع، أو <span className="text-amber-300 font-bold">تسكين مؤقت</span> لحصة اليوم فقط بدون تغيير جدوله
-            </p>
-
-            <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-              {members.map((m) => {
-                const targetSession = sessions.find((s) => s.id === selectedSessionForEnroll);
-                const isPermanent = targetSession?.enrolledPlayerIds.includes(m.id);
-                const isTemp = (targetSession?.temporaryPlayerIds || []).includes(m.id);
-
-                return (
-                  <div
-                    key={m.id}
-                    className="p-3 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-between text-xs"
-                  >
-                    <div>
-                      <div className="font-bold text-white flex items-center gap-1.5">
-                        <span>{m.name}</span>
-                        {m.type === 'doctor' && (
-                          <span className="text-[9px] bg-purple-500/20 text-purple-300 px-1 rounded">
-                            طبيب
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-[10px] text-slate-400 font-mono">
-                        {m.code} | متبقي: {m.remainingSessions} حصة
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-1.5">
-                      {isPermanent ? (
-                        <span className="text-teal-400 font-bold text-[11px] bg-teal-500/10 px-2 py-1 rounded-lg border border-teal-500/20">
-                          مسجل دائم
-                        </span>
-                      ) : isTemp ? (
-                        <span className="text-amber-300 font-bold text-[11px] bg-amber-500/15 px-2 py-1 rounded-lg border border-amber-500/30">
-                          مسجل مؤقت
-                        </span>
-                      ) : (
-                        <>
-                          <button
-                            onClick={() => {
-                              assignPlayerToSession(selectedSessionForEnroll, m.id, false);
-                              setSelectedSessionForEnroll(null);
-                            }}
-                            className="px-2.5 py-1.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold text-[11px] transition shadow"
-                          >
-                            تسكين دائم
-                          </button>
-                          <button
-                            onClick={() => {
-                              assignPlayerToSession(selectedSessionForEnroll, m.id, true);
-                              setSelectedSessionForEnroll(null);
-                            }}
-                            className="px-2.5 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-slate-950 border border-amber-500/30 font-bold text-[11px] transition"
-                          >
-                            مؤقت اليوم
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-in fade-in">
+          <div className="bg-[#0f172a] border border-slate-700/80 rounded-3xl max-w-xl w-full max-h-[88vh] flex flex-col shadow-2xl overflow-hidden">
+            {/* Header */}
+            <div className="p-5 border-b border-slate-800 flex items-center justify-between shrink-0 bg-[#0f172a]">
+              <div>
+                <h3 className="text-base sm:text-lg font-black text-white">
+                  تسكين لاعب بالحصة
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  اختر بين <span className="text-teal-300 font-bold">تسكين دائم</span> (أسبوعي) أو <span className="text-amber-300 font-bold">تسكين مؤقت</span> (لحصة اليوم فقط)
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedSessionForEnroll(null);
+                  setEnrollSearchQuery('');
+                }}
+                className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+                title="إغلاق"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
 
-            <button
-              onClick={() => setSelectedSessionForEnroll(null)}
-              className="w-full mt-4 py-2.5 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs"
-            >
-              إغلاق
-            </button>
+            {/* Search Input */}
+            <div className="p-4 border-b border-slate-800/80 bg-slate-950/40 shrink-0">
+              <div className="relative">
+                <input
+                  type="text"
+                  value={enrollSearchQuery}
+                  onChange={(e) => setEnrollSearchQuery(e.target.value)}
+                  placeholder="ابحث عن لاعب بالاسم أو الكود أو رقم الهاتف..."
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-teal-500 transition"
+                />
+                <Search className="w-4 h-4 text-slate-500 absolute left-3 top-3 pointer-events-none" />
+              </div>
+            </div>
+
+            {/* Players List */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-2.5 min-h-0">
+              {members
+                .filter((m) => {
+                  if (!enrollSearchQuery.trim()) return true;
+                  const q = enrollSearchQuery.trim().toLowerCase();
+                  return (
+                    m.name.toLowerCase().includes(q) ||
+                    m.code.toLowerCase().includes(q) ||
+                    m.phone.includes(q)
+                  );
+                })
+                .map((m) => {
+                  const targetSession = sessions.find((s) => s.id === selectedSessionForEnroll);
+                  const isPermanent = targetSession?.enrolledPlayerIds.includes(m.id);
+                  const isTemp = (targetSession?.temporaryPlayerIds || []).includes(m.id);
+
+                  return (
+                    <div
+                      key={m.id}
+                      className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 hover:border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs transition"
+                    >
+                      <div>
+                        <div className="font-bold text-white flex items-center gap-1.5">
+                          <span>{m.name}</span>
+                          {m.type === 'doctor' && (
+                            <span className="text-[9px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded font-bold">
+                              طبيب
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-400 font-mono mt-0.5">
+                          كود: {m.code} | متبقي: {m.remainingSessions} حصة | {m.subscriptionPlan}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {isPermanent ? (
+                          <span className="text-teal-400 font-bold text-xs bg-teal-500/10 px-3 py-1.5 rounded-xl border border-teal-500/30">
+                            ✓ مسجل دائم
+                          </span>
+                        ) : isTemp ? (
+                          <span className="text-amber-300 font-bold text-xs bg-amber-500/15 px-3 py-1.5 rounded-xl border border-amber-500/30">
+                            ⏱️ مسجل مؤقت لليوم
+                          </span>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                assignPlayerToSession(selectedSessionForEnroll, m.id, false);
+                                setSelectedSessionForEnroll(null);
+                                setEnrollSearchQuery('');
+                              }}
+                              className="px-3 py-1.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold text-xs transition cursor-pointer shadow-sm"
+                            >
+                              تسكين دائم
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                assignPlayerToSession(selectedSessionForEnroll, m.id, true);
+                                setSelectedSessionForEnroll(null);
+                                setEnrollSearchQuery('');
+                              }}
+                              className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-slate-950 border border-amber-500/40 font-bold text-xs transition cursor-pointer"
+                            >
+                              مؤقت اليوم
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-slate-800 bg-[#0f172a] shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedSessionForEnroll(null);
+                  setEnrollSearchQuery('');
+                }}
+                className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs cursor-pointer transition"
+              >
+                إغلاق
+              </button>
+            </div>
           </div>
         </div>
       )}

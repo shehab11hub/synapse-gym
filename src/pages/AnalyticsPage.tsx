@@ -16,6 +16,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { useGymData } from '../context/GymDataContext';
+import { useAuth } from '../context/AuthContext';
 import { formatEGP } from '../utils/formatters';
 
 type PeriodMode = 'day' | 'month' | 'year';
@@ -36,7 +37,22 @@ const ARABIC_MONTH_LABELS = [
 ];
 
 export const AnalyticsPage: React.FC = () => {
-  const { expenses, cashInflows, transactions, physioBookings, yearlyArchives } = useGymData();
+  const { currentUser } = useAuth();
+  const { expenses, cashInflows, transactions, physioBookings, yearlyArchives, monthlyArchives } = useGymData();
+
+  if (currentUser?.role !== 'admin') {
+    return (
+      <div className="p-8 max-w-xl mx-auto my-20 text-center bg-[#0f172a] border border-slate-800 rounded-3xl p-8 shadow-2xl">
+        <div className="w-16 h-16 rounded-2xl bg-rose-500/10 text-rose-400 mx-auto mb-4 flex items-center justify-center">
+          <AlertCircle className="w-8 h-8" />
+        </div>
+        <h3 className="text-lg font-black text-white mb-2">صفحة مخصصة للمدير العام فقط</h3>
+        <p className="text-xs text-slate-400 leading-relaxed">
+          عفواً، صفحة الرسومات البيانية والتحليلات الإحصائية محجوبة ومقتصرة حصرياً على حساب المدير العام.
+        </p>
+      </div>
+    );
+  }
 
   // Period mode: 'day' | 'month' | 'year'
   const [periodMode, setPeriodMode] = useState<PeriodMode>('month');
@@ -94,12 +110,30 @@ export const AnalyticsPage: React.FC = () => {
       matchDate = (dateStr?: string) => !!dateStr && dateStr.startsWith(String(selectedYear));
     }
 
-    const matchedInflows = cashInflows.filter((inf) => matchDate(inf.date));
-    const matchedExpenses = expenses.filter((exp) => matchDate(exp.date));
-    const matchedTransactions = transactions.filter((tx) => matchDate(tx.timestamp));
-    const matchedPhysio = physioBookings.filter(
+    let matchedInflows = cashInflows.filter((inf) => matchDate(inf.date));
+    let matchedExpenses = expenses.filter((exp) => matchDate(exp.date));
+    let matchedTransactions = transactions.filter((tx) => matchDate(tx.timestamp));
+    let matchedPhysio = physioBookings.filter(
       (b) => b.status === 'completed' && matchDate(b.startTime)
     );
+
+    // If periodMode is month, check offline monthly archive to display historical months seamlessly
+    if (periodMode === 'month') {
+      const monthArch = (monthlyArchives || []).find((a) =>
+        a.month.includes(selectedMonth) || (a.closedAt && a.closedAt.startsWith(selectedMonth))
+      );
+      if (monthArch) {
+        if (matchedInflows.length === 0 && monthArch.cashInflowsSnapshot) {
+          matchedInflows = monthArch.cashInflowsSnapshot.filter((inf) => matchDate(inf.date));
+        }
+        if (matchedExpenses.length === 0 && monthArch.expensesSnapshot) {
+          matchedExpenses = monthArch.expensesSnapshot.filter((exp) => matchDate(exp.date));
+        }
+        if (matchedTransactions.length === 0 && monthArch.posTransactionsSnapshot) {
+          matchedTransactions = monthArch.posTransactionsSnapshot.filter((tx) => matchDate(tx.timestamp));
+        }
+      }
+    }
 
     return {
       inflows: matchedInflows,
@@ -112,6 +146,7 @@ export const AnalyticsPage: React.FC = () => {
     expenses,
     transactions,
     physioBookings,
+    monthlyArchives,
     periodMode,
     selectedDate,
     selectedMonth,

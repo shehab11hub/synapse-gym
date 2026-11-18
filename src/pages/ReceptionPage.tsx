@@ -79,25 +79,29 @@ export const ReceptionPage: React.FC = () => {
   const [checkedInMember, setCheckedInMember] = useState<Member | null>(null);
   const [isAddMemberModalOpen, setIsAddMemberModalOpen] = useState(false);
 
-  // Seating & Routing Modal state
+  // Seating & Routing Modal state (3 Distinct Business Pathways)
   const [isSeatingModalOpen, setIsSeatingModalOpen] = useState(false);
   const [selectedLogForSeating, setSelectedLogForSeating] = useState<CheckInLog | null>(null);
   const [seatingForm, setSeatingForm] = useState<{
-    category: SessionCategory;
-    coachId: string;
+    pathway: 'coach_debt' | 'gym_with_coach_share' | 'gym_direct_no_coach';
     sessionId: string;
-    roomName: string;
-    notes: string;
-    paymentMode: 'coach_charge' | 'cash_drawer' | 'instapay';
+    coachId: string;
     amount: number;
+    coachShareType: 'fixed' | 'percentage';
+    coachShareValue: number;
+    paymentMode: 'coach_charge' | 'cash_drawer';
+    isDirectPaid: boolean;
+    notes: string;
   }>({
-    category: 'gym',
-    coachId: '',
+    pathway: 'coach_debt',
     sessionId: '',
-    roomName: 'غرفة المساج والاستشفاء 1',
-    notes: '',
-    paymentMode: 'coach_charge',
+    coachId: '',
     amount: 100,
+    coachShareType: 'fixed',
+    coachShareValue: 50,
+    paymentMode: 'coach_charge',
+    isDirectPaid: false,
+    notes: '',
   });
 
   const getDefaultFeeForCategory = (cat: SessionCategory, coachId?: string, sessId?: string) => {
@@ -191,23 +195,28 @@ export const ReceptionPage: React.FC = () => {
     handleTriggerCheckIn(randomMember, 'qr');
   };
 
-  // Open Seating Modal
+  // Open Seating Modal (3 Pathways Architecture)
   const openSeatingModal = (log: CheckInLog) => {
     setSelectedLogForSeating(log);
-    const defaultCoach = log.assignedCoachId || coaches[0]?.id || '';
-    const defaultCategory = log.assignedCategory || 'gym';
     const defaultSession = log.assignedSessionId || (sessions[0]?.id || '');
-    const defaultAmount =
-      log.chargedAmount || getDefaultFeeForCategory(defaultCategory, defaultCoach, defaultSession);
+    const sess = sessions.find((s) => s.id === defaultSession) || sessions[0];
+    const defaultCoach = log.assignedCoachId || sess?.coachIds[0] || coaches[0]?.id || '';
+    const initialPrice = sess?.price || 100;
+    const coachObj = coaches.find((c) => c.id === defaultCoach);
+    const initialCoachShare = coachObj?.ratePerSession || 50;
+
+    const initialPathway = log.seatingPathway || (sessions.length > 0 ? 'coach_debt' : 'gym_direct_no_coach');
 
     setSeatingForm({
-      category: defaultCategory,
-      coachId: defaultCoach,
-      sessionId: defaultSession,
-      roomName: 'غرفة المساج والاستشفاء 1',
+      pathway: initialPathway,
+      sessionId: sess?.id || defaultSession || '',
+      coachId: defaultCoach || '',
+      amount: initialPrice,
+      coachShareType: coachObj?.paymentType === 'percentage' ? 'percentage' : 'fixed',
+      coachShareValue: coachObj?.paymentType === 'percentage' ? (coachObj.commissionRate || 40) : initialCoachShare,
+      paymentMode: initialPathway === 'coach_debt' ? 'coach_charge' : 'cash_drawer',
+      isDirectPaid: false,
       notes: '',
-      paymentMode: log.paymentMode || 'coach_charge',
-      amount: defaultAmount,
     });
     setIsSeatingModalOpen(true);
   };
@@ -217,16 +226,57 @@ export const ReceptionPage: React.FC = () => {
     e.preventDefault();
     if (!selectedLogForSeating) return;
 
+    let targetCoachId = seatingForm.coachId;
+    let targetSessionId = seatingForm.sessionId;
+    let category: SessionCategory = 'group';
+
+    if (seatingForm.pathway === 'gym_direct_no_coach') {
+      targetCoachId = '';
+      targetSessionId = '';
+      category = 'gym';
+    } else {
+      const sess = sessions.find((s) => s.id === seatingForm.sessionId);
+      if (sess && sess.coachIds.length > 0) {
+        targetCoachId = sess.coachIds[0];
+      }
+      if (!targetCoachId && coaches.length > 0) {
+        targetCoachId = coaches[0].id;
+      }
+    }
+
+    const totalPaid = Number(seatingForm.amount) || 0;
+    let coachShare = 0;
+    if (seatingForm.pathway === 'gym_with_coach_share') {
+      if (seatingForm.coachShareType === 'fixed') {
+        coachShare = Math.min(totalPaid, Number(seatingForm.coachShareValue) || 0);
+      } else {
+        const pct = Number(seatingForm.coachShareValue) || 0;
+        coachShare = Math.round((totalPaid * pct) / 100);
+      }
+    }
+    const gymShare = Math.max(0, totalPaid - coachShare);
+
+    const paidAmount =
+      seatingForm.pathway === 'coach_debt'
+        ? 0
+        : seatingForm.pathway === 'gym_direct_no_coach'
+        ? (seatingForm.isDirectPaid ? totalPaid : 0)
+        : totalPaid;
+
     assignArrivedMember(
       selectedLogForSeating.id,
-      seatingForm.category,
-      seatingForm.coachId,
-      seatingForm.sessionId || undefined,
+      category,
+      targetCoachId,
+      targetSessionId || undefined,
       seatingForm.notes,
       {
-        paymentMode: seatingForm.paymentMode,
-        amount: Number(seatingForm.amount) || 0,
-        roomName: seatingForm.roomName,
+        seatingPathway: seatingForm.pathway,
+        paymentMode: seatingForm.pathway === 'coach_debt' ? 'coach_charge' : 'cash_drawer',
+        amount: paidAmount,
+        coachShareType: seatingForm.coachShareType,
+        coachShareValue: Number(seatingForm.coachShareValue) || 0,
+        coachShareAmount: coachShare,
+        gymShareAmount: gymShare,
       }
     );
 
@@ -1017,339 +1067,424 @@ export const ReceptionPage: React.FC = () => {
             </div>
 
             {/* Scrollable Form Body */}
-            <form onSubmit={handleConfirmSeating} className="flex flex-col flex-1 overflow-hidden min-h-0 pt-3">
-              <div className="overflow-y-auto flex-1 space-y-4 pr-1 pl-1">
-                {/* 1. Activity Category Selector */}
+            <form onSubmit={handleConfirmSeating} className="flex flex-col flex-1 overflow-hidden min-h-0 pt-4">
+              <div className="overflow-y-auto flex-1 space-y-5 pr-1 pl-1">
+                {/* 1. The 3 Primary Pathways Selector */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-2">
-                    اختر وجهة ونوع نشاط اللاعب الآن:
+                  <label className="block text-xs font-bold text-slate-300 mb-2.5">
+                    اختر مسار توجيه اللاعب والمحاسبة المالية (3 مسارات رئيسية):
                   </label>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {/* Pathway 1: Coach Debt */}
                     <button
                       type="button"
                       onClick={() =>
                         setSeatingForm((prev) => ({
                           ...prev,
-                          category: 'massage',
-                          amount: getDefaultFeeForCategory('massage', prev.coachId),
+                          pathway: 'coach_debt',
+                          sessionId: prev.sessionId || (sessions[0]?.id || ''),
+                          coachId: prev.sessionId
+                            ? sessions.find((s) => s.id === prev.sessionId)?.coachIds[0] || prev.coachId
+                            : sessions[0]?.coachIds[0] || prev.coachId,
                         }))
                       }
-                      className={`p-3 rounded-2xl border text-right transition flex flex-col items-start gap-1 cursor-pointer ${
-                        seatingForm.category === 'massage'
-                          ? 'bg-purple-500/20 border-purple-500 text-purple-300 font-bold shadow-md shadow-purple-500/10'
-                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                      className={`p-3.5 rounded-2xl border text-right transition flex flex-col justify-between gap-2 cursor-pointer ${
+                        seatingForm.pathway === 'coach_debt'
+                          ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold shadow-lg shadow-amber-500/10 ring-1 ring-amber-500/50'
+                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800/60'
                       }`}
                     >
-                      <div className="flex items-center gap-1.5 text-xs font-black">
-                        <HeartHandshake className="w-4 h-4 text-purple-400 shrink-0" />
-                        <span>💆‍♂️ مساج واستشفاء</span>
+                      <div className="flex items-center gap-2">
+                        <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 shrink-0">
+                          <Flame className="w-5 h-5" />
+                        </div>
+                        <div className="text-xs font-black">1. الحساب على الكابتن</div>
                       </div>
-                      <div className="text-[10px] text-slate-400 leading-relaxed">
-                        غرفة المساج (يبدأ بالانتظار ثم عداد الجلسة)
+                      <div className="text-[11px] text-slate-400 leading-relaxed">
+                        اللاعب داخل حصة مع الكابتن، والفلوس تتحمل كمديونية على الكابتن بعد نهاية الحصة.
                       </div>
                     </button>
 
+                    {/* Pathway 2: Gym Collected with Coach Share */}
                     <button
                       type="button"
                       onClick={() =>
                         setSeatingForm((prev) => ({
                           ...prev,
-                          category: 'private',
-                          amount: getDefaultFeeForCategory('private', prev.coachId),
+                          pathway: 'gym_with_coach_share',
+                          sessionId: prev.sessionId || (sessions[0]?.id || ''),
+                          coachId: prev.sessionId
+                            ? sessions.find((s) => s.id === prev.sessionId)?.coachIds[0] || prev.coachId
+                            : sessions[0]?.coachIds[0] || prev.coachId,
+                          amount: prev.amount || (sessions[0]?.price || 150),
                         }))
                       }
-                      className={`p-3 rounded-2xl border text-right transition flex flex-col items-start gap-1 cursor-pointer ${
-                        seatingForm.category === 'private'
-                          ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold shadow-md shadow-amber-500/10'
-                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                      className={`p-3.5 rounded-2xl border text-right transition flex flex-col justify-between gap-2 cursor-pointer ${
+                        seatingForm.pathway === 'gym_with_coach_share'
+                          ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 font-bold shadow-lg shadow-emerald-500/10 ring-1 ring-emerald-500/50'
+                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800/60'
                       }`}
                     >
-                      <div className="flex items-center gap-1.5 text-xs font-black">
-                        <Flame className="w-4 h-4 text-amber-400 shrink-0" />
-                        <span>🏋️‍♂️ تدريب خاص (برايفت PT)</span>
+                      <div className="flex items-center gap-2">
+                        <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 shrink-0">
+                          <Banknote className="w-5 h-5" />
+                        </div>
+                        <div className="text-xs font-black">2. الدفع للجيم (للكابتن نسبة)</div>
                       </div>
-                      <div className="text-[10px] text-slate-400 leading-relaxed">
-                        تمرين فردي مباشر وخاص مع الكابتن
+                      <div className="text-[11px] text-slate-400 leading-relaxed">
+                        اللاعب يدفع للجيم بالاستقبال، وللكابتن نسبة أو قيمة ثابتة (الكابتن ليه فلوس).
                       </div>
                     </button>
 
+                    {/* Pathway 3: Direct Gym / No Coach */}
                     <button
                       type="button"
                       onClick={() =>
                         setSeatingForm((prev) => ({
                           ...prev,
-                          category: 'group',
-                          amount: getDefaultFeeForCategory('group', prev.coachId, prev.sessionId),
+                          pathway: 'gym_direct_no_coach',
+                          sessionId: '',
+                          coachId: '',
+                          amount: 80,
                         }))
                       }
-                      className={`p-3 rounded-2xl border text-right transition flex flex-col items-start gap-1 cursor-pointer ${
-                        seatingForm.category === 'group'
-                          ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300 font-bold shadow-md shadow-cyan-500/10'
-                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                      className={`p-3.5 rounded-2xl border text-right transition flex flex-col justify-between gap-2 cursor-pointer ${
+                        seatingForm.pathway === 'gym_direct_no_coach'
+                          ? 'bg-teal-500/20 border-teal-500 text-teal-300 font-bold shadow-lg shadow-teal-500/10 ring-1 ring-teal-500/50'
+                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800/60'
                       }`}
                     >
-                      <div className="flex items-center gap-1.5 text-xs font-black">
-                        <Users className="w-4 h-4 text-cyan-400 shrink-0" />
-                        <span>👥 كلاس تدريبي جماعي</span>
+                      <div className="flex items-center gap-2">
+                        <div className="p-2 rounded-xl bg-teal-500/10 text-teal-400 shrink-0">
+                          <Dumbbell className="w-5 h-5" />
+                        </div>
+                        <div className="text-xs font-black">3. تمرين حر (بدون مدرب)</div>
                       </div>
-                      <div className="text-[10px] text-slate-400 leading-relaxed">
-                        حصة جماعية (كروس فيت، سبينينغ، ملاكمة)
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setSeatingForm((prev) => ({
-                          ...prev,
-                          category: 'gym',
-                          amount: getDefaultFeeForCategory('gym', prev.coachId, prev.sessionId),
-                        }))
-                      }
-                      className={`p-3 rounded-2xl border text-right transition flex flex-col items-start gap-1 cursor-pointer ${
-                        seatingForm.category === 'gym'
-                          ? 'bg-teal-500/20 border-teal-500 text-teal-300 font-bold shadow-md shadow-teal-500/10'
-                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      <div className="flex items-center gap-1.5 text-xs font-black">
-                        <Dumbbell className="w-4 h-4 text-teal-400 shrink-0" />
-                        <span>⚡ صالة الجيم العامة</span>
-                      </div>
-                      <div className="text-[10px] text-slate-400 leading-relaxed">
-                        تمرين حر في أجهزة وأوزان الجيم
+                      <div className="text-[11px] text-slate-400 leading-relaxed">
+                        اللاعب يتمرن مع نفسه بصالة الجيم (اشتراك ساري أو دفع مباشر)، 100% للجيم بدون كابتن.
                       </div>
                     </button>
                   </div>
                 </div>
 
-                {/* 2. Coach Selection (مع كابتن مين) */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">
-                    مع كابتن مين (اختيار المدرب المسؤول):
-                  </label>
-                  <select
-                    required
-                    value={seatingForm.coachId}
-                    onChange={(e) => {
-                      const cId = e.target.value;
-                      setSeatingForm((prev) => ({
-                        ...prev,
-                        coachId: cId,
-                        amount: prev.amount || getDefaultFeeForCategory(prev.category, cId, prev.sessionId),
-                      }));
-                    }}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-teal-500"
-                  >
-                    <option value="">-- اختر الكابتن --</option>
-                    {coaches.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} ({c.specialty})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* 3. Session Selection for Group/Private/Gym */}
-                {(seatingForm.category === 'group' ||
-                  seatingForm.category === 'private' ||
-                  seatingForm.category === 'gym') && (
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-1">
-                      اختر الحصة التدريبية لتسكين اللاعب بها:
+                {/* Details Section for Pathway 1: Coach Debt */}
+                {seatingForm.pathway === 'coach_debt' && (
+                  <div className="p-4 rounded-2xl bg-amber-950/20 border border-amber-500/30 space-y-3 animate-scale-up">
+                    <label className="block text-xs font-black text-amber-300 flex items-center gap-1.5">
+                      <Users className="w-4 h-4 text-amber-400" />
+                      <span>اختر الحصة التدريبية لتسكين اللاعب بها:</span>
                     </label>
-                    <select
-                      value={seatingForm.sessionId}
-                      onChange={(e) => {
-                        const sId = e.target.value;
-                        const s = sessions.find((sess) => sess.id === sId);
-                        setSeatingForm((prev) => ({
-                          ...prev,
-                          sessionId: sId,
-                          amount: s ? s.price : prev.amount,
-                        }));
-                      }}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-teal-500"
-                    >
-                      <option value="">-- تسكين مباشر مع الكابتن المختار --</option>
-                      {sessions.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.title} ({s.startTime} - {s.endTime}) - {s.hall || 'القاعة الرئيسية'}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
 
-                {/* 4. Room Name for Massage */}
-                {seatingForm.category === 'massage' && (
-                  <div className="p-3.5 rounded-2xl bg-purple-950/30 border border-purple-500/30 space-y-2">
-                    <div className="text-xs font-bold text-purple-300">
-                      غرفة المساج والاستشفاء:
-                    </div>
-                    <input
-                      type="text"
-                      value={seatingForm.roomName}
-                      onChange={(e) => setSeatingForm({ ...seatingForm, roomName: e.target.value })}
-                      placeholder="غرفة المساج والاستشفاء 1"
-                      className="w-full bg-slate-900 border border-purple-500/40 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
-                    />
-                    <p className="text-[10px] text-purple-300/80">
-                      💡 ستظهر الجلسة فوراً في صفحة العلاج الطبيعي والمساج بحالة <strong>"في الانتظار"</strong>، وعند دخول الغرفة يضغط المدرب <strong>"بدء الجلسة"</strong> لتشغيل العداد.
-                    </p>
-                  </div>
-                )}
-
-                {/* 5. PAYMENT HANDLING (التحميل على المدرب أو دفع كاش بالدرج) */}
-                <div className="p-4 rounded-2xl bg-slate-900/90 border border-teal-500/40 space-y-3 shadow-lg">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-black text-white flex items-center gap-1.5">
-                      <Banknote className="w-4 h-4 text-teal-400" />
-                      <span>طريقة المحاسبة (التحميل على المدرب أو الدفع كاش بالدرج):</span>
-                    </label>
-                    <span className="text-[10px] text-teal-300 font-bold">
-                      {seatingForm.paymentMode === 'coach_charge'
-                        ? 'تحميل على الكوتش'
-                        : seatingForm.paymentMode === 'cash_drawer'
-                        ? 'كاش بالدرج'
-                        : 'إنستاباي'}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
-                    {/* Option 1: تحميل على المدرب */}
-                    <button
-                      type="button"
-                      onClick={() => setSeatingForm({ ...seatingForm, paymentMode: 'coach_charge' })}
-                      className={`p-3 rounded-2xl border text-right transition flex flex-col gap-1 cursor-pointer ${
-                        seatingForm.paymentMode === 'coach_charge'
-                          ? 'bg-amber-500/20 border-amber-500 text-amber-300 ring-1 ring-amber-500/50 shadow-md shadow-amber-500/10'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between w-full">
-                        <span className="font-black text-xs flex items-center gap-1.5">
-                          <User className="w-4 h-4 text-amber-400" />
-                          <span>تحميل على المدرب</span>
-                        </span>
-                        {seatingForm.paymentMode === 'coach_charge' && (
-                          <CheckCircle2 className="w-4 h-4 text-amber-400" />
-                        )}
-                      </div>
-                      <p className="text-[10px] text-slate-400 leading-relaxed">
-                        يضاف على الكوتش كمديونية مستحقة للجيم
-                      </p>
-                    </button>
-
-                    {/* Option 2: دفع كاش بالدرج */}
-                    <button
-                      type="button"
-                      onClick={() => setSeatingForm({ ...seatingForm, paymentMode: 'cash_drawer' })}
-                      className={`p-3 rounded-2xl border text-right transition flex flex-col gap-1 cursor-pointer ${
-                        seatingForm.paymentMode === 'cash_drawer'
-                          ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 ring-1 ring-emerald-500/50 shadow-md shadow-emerald-500/10'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between w-full">
-                        <span className="font-black text-xs flex items-center gap-1.5">
-                          <Banknote className="w-4 h-4 text-emerald-400" />
-                          <span>دفع كاش بالاستقبال</span>
-                        </span>
-                        {seatingForm.paymentMode === 'cash_drawer' && (
-                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                        )}
-                      </div>
-                      <p className="text-[10px] text-slate-400 leading-relaxed">
-                        الفلوس تروح فوراً للمصاريف وإدارة الدرج
-                      </p>
-                    </button>
-                  </div>
-
-                  {/* Amount input & Quick Chips */}
-                  <div className="pt-2 border-t border-slate-800/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                    <div className="w-full sm:w-auto">
-                      <label className="block text-[11px] font-bold text-slate-300 mb-1">
-                        المبلغ المطلوب تحصيله أو تحميله (ج.م):
-                      </label>
-                      <div className="relative">
-                        <input
-                          type="number"
-                          min="0"
-                          required
-                          value={seatingForm.amount}
-                          onChange={(e) =>
-                            setSeatingForm({ ...seatingForm, amount: Number(e.target.value) })
-                          }
-                          className="w-full sm:w-36 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs font-black font-mono text-teal-400 focus:outline-none focus:border-teal-500"
-                        />
-                        <span className="absolute left-2.5 top-2 text-[10px] text-slate-500 font-bold">
-                          ج.م
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Quick Value Chips */}
-                    <div className="flex flex-wrap items-center gap-1.5 self-end sm:self-center">
-                      {[80, 100, 150, 180, 200].map((val) => (
-                        <button
-                          key={val}
-                          type="button"
-                          onClick={() => setSeatingForm({ ...seatingForm, amount: val })}
-                          className={`px-2 py-1 rounded-lg text-[10px] font-mono font-bold transition cursor-pointer ${
-                            seatingForm.amount === val
-                              ? 'bg-teal-500 text-slate-950'
-                              : 'bg-slate-800 text-slate-400 hover:text-white'
-                          }`}
-                        >
-                          {val} ج.م
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Dynamic Feedback Alert */}
-                  <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-[11px] leading-relaxed">
-                    {seatingForm.paymentMode === 'coach_charge' ? (
-                      <span className="text-amber-300 font-medium flex items-center gap-1.5">
-                        <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                        <span>
-                          💡 سيتم تحميل <strong>{formatEGP(seatingForm.amount)}</strong> كمديونية على الكابتن المسؤول، وتسمع في صفحة حسابات المدربين والتقرير الشامل بحالة <strong>"تحميل"</strong>.
-                        </span>
-                      </span>
+                    {sessions.length > 0 ? (
+                      <select
+                        required
+                        value={seatingForm.sessionId}
+                        onChange={(e) => {
+                          const sId = e.target.value;
+                          const targetSess = sessions.find((s) => s.id === sId);
+                          const targetCoach = targetSess?.coachIds[0]
+                            ? coaches.find((c) => c.id === targetSess.coachIds[0])
+                            : coaches[0];
+                          setSeatingForm((prev) => ({
+                            ...prev,
+                            sessionId: sId,
+                            coachId: targetCoach?.id || prev.coachId,
+                            amount: targetSess?.price || prev.amount,
+                          }));
+                        }}
+                        className="w-full bg-slate-900 border border-amber-500/40 rounded-xl px-3.5 py-3 text-xs font-bold text-white focus:outline-none focus:border-amber-400 cursor-pointer"
+                      >
+                        <option value="">-- اضغط لاختيار الحصة المجدولة --</option>
+                        {sessions.map((s) => {
+                          const coachNames = s.coachIds
+                            .map((cid) => coaches.find((c) => c.id === cid)?.name)
+                            .filter(Boolean)
+                            .join('، ');
+                          return (
+                            <option key={s.id} value={s.id}>
+                              {s.title} ({s.sport}) {coachNames ? `- كابتن: ${coachNames}` : ''} {s.hall ? `[${s.hall}]` : ''} - سعر التذكرة: {s.price} ج.م
+                            </option>
+                          );
+                        })}
+                      </select>
                     ) : (
-                      <span className="text-emerald-300 font-medium flex items-center gap-1.5">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                        <span>
-                          💵 سيتم توريد <strong>{formatEGP(seatingForm.amount)}</strong> كاش فوراً إلى الخزينة، وتزيد رصيد الدرج في صفحة المصاريف تلقائياً.
-                        </span>
-                      </span>
+                      <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 text-xs text-amber-300">
+                        لا توجد حصص مضافة حالياً. يرجى إضافة حصص جديدة من صفحة الحصص أولاً.
+                      </div>
                     )}
-                  </div>
-                </div>
 
-                {/* Notes */}
+                    {seatingForm.sessionId && (
+                      <div className="p-3 rounded-xl bg-slate-900/80 border border-amber-500/20 text-xs text-slate-300 space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-400">الحصة المحددة:</span>
+                          <span className="font-bold text-amber-300">
+                            {sessions.find((s) => s.id === seatingForm.sessionId)?.title}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-400">الكابتن المسؤول:</span>
+                          <span className="font-bold text-white">
+                            {coaches.find((c) => c.id === seatingForm.coachId)?.name || 'الكابتن المسؤول'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-400">قيمة تذكرة الحصة:</span>
+                          <span className="font-bold text-teal-400">
+                            {formatEGP(sessions.find((s) => s.id === seatingForm.sessionId)?.price || 0)}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-200 flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                      <span>
+                        سيتم تسكين اللاعب فوراً في الحصة ويظهر اسمه بصفحة الحصص، والتحميل المالي كمديونية على الكابتن يُحسب تلقائياً فقط عند بدء وإنهاء الحصة رسمياً.
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Details Section for Pathway 2: Gym Collected with Coach Share */}
+                {seatingForm.pathway === 'gym_with_coach_share' && (
+                  <div className="p-4 rounded-2xl bg-emerald-950/20 border border-emerald-500/30 space-y-4 animate-scale-up">
+                    <div>
+                      <label className="block text-xs font-black text-emerald-300 mb-1.5 flex items-center gap-1.5">
+                        <Users className="w-4 h-4 text-emerald-400" />
+                        <span>اختر الحصة التدريبية:</span>
+                      </label>
+                      <select
+                        required
+                        value={seatingForm.sessionId}
+                        onChange={(e) => {
+                          const sId = e.target.value;
+                          const targetSess = sessions.find((s) => s.id === sId);
+                          const targetCoach = targetSess?.coachIds[0]
+                            ? coaches.find((c) => c.id === targetSess.coachIds[0])
+                            : coaches[0];
+                          const newPrice = targetSess?.price || 150;
+                          setSeatingForm((prev) => ({
+                            ...prev,
+                            sessionId: sId,
+                            coachId: targetCoach?.id || prev.coachId,
+                            amount: newPrice,
+                            coachShareType: targetCoach?.paymentType === 'percentage' ? 'percentage' : prev.coachShareType,
+                            coachShareValue:
+                              targetCoach?.paymentType === 'percentage'
+                                ? targetCoach.commissionRate || 40
+                                : targetCoach?.ratePerSession || 50,
+                          }));
+                        }}
+                        className="w-full bg-slate-900 border border-emerald-500/40 rounded-xl px-3.5 py-3 text-xs font-bold text-white focus:outline-none focus:border-emerald-400 cursor-pointer"
+                      >
+                        <option value="">-- اضغط لاختيار الحصة من القائمة --</option>
+                        {sessions.map((s) => {
+                          const coachNames = s.coachIds
+                            .map((cid) => coaches.find((c) => c.id === cid)?.name)
+                            .filter(Boolean)
+                            .join('، ');
+                          return (
+                            <option key={s.id} value={s.id}>
+                              {s.title} ({s.sport}) {coachNames ? `- كابتن: ${coachNames}` : ''} - سعر: {s.price} ج.م
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                      {/* Amount Paid at Reception */}
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                          المبلغ المدفوع بالاستقبال كاش (ج.م):
+                        </label>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            min="0"
+                            required
+                            value={seatingForm.amount}
+                            onChange={(e) =>
+                              setSeatingForm({ ...seatingForm, amount: Number(e.target.value) })
+                            }
+                            className="w-full bg-slate-900 border border-emerald-500/40 rounded-xl px-3 py-2 text-xs font-black font-mono text-emerald-400 focus:outline-none focus:border-emerald-400"
+                          />
+                          <span className="absolute left-2.5 top-2 text-[10px] text-slate-500 font-bold">
+                            ج.م
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Coach Share Calculation Method */}
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                          طريقة حساب نصيب ومستحقات الكابتن:
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setSeatingForm({ ...seatingForm, coachShareType: 'fixed', coachShareValue: 50 })}
+                            className={`flex-1 py-1.5 px-2 rounded-xl text-[11px] font-bold border transition cursor-pointer ${
+                              seatingForm.coachShareType === 'fixed'
+                                ? 'bg-emerald-500 text-slate-950 border-emerald-500'
+                                : 'bg-slate-900 text-slate-400 border-slate-800'
+                            }`}
+                          >
+                            قيمة ثابتة (ج.م)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSeatingForm({ ...seatingForm, coachShareType: 'percentage', coachShareValue: 40 })}
+                            className={`flex-1 py-1.5 px-2 rounded-xl text-[11px] font-bold border transition cursor-pointer ${
+                              seatingForm.coachShareType === 'percentage'
+                                ? 'bg-emerald-500 text-slate-950 border-emerald-500'
+                                : 'bg-slate-900 text-slate-400 border-slate-800'
+                            }`}
+                          >
+                            نسبة مئوية (%)
+                          </button>
+                        </div>
+                        <div className="mt-1.5 relative">
+                          <input
+                            type="number"
+                            min="0"
+                            max={seatingForm.coachShareType === 'percentage' ? 100 : undefined}
+                            required
+                            value={seatingForm.coachShareValue}
+                            onChange={(e) =>
+                              setSeatingForm({
+                                ...seatingForm,
+                                coachShareValue: Number(e.target.value),
+                              })
+                            }
+                            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-emerald-400"
+                          />
+                          <span className="absolute left-2.5 top-1.5 text-[10px] text-slate-500 font-bold">
+                            {seatingForm.coachShareType === 'percentage' ? '%' : 'ج.م'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Instant Live Split Preview */}
+                    {(() => {
+                      const totalPaid = Number(seatingForm.amount) || 0;
+                      const coachCut =
+                        seatingForm.coachShareType === 'fixed'
+                          ? Math.min(totalPaid, Number(seatingForm.coachShareValue) || 0)
+                          : Math.round((totalPaid * (Number(seatingForm.coachShareValue) || 0)) / 100);
+                      const gymCut = Math.max(0, totalPaid - coachCut);
+
+                      return (
+                        <div className="p-3 rounded-xl bg-slate-900/90 border border-emerald-500/30 text-xs space-y-1.5">
+                          <div className="text-[11px] font-black text-emerald-400 mb-1">
+                            ملخص التوزيع المالي الفوري للحركة:
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-slate-300">💵 إجمالي الكاش الوارد للدرج الآن:</span>
+                            <span className="font-bold text-emerald-300">{formatEGP(totalPaid)}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-slate-300">👤 نصيب ومستحقات الكابتن (له فلوس):</span>
+                            <span className="font-bold text-amber-300">{formatEGP(coachCut)}</span>
+                          </div>
+                          <div className="flex items-center justify-between pt-1 border-t border-slate-800">
+                            <span className="text-slate-300">🏢 صافي إيراد الجيم:</span>
+                            <span className="font-bold text-teal-400">{formatEGP(gymCut)}</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+
+                {/* Details Section for Pathway 3: Direct Gym / No Coach */}
+                {seatingForm.pathway === 'gym_direct_no_coach' && (
+                  <div className="p-4 rounded-2xl bg-teal-950/20 border border-teal-500/30 space-y-3.5 animate-scale-up">
+                    <label className="block text-xs font-black text-teal-300">
+                      طبيعة اشتراك أو دخول اللاعب للصالة:
+                    </label>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => setSeatingForm({ ...seatingForm, isDirectPaid: false, amount: 0 })}
+                        className={`p-3 rounded-xl border text-right transition cursor-pointer ${
+                          !seatingForm.isDirectPaid
+                            ? 'bg-teal-500/20 border-teal-500 text-teal-300 font-bold ring-1 ring-teal-500/50'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <div className="text-xs font-black">اشتراك شهري ساري مسبقاً</div>
+                        <div className="text-[10px] text-slate-400 mt-0.5">0.00 ج.م كاش (مخصوم من اشتراكه)</div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setSeatingForm({ ...seatingForm, isDirectPaid: true, amount: 80 })}
+                        className={`p-3 rounded-xl border text-right transition cursor-pointer ${
+                          seatingForm.isDirectPaid
+                            ? 'bg-teal-500/20 border-teal-500 text-teal-300 font-bold ring-1 ring-teal-500/50'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <div className="text-xs font-black">دفع كاش بالاستقبال (تذكرة/اشتراك)</div>
+                        <div className="text-[10px] text-slate-400 mt-0.5">توريد كاش كامل للدرج</div>
+                      </button>
+                    </div>
+
+                    {seatingForm.isDirectPaid && (
+                      <div className="pt-1">
+                        <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                          المبلغ المطلوب تحصيله كاش بالدرج (ج.م):
+                        </label>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            min="0"
+                            required
+                            value={seatingForm.amount}
+                            onChange={(e) =>
+                              setSeatingForm({ ...seatingForm, amount: Number(e.target.value) })
+                            }
+                            className="w-full bg-slate-900 border border-teal-500/40 rounded-xl px-3 py-2 text-xs font-black font-mono text-teal-400 focus:outline-none focus:border-teal-400"
+                          />
+                          <span className="absolute left-2.5 top-2 text-[10px] text-slate-500 font-bold">
+                            ج.م
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="p-2.5 rounded-xl bg-teal-500/10 border border-teal-500/30 text-[11px] text-teal-200">
+                      💡 المتدرب داخل تمرين حر بأجهزة وأوزان الجيم لحساب الجيم مباشرة، بدون أي كابتن وبدون أي تحميلات أو مستحقات لأي مدرب (100% للجيم).
+                    </div>
+                  </div>
+                )}
+
+                {/* Optional Notes */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">
+                  <label className="block text-xs font-bold text-slate-400 mb-1">
                     ملاحظات إضافية (اختياري):
                   </label>
                   <input
                     type="text"
                     value={seatingForm.notes}
                     onChange={(e) => setSeatingForm({ ...seatingForm, notes: e.target.value })}
-                    placeholder="مثال: اللاعب يركز على عضلات الظهر اليوم..."
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-teal-500"
+                    placeholder="أي ملاحظات خاصة بالتسكين..."
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-teal-500"
                   />
                 </div>
               </div>
 
               {/* Modal Fixed Footer Actions */}
-              <div className="flex items-center gap-3 pt-3 mt-2 border-t border-slate-800 shrink-0">
+              <div className="flex items-center gap-3 pt-4 mt-3 border-t border-slate-800 shrink-0">
                 <button
                   type="submit"
-                  className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black text-xs shadow-lg shadow-teal-500/20 transition cursor-pointer"
+                  className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black text-xs shadow-lg shadow-teal-500/20 transition cursor-pointer flex items-center justify-center gap-2"
                 >
-                  تأكيد التسكين والتوجيه فوراً
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>تأكيد التسكين والتوجيه فوراً</span>
                 </button>
                 <button
                   type="button"
@@ -1357,7 +1492,7 @@ export const ReceptionPage: React.FC = () => {
                     setIsSeatingModalOpen(false);
                     setSelectedLogForSeating(null);
                   }}
-                  className="py-3 px-4 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs hover:bg-slate-700 cursor-pointer"
+                  className="py-3 px-5 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs hover:bg-slate-700 cursor-pointer"
                 >
                   إلغاء
                 </button>

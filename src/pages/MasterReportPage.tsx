@@ -28,6 +28,7 @@ import {
   ShieldCheck,
   Archive,
   Database,
+  Printer,
   FileCheck,
   X,
 } from 'lucide-react';
@@ -36,6 +37,11 @@ import { useAuth } from '../context/AuthContext';
 import { MasterReportEntry, SessionCategory, Coach, ExpenseItem, CashInflowItem } from '../types';
 import { formatEGP, formatDateAr } from '../utils/formatters';
 import { sounds } from '../utils/sound';
+import {
+  printDailyShiftReportPDF,
+  printMonthlyMasterReportPDF,
+  printYearlyArchiveReportPDF,
+} from '../utils/pdfExport';
 
 export const ARABIC_MONTH_NAMES = [
   'يناير',
@@ -80,7 +86,10 @@ export const MasterReportPage: React.FC = () => {
     dailyShiftClosings,
     closeDailyShift,
     getTodayShiftStatus,
+    getRunningOperations,
     exportDailyShiftXLSX,
+    transactions,
+    trainerTransactions,
   } = useGymData();
 
   const { currentUser, users } = useAuth();
@@ -140,14 +149,24 @@ export const MasterReportPage: React.FC = () => {
   );
   const todayExpensesAmount = todayExpenses.reduce((sum, e) => sum + e.amount, 0);
 
+  // Today's POS cash sales
+  const todayPosCash = transactions
+    .filter((t) => t.timestamp?.startsWith(todayIso) && t.paymentMethod === 'cash')
+    .reduce((sum, t) => sum + t.totalAmount, 0);
+
   // Expected Net Drawer Cash today
-  const todayExpectedNetCash = todayDirectCash + todayRepaymentsAmount - todayExpensesAmount;
+  const todayExpectedNetCash = todayDirectCash + todayRepaymentsAmount + todayPosCash - todayExpensesAmount;
 
   // Today's coach debts loaded
   const todayCoachDebts = masterReportEntries.filter(
     (e) => e.date?.startsWith(todayIso) && e.paymentMethod === 'coach_collected'
   );
   const todayCoachDebtsAmount = todayCoachDebts.reduce((sum, e) => sum + e.amount, 0);
+
+  // Today's coach earnings generated from reception collections (مستحقات وأرباح الكباتن الناشئة اليوم)
+  const todayCoachEarningsAmount = trainerTransactions
+    .filter((t) => t.created_at?.startsWith(todayIso) && t.collected_by === 'gym' && t.coach_share > 0)
+    .reduce((sum, t) => sum + t.coach_share, 0);
 
   // Available years dynamically extracted from cycles, entries, and current year
   const availableYears = Array.from(
@@ -293,6 +312,48 @@ export const MasterReportPage: React.FC = () => {
     }
   };
 
+  const handlePrintMonthPDF = () => {
+    printMonthlyMasterReportPDF(
+      selectedMonth,
+      filteredEntries,
+      filteredExpenses,
+      filteredRepayments,
+      transactions,
+      coaches,
+      trainerTransactions,
+      netPeriodCash
+    );
+    sounds.playSuccessDing();
+  };
+
+  const handlePrintDailyShiftPDF = () => {
+    const todayShift = dailyShiftClosings[0] || {
+      id: `shift-${todayIso}`,
+      date: todayIso,
+      closedAt: new Date().toISOString(),
+      closedBy: currentUser?.name || 'الاستقبال',
+      totalDirectCash: todayDirectCash,
+      totalRepayments: todayRepaymentsAmount,
+      totalPosCash: todayPosCash,
+      totalPhysioCash: 0,
+      totalExpenses: todayExpensesAmount,
+      expectedNetDrawerCash: todayExpectedNetCash,
+      actualCountedCash: todayExpectedNetCash,
+      difference: 0,
+      totalCoachDebtsLoadedToday: todayCoachDebtsAmount,
+    };
+
+    printDailyShiftReportPDF(
+      todayShift,
+      todayDirectEntries,
+      todayExpenses,
+      todayRepayments,
+      transactions.filter((t) => t.timestamp.startsWith(todayIso)),
+      trainerTransactions.filter((t) => t.created_at?.startsWith(todayIso))
+    );
+    sounds.playSuccessDing();
+  };
+
   const handleShiftAuthSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setShiftAuthError('');
@@ -309,36 +370,56 @@ export const MasterReportPage: React.FC = () => {
       return;
     }
 
+    if (matchedUser.role !== 'admin') {
+      setShiftAuthError('عفواً، يتطلب تقفيل اليومية إدخال بيانات حساب المدير (Manager) حصراً لضمان الأمان المالي');
+      return;
+    }
+
     sounds.playSuccessDing();
     setIsShiftAuthModalOpen(false);
     setActualCountedCashInput(String(todayExpectedNetCash));
     setIsShiftClosingModalOpen(true);
   };
 
-  const handleConfirmShiftClose = (e: React.FormEvent) => {
+  const handleConfirmShiftClose = async (e: React.FormEvent) => {
     e.preventDefault();
     const actualCashNum = parseFloat(actualCountedCashInput) || 0;
     const diff = actualCashNum - todayExpectedNetCash;
 
-    closeDailyShift({
-      date: todayIso,
-      closedBy: currentUser?.name || shiftAuthUsername || 'المدير العام',
-      totalDirectCash: todayDirectCash,
-      totalRepayments: todayRepaymentsAmount,
-      totalPosCash: 0,
-      totalPhysioCash: 0,
-      totalExpenses: todayExpensesAmount,
-      expectedNetDrawerCash: todayExpectedNetCash,
-      actualCountedCash: actualCashNum,
-      difference: diff,
-      totalCoachDebtsLoadedToday: todayCoachDebtsAmount,
-      notes: shiftNotes.trim() || undefined,
-    });
+    try {
+      closeDailyShift({
+        date: todayIso,
+        closedBy: currentUser?.name || shiftAuthUsername || 'المدير العام',
+        totalDirectCash: todayDirectCash,
+        totalRepayments: todayRepaymentsAmount,
+        totalPosCash: todayPosCash,
+        totalPhysioCash: 0,
+        totalExpenses: todayExpensesAmount,
+        expectedNetDrawerCash: todayExpectedNetCash,
+        actualCountedCash: actualCashNum,
+        difference: diff,
+        totalCoachDebtsLoadedToday: todayCoachDebtsAmount,
+        totalCoachEarningsToday: todayCoachEarningsAmount,
+        notes: shiftNotes.trim() || undefined,
+      });
 
-    sounds.playCashRegister();
-    setIsShiftClosingModalOpen(false);
-    setShiftAuthPassword('');
-    setShiftNotes('');
+      sounds.playCashRegister();
+      setIsShiftClosingModalOpen(false);
+      setShiftAuthPassword('');
+      setShiftNotes('');
+
+      // Auto export Excel file immediately upon shift closing
+      await exportDailyShiftXLSX();
+
+      alert(
+        `✅ تم إقفال وردية اليوم بنجاح!\n` +
+        `• تم مسح وتصفير قائمة الحضور بالاستقبال لبدء اليومية الجديدة.\n` +
+        `• تم تصفير رصيد الدرج النشط والمصروفات اليومية لبدء الوردية الجديدة من 0.00 ج.م.\n` +
+        `• تم تنزيل شيت إكسيل تقفيل الوردية متضمناً تفاصيل مبيعات البار، المصروفات، وحركات الكباتن.`
+      );
+    } catch (err: any) {
+      alert(err.message || 'حدث خطأ أثناء تقفيل اليومية');
+    }
   };
 
   const handleExportDailyShiftFile = async () => {
@@ -355,6 +436,10 @@ export const MasterReportPage: React.FC = () => {
 
   const handleConfirmYearArchive = (e: React.FormEvent) => {
     e.preventDefault();
+    if (currentUser?.role !== 'admin') {
+      alert('عفواً، أرشفة السنة وبدء سنة جديدة تتطلب صلاحيات المدير العام.');
+      return;
+    }
     archiveYear(yearToArchiveInput, currentUser?.name || 'المدير العام');
     sounds.playCashRegister();
     setIsYearArchiveModalOpen(false);
@@ -525,15 +610,46 @@ export const MasterReportPage: React.FC = () => {
             <button
               onClick={handleExportXLSX}
               disabled={isExportingXLSX}
-              className="flex-1 sm:flex-none py-3.5 px-6 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 transition cursor-pointer disabled:opacity-60"
+              className="flex-1 sm:flex-none py-3.5 px-5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 transition cursor-pointer disabled:opacity-60"
             >
               <Download className="w-4 h-4" />
-              <span>{isExportingXLSX ? 'جارِ إنشاء شيت الإكسيل...' : 'تحميل شيت إكسيل احترافي (.xlsx)'}</span>
+              <span>{isExportingXLSX ? 'جارِ التحميل...' : 'إكسيل شامل (.xlsx)'}</span>
+            </button>
+
+            {/* Print Monthly Report PDF */}
+            <button
+              onClick={handlePrintMonthPDF}
+              className="flex-1 sm:flex-none py-3.5 px-4 rounded-2xl bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 border border-teal-500/40 font-black text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+              title="طباعة تقرير الشهر الشامل أو حفظه كملف PDF"
+            >
+              <Printer className="w-4 h-4" />
+              <span>تقرير الشهر (PDF)</span>
+            </button>
+
+            {/* Print Daily Shift PDF */}
+            <button
+              onClick={handlePrintDailyShiftPDF}
+              className="flex-1 sm:flex-none py-3.5 px-4 rounded-2xl bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/40 font-black text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+              title="طباعة تقرير وردية اليوم متضمناً مبيعات البار والمصروفات وحركات الكباتن"
+            >
+              <Printer className="w-4 h-4" />
+              <span>وردية اليوم (PDF)</span>
             </button>
 
             {/* Daily Shift Closing Button */}
             <button
               onClick={() => {
+                const running = getRunningOperations();
+                if (running.hasRunning) {
+                  const runningItems = [
+                    ...running.runningSessions.map((s) => `• حصة تدريبية جارية: ${s.title}`),
+                    ...running.runningPhysio.map((p) => `• جلسة علاج طبيعي / مساج: ${p.patientName} (${p.roomName})`),
+                  ].join('\n');
+                  alert(
+                    `⚠️ عذراً، لا يمكن إتمام تقفيل اليومية الآن!\n\nيوجد عمليات ما زالت قيد التشغيل ولم تنتهي بعد:\n${runningItems}\n\nيرجى إنهاء كافة الحصص وجلسات العلاج الطبيعي أولاً من صفحاتها الخاصة ثم المحاولة مجدداً.`
+                  );
+                  return;
+                }
                 setShiftAuthError('');
                 setShiftAuthPassword('');
                 setIsShiftAuthModalOpen(true);
@@ -544,14 +660,17 @@ export const MasterReportPage: React.FC = () => {
               <span>تقفيل اليومية والدرج</span>
             </button>
 
-            {/* Yearly Archive Button */}
-            <button
-              onClick={() => setIsYearArchiveModalOpen(true)}
-              className="flex-1 sm:flex-none py-3.5 px-4 rounded-2xl bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/40 font-black text-xs flex items-center justify-center gap-2 transition cursor-pointer"
-            >
-              <Archive className="w-4 h-4" />
-              <span>أرشفة وبدء سنة جديدة</span>
-            </button>
+            {/* Yearly Archive Button (Manager-Only) */}
+            {currentUser?.role === 'admin' && (
+              <button
+                onClick={() => setIsYearArchiveModalOpen(true)}
+                className="flex-1 sm:flex-none py-3.5 px-4 rounded-2xl bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/40 font-black text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+                title="أرشفة وبدء سنة جديدة (صلاحيات المدير العام)"
+              >
+                <Archive className="w-4 h-4" />
+                <span>أرشفة وبدء سنة جديدة (المدير)</span>
+              </button>
+            )}
 
             {/* Start New Month Button */}
             <button
@@ -1731,8 +1850,8 @@ export const MasterReportPage: React.FC = () => {
         </div>
       )}
 
-      {/* 3. Yearly Archive Modal */}
-      {isYearArchiveModalOpen && (
+      {/* 3. Yearly Archive Modal (Manager-Only) */}
+      {currentUser?.role === 'admin' && isYearArchiveModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-[#0f172a] border border-indigo-500/30 rounded-3xl max-w-lg w-full p-6 md:p-8 shadow-2xl relative">
             <div className="flex items-center justify-between pb-4 border-b border-slate-800">
