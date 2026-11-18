@@ -43,6 +43,14 @@ interface GymDataContextType {
     fallbackMember?: Partial<Member>
   ) => { success: boolean; member?: Member; message?: string };
   cancelCheckIn: (checkInLogId: string) => { success: boolean };
+  renewMemberSubscription: (
+    memberId: string,
+    planName: string,
+    durationDays: number,
+    fee: number,
+    paymentMethod: 'cash' | 'instapay',
+    notes?: string
+  ) => { success: boolean; member?: Member };
   wipeAllDataToCleanSlate: () => void;
 
   // Sessions / Classes
@@ -777,6 +785,91 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     });
   };
 
+  const renewMemberSubscription = (
+    memberId: string,
+    planName: string,
+    durationDays: number,
+    fee: number,
+    paymentMethod: 'cash' | 'instapay',
+    notes?: string
+  ): { success: boolean; member?: Member } => {
+    const member = members.find((m) => m.id === memberId || m.code === memberId);
+    if (!member) return { success: false };
+
+    const startDate = new Date().toISOString().split('T')[0];
+    const endDate = new Date(Date.now() + durationDays * 86400000).toISOString().split('T')[0];
+
+    const updatedMember: Member = {
+      ...member,
+      subscriptionPlan: planName,
+      subscriptionFee: fee,
+      totalDays: durationDays,
+      remainingDays: durationDays,
+      startDate,
+      endDate,
+      active: true,
+      paymentMethod,
+      paymentStatus: 'paid',
+    };
+
+    setMembers((prev) => prev.map((m) => (m.id === member.id ? updatedMember : m)));
+    if (isSupabaseConfigured) {
+      supabaseService.upsertMember(updatedMember).catch(() => {});
+    }
+
+    // 1. Record inflow to drawer/financial flow
+    if (fee > 0) {
+      const inflowTitle = `اشتراك ${paymentMethod === 'cash' ? 'نقدي بالدرج' : 'إنستاباي'} (${planName} - ${durationDays} يوم) - لاعب: ${member.name} (${member.code})`;
+      const inflow: CashInflowItem = {
+        id: `inf-sub-${Date.now()}`,
+        type: 'subscription',
+        title: inflowTitle,
+        amount: fee,
+        date: new Date().toISOString(),
+        memberName: member.name,
+        paymentMethod: paymentMethod,
+        recordedBy: 'الاستقبال',
+      };
+      setCashInflows((prev) => [inflow, ...prev]);
+
+      // 2. Record to Master Report
+      const repEntry: MasterReportEntry = {
+        id: `rep-${Date.now()}`,
+        month: currentMonth,
+        date: new Date().toISOString(),
+        playerName: member.name,
+        playerCode: member.code,
+        amount: fee,
+        coachId: undefined,
+        coachName: 'اشتراك مباشر بالخزينة',
+        sessionCategory: 'gym',
+        sessionTitle: `${planName} (${durationDays} يوم)`,
+        paymentMethod: paymentMethod,
+        paymentStatus: 'paid',
+        notes: notes || `سداد ${paymentMethod === 'cash' ? 'نقدي بالدرج' : 'تحويل إنستاباي'} بالاستقبال`,
+        sourceType: 'subscription',
+      };
+      setMasterReportEntries((prev) => [repEntry, ...prev]);
+
+      if (isSupabaseConfigured) {
+        supabaseService.insertCashInflow(inflow).catch(() => {});
+        supabaseService.upsertMasterReportEntry(repEntry).catch(() => {});
+      }
+    }
+
+    // 3. Update any unassigned checkInLog for this member to be valid
+    setCheckInLogs((prev) =>
+      prev.map((l) =>
+        l.memberId === member.id || l.memberCode === member.code
+          ? { ...l, subscriptionValid: true }
+          : l
+      )
+    );
+
+    sounds.playCashRegister();
+    return { success: true, member: updatedMember };
+  };
+
   const findMemberByCode = (code: string): Member | undefined => {
     if (!code) return undefined;
     const clean = code.trim().toLowerCase();
@@ -798,18 +891,18 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       member = {
         id: memberId || `mem-${Date.now()}`,
         code: fallbackMember.code || Math.floor(100000 + Math.random() * 900000).toString(),
-        name: fallbackMember.name || 'عضو سينابس',
+        name: fallbackMember.name || 'متدرب جديد',
         phone: fallbackMember.phone || '',
         type: fallbackMember.type || 'member',
-        subscriptionPlan: fallbackMember.subscriptionPlan || 'اشتراك جيم عام',
-        subscriptionFee: fallbackMember.subscriptionFee || 100,
+        subscriptionPlan: fallbackMember.subscriptionPlan || 'بدون اشتراك نشط',
+        subscriptionFee: fallbackMember.subscriptionFee || 0,
         startDate: fallbackMember.startDate || new Date().toISOString().split('T')[0],
-        endDate: fallbackMember.endDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
-        totalDays: fallbackMember.totalDays || 30,
-        remainingDays: fallbackMember.remainingDays !== undefined ? fallbackMember.remainingDays : 30,
-        totalSessions: fallbackMember.totalSessions !== undefined ? fallbackMember.totalSessions : 12,
-        remainingSessions: fallbackMember.remainingSessions !== undefined ? fallbackMember.remainingSessions : 12,
-        active: fallbackMember.active !== undefined ? fallbackMember.active : true,
+        endDate: fallbackMember.endDate || '',
+        totalDays: fallbackMember.totalDays || 0,
+        remainingDays: fallbackMember.remainingDays !== undefined ? fallbackMember.remainingDays : 0,
+        totalSessions: fallbackMember.totalSessions !== undefined ? fallbackMember.totalSessions : 0,
+        remainingSessions: fallbackMember.remainingSessions !== undefined ? fallbackMember.remainingSessions : 0,
+        active: fallbackMember.active !== undefined ? fallbackMember.active : false,
       };
       setMembers((prev) => [member!, ...prev]);
     }
@@ -1547,6 +1640,9 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     if (!member) return;
 
+    const effectivePaymentMethod: 'cash' | 'instapay' =
+      paymentDetails?.paymentMode === 'instapay' ? 'instapay' : 'cash';
+
     // 2. FINANCIAL FLOW: Cash to Drawer / InstaPay / Coach Dues
     if (pathway === 'coach_debt') {
       // المسار 1: الحساب على الكابتن
@@ -1554,15 +1650,15 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     } else if (pathway === 'gym_with_coach_share') {
       // المسار 2: اللاعب دفع للجيم بالاستقبال مع نسبة أو قيمة ثابتة للكابتن (الكابتن ليه فلوس)
       if (feeAmount > 0) {
-        // أ. توريد الكاش كاملاً للدرج
+        // أ. توريد المبلغ للدرج / حساب إنستاباي
         const cashInflowItem: CashInflowItem = {
           id: `inf-seat-${Date.now()}`,
           type: 'subscription',
-          title: `تحصيل كاش بالاستقبال (حصة: ${activityTitle}) - متدرب: ${member.name} مع كابتن ${coachName}`,
+          title: `${effectivePaymentMethod === 'instapay' ? 'تحصيل إنستاباي' : 'تحصيل كاش بالاستقبال'} (حصة: ${activityTitle}) - متدرب: ${member.name} مع كابتن ${coachName}`,
           amount: feeAmount,
           date: new Date().toISOString(),
           memberName: member.name,
-          paymentMethod: 'cash',
+          paymentMethod: effectivePaymentMethod,
           recordedBy: 'الاستقبال',
         };
         setCashInflows((prev) => [cashInflowItem, ...prev]);
@@ -1583,8 +1679,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
             created_at: new Date().toISOString(),
             month: currentMonth,
             type: 'session_charge',
-            payment_method: 'cash',
-            notes: `مستحقات كابتن ${coach.name} عن تسكين متدرب (${member.name}) بالاستقبال (نصيب الكابتن: ${coachShareAmount} ج.م)`,
+            payment_method: effectivePaymentMethod,
+            notes: `مستحقات كابتن ${coach.name} عن تسكين متدرب (${member.name}) بالاستقبال (${effectivePaymentMethod === 'instapay' ? 'إنستاباي' : 'كاش'} - نصيب الكابتن: ${coachShareAmount} ج.م)`,
           };
           setTrainerTransactions((prev) => [coachEarningsTrx, ...prev]);
 
@@ -1614,9 +1710,9 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           coachName: coachName,
           sessionCategory: category,
           sessionTitle: `${activityTitle} (تحصيل جيم - مستحق للكابتن: ${coachShareAmount} ج.م)`,
-          paymentMethod: 'cash',
+          paymentMethod: effectivePaymentMethod,
           paymentStatus: 'paid',
-          notes: `محصل بالاستقبال: ${feeAmount} ج.م | نصيب الكابتن: ${coachShareAmount} ج.م | صافي الجيم: ${gymShareAmount} ج.م`,
+          notes: `محصل بالاستقبال (${effectivePaymentMethod === 'instapay' ? 'إنستاباي' : 'كاش'}): ${feeAmount} ج.م | نصيب الكابتن: ${coachShareAmount} ج.م | صافي الجيم: ${gymShareAmount} ج.م`,
           sourceType: 'session',
         };
         setMasterReportEntries((prev) => [repEntry, ...prev]);
@@ -1632,11 +1728,11 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const cashInflowItem: CashInflowItem = {
           id: `inf-seat-${Date.now()}`,
           type: 'subscription',
-          title: `تحصيل تمرين حر / اشتراك مباشر بالاستقبال - متدرب: ${member.name}`,
+          title: `${effectivePaymentMethod === 'instapay' ? 'تحصيل إنستاباي' : 'تحصيل كاش'} تمرين حر / تذكرة مباشرة بالاستقبال - متدرب: ${member.name}`,
           amount: feeAmount,
           date: new Date().toISOString(),
           memberName: member.name,
-          paymentMethod: 'cash',
+          paymentMethod: effectivePaymentMethod,
           recordedBy: 'الاستقبال',
         };
         setCashInflows((prev) => [cashInflowItem, ...prev]);
@@ -1652,9 +1748,9 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           coachName: 'اشتراك مباشر / تمرين حر',
           sessionCategory: 'gym',
           sessionTitle: 'تمرين حر بالصالة العامة (بدون مدرب)',
-          paymentMethod: 'cash',
+          paymentMethod: effectivePaymentMethod,
           paymentStatus: 'paid',
-          notes: 'سداد فوري كاش لحساب الجيم مباشرة',
+          notes: `سداد فوري ${effectivePaymentMethod === 'instapay' ? 'تحويل إنستاباي' : 'كاش بالدرج'} لحساب الجيم مباشرة`,
           sourceType: 'subscription',
         };
         setMasterReportEntries((prev) => [repEntry, ...prev]);
@@ -3182,6 +3278,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       value={{
         members,
         cancelCheckIn,
+        renewMemberSubscription,
         wipeAllDataToCleanSlate,
         addMember,
         updateMember,

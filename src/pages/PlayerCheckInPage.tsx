@@ -129,15 +129,15 @@ export const PlayerCheckInPage: React.FC = () => {
               name: parsed.name,
               phone: parsed.phone || '',
               type: 'member',
-              subscriptionPlan: parsed.subscriptionPlan || 'اشتراك عضوية',
-              subscriptionFee: 100,
-              startDate: new Date().toISOString().split('T')[0],
-              endDate: parsed.endDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
-              totalDays: parsed.totalDays || 30,
-              remainingDays: parsed.remainingDays !== undefined ? parsed.remainingDays : 30,
-              totalSessions: parsed.totalSessions !== undefined ? parsed.totalSessions : 12,
-              remainingSessions: parsed.remainingSessions !== undefined ? parsed.remainingSessions : 12,
-              active: parsed.active !== undefined ? parsed.active : true,
+              subscriptionPlan: parsed.subscriptionPlan || 'بدون اشتراك نشط',
+              subscriptionFee: parsed.subscriptionFee || 0,
+              startDate: parsed.startDate || new Date().toISOString().split('T')[0],
+              endDate: parsed.endDate || '',
+              totalDays: parsed.totalDays || 0,
+              remainingDays: parsed.remainingDays !== undefined ? parsed.remainingDays : 0,
+              totalSessions: parsed.totalSessions !== undefined ? parsed.totalSessions : 0,
+              remainingSessions: parsed.remainingSessions !== undefined ? parsed.remainingSessions : 0,
+              active: parsed.active !== undefined ? parsed.active : false,
             };
 
             autoCheckInAttempted.current = true;
@@ -260,18 +260,18 @@ export const PlayerCheckInPage: React.FC = () => {
       name: newPlayerForm.name.trim(),
       phone: newPlayerForm.phone.trim(),
       code: generatedCode,
-      subscriptionPlan: categoryTitle,
-      subscriptionFee: 100,
+      subscriptionPlan: 'بدون اشتراك نشط',
+      subscriptionFee: 0,
       startDate: new Date().toISOString().split('T')[0],
-      endDate: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
-      totalDays: 30,
-      remainingDays: 30,
-      totalSessions: 12,
-      remainingSessions: 12,
-      active: true,
+      endDate: '',
+      totalDays: 0,
+      remainingDays: 0,
+      totalSessions: 0,
+      remainingSessions: 0,
+      active: false,
       type: 'member',
       sessionCategory: newPlayerForm.sessionCategory,
-      paymentMethod: 'coach_collected',
+      paymentMethod: undefined,
     });
 
     handleExecuteCheckIn(created, false);
@@ -366,52 +366,99 @@ export const PlayerCheckInPage: React.FC = () => {
             </div>
 
             {/* Subscription Metrics Breakdown */}
-            <div className="grid grid-cols-2 gap-3 pt-1">
-              <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 text-center">
-                <div className="text-[11px] text-slate-400 mb-1 flex items-center justify-center gap-1 font-bold">
-                  <Calendar className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>الأيام المتبقية</span>
-                </div>
-                <div className="text-2xl font-black font-mono text-emerald-300">
-                  {checkedMember.remainingDays} يوم
-                </div>
-                <div className="text-[10px] text-slate-500 mt-0.5">
-                  من أصل {checkedMember.totalDays} يوم
-                </div>
-              </div>
+            {(() => {
+              const hasDuration = (checkedMember.remainingDays || 0) > 0 && checkedMember.active;
+              const hasSessions = (checkedMember.remainingSessions || 0) > 0;
+              const isUnsubscribed = !hasDuration && !hasSessions;
 
-              <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 text-center">
-                <div className="text-[11px] text-slate-400 mb-1 flex items-center justify-center gap-1 font-bold">
-                  <Clock className="w-3.5 h-3.5 text-teal-400" />
-                  <span>الحصص المتبقية</span>
-                </div>
-                <div className="text-2xl font-black font-mono text-teal-300">
-                  {checkedMember.remainingSessions} حصة
-                </div>
-                <div className="text-[10px] text-slate-500 mt-0.5">
-                  من أصل {checkedMember.totalSessions} حصة
-                </div>
-              </div>
-            </div>
+              if (isUnsubscribed) {
+                return (
+                  <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-center space-y-2">
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 font-bold text-xs">
+                      <AlertCircle className="w-4 h-4 text-amber-400" />
+                      <span>لا يوجد اشتراك نشط حالياً</span>
+                    </div>
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      تم تسجيل وصولك بنجاح وظهر اسمك في شاشة الاستقبال. يرجى التوجه لموظف الاستقبال للاشتراك أو التسكين في حصة تدريبية أو تمرين حر.
+                    </p>
+                    <div className="text-[11px] text-slate-400 pt-1 border-t border-amber-500/20 flex items-center justify-center gap-2">
+                      <span className="font-bold text-slate-300">الحالة:</span>
+                      <span>عضوية جديدة - بانتظار التسكين والتفعيل</span>
+                    </div>
+                  </div>
+                );
+              }
 
-            {/* Plan Info Card */}
-            <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-slate-800 text-xs space-y-2 text-right">
-              <div className="flex items-center justify-between">
-                <span className="text-slate-400">نوع الباقة:</span>
-                <span className="font-bold text-white">{checkedMember.subscriptionPlan}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-slate-400">صلاحية الاشتراك:</span>
-                <span className="font-bold text-emerald-400 flex items-center gap-1">
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  <span>{checkedMember.active ? 'ساري وصالح' : 'معلق'}</span>
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-slate-400">تاريخ الانتهاء:</span>
-                <span className="font-mono text-slate-300">{formatDateAr(checkedMember.endDate)}</span>
-              </div>
-            </div>
+              return (
+                <>
+                  <div className={`grid ${hasDuration && hasSessions ? 'grid-cols-2' : 'grid-cols-1'} gap-3 pt-1`}>
+                    {hasDuration && (
+                      <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 text-center">
+                        <div className="text-[11px] text-slate-400 mb-1 flex items-center justify-center gap-1 font-bold">
+                          <Calendar className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>الأيام المتبقية</span>
+                        </div>
+                        <div className="text-2xl font-black font-mono text-emerald-300">
+                          {checkedMember.remainingDays} يوم
+                        </div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">
+                          من أصل {checkedMember.totalDays} يوم
+                        </div>
+                      </div>
+                    )}
+
+                    {hasSessions && (
+                      <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 text-center">
+                        <div className="text-[11px] text-slate-400 mb-1 flex items-center justify-center gap-1 font-bold">
+                          <Clock className="w-3.5 h-3.5 text-teal-400" />
+                          <span>الحصص المتبقية</span>
+                        </div>
+                        <div className="text-2xl font-black font-mono text-teal-300">
+                          {checkedMember.remainingSessions} حصة
+                        </div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">
+                          من أصل {checkedMember.totalSessions} حصة
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Plan Info Card */}
+                  <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-slate-800 text-xs space-y-2 text-right">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">نوع الباقة:</span>
+                      <span className="font-bold text-white">{checkedMember.subscriptionPlan || 'اشتراك ساري'}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">صلاحية الاشتراك:</span>
+                      <span className="font-bold text-emerald-400 flex items-center gap-1">
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span>{checkedMember.active ? 'ساري وصالح' : 'معلق'}</span>
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">تاريخ الانتهاء:</span>
+                      <span className="font-mono text-slate-300">
+                        {checkedMember.endDate ? formatDateAr(checkedMember.endDate) : (hasSessions ? 'عند استهلاك رصيد الحصص' : 'غير محدد')}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Upsell for Subscribed Members: Private PT or Massage */}
+                  {hasDuration && (
+                    <div className="p-3.5 rounded-2xl bg-gradient-to-r from-teal-500/10 via-emerald-500/10 to-transparent border border-teal-500/30 text-right space-y-1.5">
+                      <div className="flex items-center gap-2 text-xs font-black text-teal-300">
+                        <Sparkles className="w-4 h-4 text-teal-400" />
+                        <span>هل ترغب في جلسة برايفت (PT) أو مساج اليوم؟</span>
+                      </div>
+                      <p className="text-[11px] text-slate-300 leading-relaxed">
+                        بصفتك مشتركاً، يمكنك حجز وتسكين حصة تدريب خاصة مع كابتن أو جلسة مساج واستشفاء لدى موظف الاستقبال فوراً.
+                      </p>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
 
             {/* Persistent Auth Status Pill */}
             <div className="text-[11px] text-slate-400 flex items-center justify-center gap-1.5 pt-1">

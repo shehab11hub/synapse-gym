@@ -38,6 +38,7 @@ import { DeskQRCodeModal } from '../components/checkin/DeskQRCodeModal';
 import { CheckInModal } from '../components/checkin/CheckInModal';
 import { formatDateAr, formatEGP } from '../utils/formatters';
 import { generateQRDataUrl } from '../utils/qrGenerator';
+import { sounds } from '../utils/sound';
 
 export const ReceptionPage: React.FC = () => {
   const {
@@ -52,6 +53,7 @@ export const ReceptionPage: React.FC = () => {
     sessions,
     assignPlayerToSession,
     assignArrivedMember,
+    renewMemberSubscription,
   } = useGymData();
 
   const handleCancelCheckIn = (logId: string, memberName: string) => {
@@ -89,9 +91,15 @@ export const ReceptionPage: React.FC = () => {
     amount: number;
     coachShareType: 'fixed' | 'percentage';
     coachShareValue: number;
-    paymentMode: 'coach_charge' | 'cash_drawer';
+    paymentMode: 'coach_charge' | 'cash_drawer' | 'instapay';
     isDirectPaid: boolean;
     notes: string;
+    directEntryType: 'existing_sub' | 'single_pass' | 'new_subscription';
+    subPlanName: string;
+    subDurationDays: number;
+    subFee: number;
+    subPaymentMethod: 'cash' | 'instapay';
+    isSubAlreadyRenewed?: boolean;
   }>({
     pathway: 'coach_debt',
     sessionId: '',
@@ -102,6 +110,12 @@ export const ReceptionPage: React.FC = () => {
     paymentMode: 'coach_charge',
     isDirectPaid: false,
     notes: '',
+    directEntryType: 'existing_sub',
+    subPlanName: 'اشتراك شهري صالة الجيم',
+    subDurationDays: 30,
+    subFee: 500,
+    subPaymentMethod: 'cash',
+    isSubAlreadyRenewed: false,
   });
 
   const getDefaultFeeForCategory = (cat: SessionCategory, coachId?: string, sessId?: string) => {
@@ -205,6 +219,13 @@ export const ReceptionPage: React.FC = () => {
     const coachObj = coaches.find((c) => c.id === defaultCoach);
     const initialCoachShare = coachObj?.ratePerSession || 50;
 
+    const targetMember = members.find(
+      (m) => m.id === log.memberId || m.code === log.memberCode
+    );
+    const hasActiveSub = Boolean(
+      targetMember?.active && ((targetMember?.remainingDays || 0) > 0 || (targetMember?.remainingSessions || 0) > 0)
+    );
+
     const initialPathway = log.seatingPathway || (sessions.length > 0 ? 'coach_debt' : 'gym_direct_no_coach');
 
     setSeatingForm({
@@ -215,8 +236,14 @@ export const ReceptionPage: React.FC = () => {
       coachShareType: coachObj?.paymentType === 'percentage' ? 'percentage' : 'fixed',
       coachShareValue: coachObj?.paymentType === 'percentage' ? (coachObj.commissionRate || 40) : initialCoachShare,
       paymentMode: initialPathway === 'coach_debt' ? 'coach_charge' : 'cash_drawer',
-      isDirectPaid: false,
+      isDirectPaid: !hasActiveSub,
       notes: '',
+      directEntryType: hasActiveSub ? 'existing_sub' : 'new_subscription',
+      subPlanName: 'اشتراك شهري صالة الجيم',
+      subDurationDays: 30,
+      subFee: 500,
+      subPaymentMethod: 'cash',
+      isSubAlreadyRenewed: false,
     });
     setIsSeatingModalOpen(true);
   };
@@ -225,6 +252,22 @@ export const ReceptionPage: React.FC = () => {
   const handleConfirmSeating = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedLogForSeating) return;
+
+    // 1. If subscribing right now from the modal in Pathway 3 (and not already triggered via button)
+    if (
+      seatingForm.pathway === 'gym_direct_no_coach' &&
+      seatingForm.directEntryType === 'new_subscription' &&
+      !seatingForm.isSubAlreadyRenewed
+    ) {
+      renewMemberSubscription(
+        selectedLogForSeating.memberId,
+        seatingForm.subPlanName,
+        Number(seatingForm.subDurationDays) || 30,
+        Number(seatingForm.subFee) || 0,
+        seatingForm.subPaymentMethod,
+        `اشتراك صالة من نافذة التسكين والتوجيه (${seatingForm.subPlanName})`
+      );
+    }
 
     let targetCoachId = seatingForm.coachId;
     let targetSessionId = seatingForm.sessionId;
@@ -256,11 +299,13 @@ export const ReceptionPage: React.FC = () => {
     }
     const gymShare = Math.max(0, totalPaid - coachShare);
 
+    // If new subscription was created, renewMemberSubscription already recorded the payment in cashInflows and reports.
+    // For single pass, assignArrivedMember records the fee. For existing subscription, 0 is charged.
     const paidAmount =
       seatingForm.pathway === 'coach_debt'
         ? 0
         : seatingForm.pathway === 'gym_direct_no_coach'
-        ? (seatingForm.isDirectPaid ? totalPaid : 0)
+        ? (seatingForm.directEntryType === 'single_pass' ? totalPaid : 0)
         : totalPaid;
 
     assignArrivedMember(
@@ -271,7 +316,10 @@ export const ReceptionPage: React.FC = () => {
       seatingForm.notes,
       {
         seatingPathway: seatingForm.pathway,
-        paymentMode: seatingForm.pathway === 'coach_debt' ? 'coach_charge' : 'cash_drawer',
+        paymentMode:
+          seatingForm.pathway === 'coach_debt'
+            ? 'coach_charge'
+            : (seatingForm.paymentMode === 'instapay' ? 'instapay' : 'cash_drawer'),
         amount: paidAmount,
         coachShareType: seatingForm.coachShareType,
         coachShareValue: Number(seatingForm.coachShareValue) || 0,
@@ -1067,105 +1115,147 @@ export const ReceptionPage: React.FC = () => {
             </div>
 
             {/* Scrollable Form Body */}
-            <form onSubmit={handleConfirmSeating} className="flex flex-col flex-1 overflow-hidden min-h-0 pt-4">
-              <div className="overflow-y-auto flex-1 space-y-5 pr-1 pl-1">
-                {/* 1. The 3 Primary Pathways Selector */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-2.5">
-                    اختر مسار توجيه اللاعب والمحاسبة المالية (3 مسارات رئيسية):
-                  </label>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    {/* Pathway 1: Coach Debt */}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setSeatingForm((prev) => ({
-                          ...prev,
-                          pathway: 'coach_debt',
-                          sessionId: prev.sessionId || (sessions[0]?.id || ''),
-                          coachId: prev.sessionId
-                            ? sessions.find((s) => s.id === prev.sessionId)?.coachIds[0] || prev.coachId
-                            : sessions[0]?.coachIds[0] || prev.coachId,
-                        }))
-                      }
-                      className={`p-3.5 rounded-2xl border text-right transition flex flex-col justify-between gap-2 cursor-pointer ${
-                        seatingForm.pathway === 'coach_debt'
-                          ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold shadow-lg shadow-amber-500/10 ring-1 ring-amber-500/50'
-                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800/60'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 shrink-0">
-                          <Flame className="w-5 h-5" />
-                        </div>
-                        <div className="text-xs font-black">1. الحساب على الكابتن</div>
-                      </div>
-                      <div className="text-[11px] text-slate-400 leading-relaxed">
-                        اللاعب داخل حصة مع الكابتن، والفلوس تتحمل كمديونية على الكابتن بعد نهاية الحصة.
-                      </div>
-                    </button>
+            {(() => {
+              const targetMember = members.find(
+                (m) => m.id === selectedLogForSeating.memberId || m.code === selectedLogForSeating.memberCode
+              );
+              const isSubscribed = Boolean(
+                targetMember?.active && ((targetMember?.remainingDays || 0) > 0 || (targetMember?.remainingSessions || 0) > 0)
+              );
 
-                    {/* Pathway 2: Gym Collected with Coach Share */}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setSeatingForm((prev) => ({
-                          ...prev,
-                          pathway: 'gym_with_coach_share',
-                          sessionId: prev.sessionId || (sessions[0]?.id || ''),
-                          coachId: prev.sessionId
-                            ? sessions.find((s) => s.id === prev.sessionId)?.coachIds[0] || prev.coachId
-                            : sessions[0]?.coachIds[0] || prev.coachId,
-                          amount: prev.amount || (sessions[0]?.price || 150),
-                        }))
-                      }
-                      className={`p-3.5 rounded-2xl border text-right transition flex flex-col justify-between gap-2 cursor-pointer ${
-                        seatingForm.pathway === 'gym_with_coach_share'
-                          ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 font-bold shadow-lg shadow-emerald-500/10 ring-1 ring-emerald-500/50'
-                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800/60'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 shrink-0">
-                          <Banknote className="w-5 h-5" />
+              return (
+                <form onSubmit={handleConfirmSeating} className="flex flex-col flex-1 overflow-hidden min-h-0 pt-3">
+                  <div className="overflow-y-auto flex-1 space-y-4 pr-1 pl-1">
+                    {/* Member Status Badge */}
+                    {isSubscribed ? (
+                      <div className="p-3 rounded-2xl bg-emerald-950/40 border border-emerald-500/40 space-y-1">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                            <span className="text-xs font-black text-emerald-300">
+                              اشتراك ساري: {targetMember?.subscriptionPlan}
+                            </span>
+                          </div>
+                          <span className="text-[11px] font-mono text-emerald-300 bg-emerald-500/20 px-2.5 py-0.5 rounded-full border border-emerald-500/30">
+                            {targetMember?.remainingDays ? `متبقي ${targetMember.remainingDays} يوم` : ''}
+                            {targetMember?.remainingSessions ? ` • متبقي ${targetMember.remainingSessions} حصة` : ''}
+                          </span>
                         </div>
-                        <div className="text-xs font-black">2. الدفع للجيم (للكابتن نسبة)</div>
+                        <p className="text-[11px] text-slate-300 leading-relaxed">
+                          ✓ يمكن للمتدرب الدخول لتمرين حر مجاناً باشتراكه، أو يمكنك تسكينه في حصة خاصة / برايفت / مساج مع اختيار طريقة الحساب (على الكابتن أو بالاستقبال مع نسبة للكابتن).
+                        </p>
                       </div>
-                      <div className="text-[11px] text-slate-400 leading-relaxed">
-                        اللاعب يدفع للجيم بالاستقبال، وللكابتن نسبة أو قيمة ثابتة (الكابتن ليه فلوس).
+                    ) : (
+                      <div className="p-3 rounded-2xl bg-amber-950/40 border border-amber-500/40 flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                          <span className="font-bold text-amber-300">
+                            اللاعب ليس لديه اشتراك نشط حالياً.
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-amber-300 font-bold bg-amber-500/20 px-2.5 py-0.5 rounded-full border border-amber-500/30">
+                          يمكن عمل وتفعيل اشتراك جديد فوراً من خيار "تمرين حر"
+                        </span>
                       </div>
-                    </button>
+                    )}
 
-                    {/* Pathway 3: Direct Gym / No Coach */}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setSeatingForm((prev) => ({
-                          ...prev,
-                          pathway: 'gym_direct_no_coach',
-                          sessionId: '',
-                          coachId: '',
-                          amount: 80,
-                        }))
-                      }
-                      className={`p-3.5 rounded-2xl border text-right transition flex flex-col justify-between gap-2 cursor-pointer ${
-                        seatingForm.pathway === 'gym_direct_no_coach'
-                          ? 'bg-teal-500/20 border-teal-500 text-teal-300 font-bold shadow-lg shadow-teal-500/10 ring-1 ring-teal-500/50'
-                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800/60'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <div className="p-2 rounded-xl bg-teal-500/10 text-teal-400 shrink-0">
-                          <Dumbbell className="w-5 h-5" />
-                        </div>
-                        <div className="text-xs font-black">3. تمرين حر (بدون مدرب)</div>
+                    {/* 1. The 3 Primary Pathways Selector */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 mb-2.5">
+                        اختر مسار توجيه اللاعب والمحاسبة المالية (3 مسارات رئيسية):
+                      </label>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        {/* Pathway 1: Coach Debt */}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSeatingForm((prev) => ({
+                              ...prev,
+                              pathway: 'coach_debt',
+                              sessionId: prev.sessionId || (sessions[0]?.id || ''),
+                              coachId: prev.sessionId
+                                ? sessions.find((s) => s.id === prev.sessionId)?.coachIds[0] || prev.coachId
+                                : sessions[0]?.coachIds[0] || prev.coachId,
+                            }))
+                          }
+                          className={`p-3.5 rounded-2xl border text-right transition flex flex-col justify-between gap-2 cursor-pointer ${
+                            seatingForm.pathway === 'coach_debt'
+                              ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold shadow-lg shadow-amber-500/10 ring-1 ring-amber-500/50'
+                              : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800/60'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 shrink-0">
+                              <Flame className="w-5 h-5" />
+                            </div>
+                            <div className="text-xs font-black">1. الحساب على الكابتن</div>
+                          </div>
+                          <div className="text-[11px] text-slate-400 leading-relaxed">
+                            اللاعب داخل حصة مع الكابتن، والفلوس تتحمل كمديونية على الكابتن بعد نهاية الحصة.
+                          </div>
+                        </button>
+
+                        {/* Pathway 2: Gym Collected with Coach Share */}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSeatingForm((prev) => ({
+                              ...prev,
+                              pathway: 'gym_with_coach_share',
+                              sessionId: prev.sessionId || (sessions[0]?.id || ''),
+                              coachId: prev.sessionId
+                                ? sessions.find((s) => s.id === prev.sessionId)?.coachIds[0] || prev.coachId
+                                : sessions[0]?.coachIds[0] || prev.coachId,
+                              amount: prev.amount || (sessions[0]?.price || 150),
+                            }))
+                          }
+                          className={`p-3.5 rounded-2xl border text-right transition flex flex-col justify-between gap-2 cursor-pointer ${
+                            seatingForm.pathway === 'gym_with_coach_share'
+                              ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 font-bold shadow-lg shadow-emerald-500/10 ring-1 ring-emerald-500/50'
+                              : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800/60'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 shrink-0">
+                              <Banknote className="w-5 h-5" />
+                            </div>
+                            <div className="text-xs font-black">2. الدفع للجيم (للكابتن نسبة)</div>
+                          </div>
+                          <div className="text-[11px] text-slate-400 leading-relaxed">
+                            اللاعب يدفع للجيم بالاستقبال، وللكابتن نسبة أو قيمة ثابتة (الكابتن ليه فلوس).
+                          </div>
+                        </button>
+
+                        {/* Pathway 3: Direct Gym / No Coach */}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSeatingForm((prev) => ({
+                              ...prev,
+                              pathway: 'gym_direct_no_coach',
+                              sessionId: '',
+                              coachId: '',
+                              amount: isSubscribed ? 0 : 80,
+                            }))
+                          }
+                          className={`p-3.5 rounded-2xl border text-right transition flex flex-col justify-between gap-2 cursor-pointer ${
+                            seatingForm.pathway === 'gym_direct_no_coach'
+                              ? 'bg-teal-500/20 border-teal-500 text-teal-300 font-bold shadow-lg shadow-teal-500/10 ring-1 ring-teal-500/50'
+                              : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800/60'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <div className="p-2 rounded-xl bg-teal-500/10 text-teal-400 shrink-0">
+                              <Dumbbell className="w-5 h-5" />
+                            </div>
+                            <div className="text-xs font-black">3. تمرين حر (بدون مدرب)</div>
+                          </div>
+                          <div className="text-[11px] text-slate-400 leading-relaxed">
+                            اللاعب يتمرن مع نفسه بصالة الجيم (اشتراك ساري أو دفع مباشر)، 100% للجيم بدون كابتن.
+                          </div>
+                        </button>
                       </div>
-                      <div className="text-[11px] text-slate-400 leading-relaxed">
-                        اللاعب يتمرن مع نفسه بصالة الجيم (اشتراك ساري أو دفع مباشر)، 100% للجيم بدون كابتن.
-                      </div>
-                    </button>
-                  </div>
-                </div>
+                    </div>
 
                 {/* Details Section for Pathway 1: Coach Debt */}
                 {seatingForm.pathway === 'coach_debt' && (
@@ -1296,7 +1386,7 @@ export const ReceptionPage: React.FC = () => {
                       {/* Amount Paid at Reception */}
                       <div>
                         <label className="block text-[11px] font-bold text-slate-300 mb-1">
-                          المبلغ المدفوع بالاستقبال كاش (ج.م):
+                          المبلغ المطلوب تحصيله بالاستقبال (ج.م):
                         </label>
                         <div className="relative">
                           <input
@@ -1315,54 +1405,87 @@ export const ReceptionPage: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* Coach Share Calculation Method */}
+                      {/* Payment Method: Cash vs InstaPay */}
                       <div>
                         <label className="block text-[11px] font-bold text-slate-300 mb-1">
-                          طريقة حساب نصيب ومستحقات الكابتن:
+                          طريقة التحصيل بالاستقبال:
                         </label>
                         <div className="flex items-center gap-2">
                           <button
                             type="button"
-                            onClick={() => setSeatingForm({ ...seatingForm, coachShareType: 'fixed', coachShareValue: 50 })}
-                            className={`flex-1 py-1.5 px-2 rounded-xl text-[11px] font-bold border transition cursor-pointer ${
-                              seatingForm.coachShareType === 'fixed'
-                                ? 'bg-emerald-500 text-slate-950 border-emerald-500'
-                                : 'bg-slate-900 text-slate-400 border-slate-800'
+                            onClick={() => setSeatingForm({ ...seatingForm, paymentMode: 'cash_drawer' })}
+                            className={`flex-1 py-1.5 px-3 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                              seatingForm.paymentMode !== 'instapay'
+                                ? 'bg-emerald-500 text-slate-950 border-emerald-500 font-black shadow'
+                                : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
                             }`}
                           >
-                            قيمة ثابتة (ج.م)
+                            <Banknote className="w-3.5 h-3.5" />
+                            <span>كاش بالدرج</span>
                           </button>
                           <button
                             type="button"
-                            onClick={() => setSeatingForm({ ...seatingForm, coachShareType: 'percentage', coachShareValue: 40 })}
-                            className={`flex-1 py-1.5 px-2 rounded-xl text-[11px] font-bold border transition cursor-pointer ${
-                              seatingForm.coachShareType === 'percentage'
-                                ? 'bg-emerald-500 text-slate-950 border-emerald-500'
-                                : 'bg-slate-900 text-slate-400 border-slate-800'
+                            onClick={() => setSeatingForm({ ...seatingForm, paymentMode: 'instapay' })}
+                            className={`flex-1 py-1.5 px-3 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                              seatingForm.paymentMode === 'instapay'
+                                ? 'bg-indigo-500 text-white border-indigo-500 font-black shadow'
+                                : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
                             }`}
                           >
-                            نسبة مئوية (%)
+                            <Smartphone className="w-3.5 h-3.5" />
+                            <span>إنستاباي</span>
                           </button>
                         </div>
-                        <div className="mt-1.5 relative">
-                          <input
-                            type="number"
-                            min="0"
-                            max={seatingForm.coachShareType === 'percentage' ? 100 : undefined}
-                            required
-                            value={seatingForm.coachShareValue}
-                            onChange={(e) =>
-                              setSeatingForm({
-                                ...seatingForm,
-                                coachShareValue: Number(e.target.value),
-                              })
-                            }
-                            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-emerald-400"
-                          />
-                          <span className="absolute left-2.5 top-1.5 text-[10px] text-slate-500 font-bold">
-                            {seatingForm.coachShareType === 'percentage' ? '%' : 'ج.م'}
-                          </span>
-                        </div>
+                      </div>
+                    </div>
+
+                    {/* Coach Share Calculation Method */}
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                        طريقة حساب نصيب ومستحقات الكابتن:
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSeatingForm({ ...seatingForm, coachShareType: 'fixed', coachShareValue: 50 })}
+                          className={`flex-1 py-1.5 px-2 rounded-xl text-[11px] font-bold border transition cursor-pointer ${
+                            seatingForm.coachShareType === 'fixed'
+                              ? 'bg-emerald-500 text-slate-950 border-emerald-500'
+                              : 'bg-slate-900 text-slate-400 border-slate-800'
+                          }`}
+                        >
+                          قيمة ثابتة (ج.م)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSeatingForm({ ...seatingForm, coachShareType: 'percentage', coachShareValue: 40 })}
+                          className={`flex-1 py-1.5 px-2 rounded-xl text-[11px] font-bold border transition cursor-pointer ${
+                            seatingForm.coachShareType === 'percentage'
+                              ? 'bg-emerald-500 text-slate-950 border-emerald-500'
+                              : 'bg-slate-900 text-slate-400 border-slate-800'
+                          }`}
+                        >
+                          نسبة مئوية (%)
+                        </button>
+                      </div>
+                      <div className="mt-1.5 relative">
+                        <input
+                          type="number"
+                          min="0"
+                          max={seatingForm.coachShareType === 'percentage' ? 100 : undefined}
+                          required
+                          value={seatingForm.coachShareValue}
+                          onChange={(e) =>
+                            setSeatingForm({
+                              ...seatingForm,
+                              coachShareValue: Number(e.target.value),
+                            })
+                          }
+                          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-emerald-400"
+                        />
+                        <span className="absolute left-2.5 top-1.5 text-[10px] text-slate-500 font-bold">
+                          {seatingForm.coachShareType === 'percentage' ? '%' : 'ج.م'}
+                        </span>
                       </div>
                     </div>
 
@@ -1381,7 +1504,9 @@ export const ReceptionPage: React.FC = () => {
                             ملخص التوزيع المالي الفوري للحركة:
                           </div>
                           <div className="flex items-center justify-between">
-                            <span className="text-slate-300">💵 إجمالي الكاش الوارد للدرج الآن:</span>
+                            <span className="text-slate-300">
+                              {seatingForm.paymentMode === 'instapay' ? '📱 إجمالي تحويل إنستاباي:' : '💵 إجمالي الكاش الوارد للدرج:'}
+                            </span>
                             <span className="font-bold text-emerald-300">{formatEGP(totalPaid)}</span>
                           </div>
                           <div className="flex items-center justify-between">
@@ -1400,64 +1525,306 @@ export const ReceptionPage: React.FC = () => {
 
                 {/* Details Section for Pathway 3: Direct Gym / No Coach */}
                 {seatingForm.pathway === 'gym_direct_no_coach' && (
-                  <div className="p-4 rounded-2xl bg-teal-950/20 border border-teal-500/30 space-y-3.5 animate-scale-up">
+                  <div className="p-4 rounded-2xl bg-teal-950/20 border border-teal-500/30 space-y-4 animate-scale-up">
                     <label className="block text-xs font-black text-teal-300">
                       طبيعة اشتراك أو دخول اللاعب للصالة:
                     </label>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      {/* Choice 1: Existing Subscription */}
                       <button
                         type="button"
-                        onClick={() => setSeatingForm({ ...seatingForm, isDirectPaid: false, amount: 0 })}
-                        className={`p-3 rounded-xl border text-right transition cursor-pointer ${
-                          !seatingForm.isDirectPaid
+                        onClick={() =>
+                          setSeatingForm((prev) => ({
+                            ...prev,
+                            directEntryType: 'existing_sub',
+                            isDirectPaid: false,
+                            amount: 0,
+                          }))
+                        }
+                        className={`p-3 rounded-xl border text-right transition cursor-pointer flex flex-col justify-between gap-1 ${
+                          seatingForm.directEntryType === 'existing_sub'
                             ? 'bg-teal-500/20 border-teal-500 text-teal-300 font-bold ring-1 ring-teal-500/50'
                             : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
                         }`}
                       >
-                        <div className="text-xs font-black">اشتراك شهري ساري مسبقاً</div>
-                        <div className="text-[10px] text-slate-400 mt-0.5">0.00 ج.م كاش (مخصوم من اشتراكه)</div>
+                        <div className="text-xs font-black">1. باشتراكه الساري</div>
+                        <div className="text-[10px] text-slate-400">0.00 ج.م كاش (مخصوم من اشتراكه)</div>
                       </button>
 
+                      {/* Choice 2: Single Pass */}
                       <button
                         type="button"
-                        onClick={() => setSeatingForm({ ...seatingForm, isDirectPaid: true, amount: 80 })}
-                        className={`p-3 rounded-xl border text-right transition cursor-pointer ${
-                          seatingForm.isDirectPaid
+                        onClick={() =>
+                          setSeatingForm((prev) => ({
+                            ...prev,
+                            directEntryType: 'single_pass',
+                            isDirectPaid: true,
+                            amount: prev.amount > 0 ? prev.amount : 80,
+                          }))
+                        }
+                        className={`p-3 rounded-xl border text-right transition cursor-pointer flex flex-col justify-between gap-1 ${
+                          seatingForm.directEntryType === 'single_pass'
                             ? 'bg-teal-500/20 border-teal-500 text-teal-300 font-bold ring-1 ring-teal-500/50'
                             : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
                         }`}
                       >
-                        <div className="text-xs font-black">دفع كاش بالاستقبال (تذكرة/اشتراك)</div>
-                        <div className="text-[10px] text-slate-400 mt-0.5">توريد كاش كامل للدرج</div>
+                        <div className="text-xs font-black">2. تذكرة يومية / Single</div>
+                        <div className="text-[10px] text-slate-400">دخول لمرة واحدة اليوم</div>
+                      </button>
+
+                      {/* Choice 3: New / Renew Subscription */}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSeatingForm((prev) => ({
+                            ...prev,
+                            directEntryType: 'new_subscription',
+                            isDirectPaid: true,
+                            amount: prev.subFee || 500,
+                          }))
+                        }
+                        className={`p-3 rounded-xl border text-right transition cursor-pointer flex flex-col justify-between gap-1 ${
+                          seatingForm.directEntryType === 'new_subscription'
+                            ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 font-bold ring-1 ring-emerald-500/50 shadow-md shadow-emerald-500/10'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <div className="text-xs font-black flex items-center gap-1">
+                          <Sparkles className="w-3 h-3 text-emerald-400" />
+                          <span>3. عمل / تجديد اشتراك</span>
+                        </div>
+                        <div className="text-[10px] text-slate-400">تفعيل اشتراك فوري وتوريد للمالية</div>
                       </button>
                     </div>
 
-                    {seatingForm.isDirectPaid && (
-                      <div className="pt-1">
-                        <label className="block text-[11px] font-bold text-slate-300 mb-1">
-                          المبلغ المطلوب تحصيله كاش بالدرج (ج.م):
-                        </label>
-                        <div className="relative">
-                          <input
-                            type="number"
-                            min="0"
-                            required
-                            value={seatingForm.amount}
-                            onChange={(e) =>
-                              setSeatingForm({ ...seatingForm, amount: Number(e.target.value) })
-                            }
-                            className="w-full bg-slate-900 border border-teal-500/40 rounded-xl px-3 py-2 text-xs font-black font-mono text-teal-400 focus:outline-none focus:border-teal-400"
-                          />
-                          <span className="absolute left-2.5 top-2 text-[10px] text-slate-500 font-bold">
-                            ج.م
-                          </span>
+                    {/* Section for Single Pass */}
+                    {seatingForm.directEntryType === 'single_pass' && (
+                      <div className="p-3.5 rounded-xl bg-slate-900/80 border border-teal-500/20 space-y-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                              سعر التذكرة اليومية (ج.م):
+                            </label>
+                            <div className="relative">
+                              <input
+                                type="number"
+                                min="0"
+                                required
+                                value={seatingForm.amount}
+                                onChange={(e) =>
+                                  setSeatingForm({ ...seatingForm, amount: Number(e.target.value) })
+                                }
+                                className="w-full bg-slate-900 border border-teal-500/40 rounded-xl px-3 py-2 text-xs font-black font-mono text-teal-400 focus:outline-none focus:border-teal-400"
+                              />
+                              <span className="absolute left-2.5 top-2 text-[10px] text-slate-500 font-bold">
+                                ج.م
+                              </span>
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                              طريقة التحصيل:
+                            </label>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setSeatingForm({ ...seatingForm, paymentMode: 'cash_drawer' })}
+                                className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                                  seatingForm.paymentMode !== 'instapay'
+                                    ? 'bg-teal-500 text-slate-950 border-teal-500 font-black'
+                                    : 'bg-slate-900 text-slate-400 border-slate-800'
+                                }`}
+                              >
+                                <Banknote className="w-3.5 h-3.5" />
+                                <span>كاش بالدرج</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSeatingForm({ ...seatingForm, paymentMode: 'instapay' })}
+                                className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                                  seatingForm.paymentMode === 'instapay'
+                                    ? 'bg-indigo-500 text-white border-indigo-500 font-black'
+                                    : 'bg-slate-900 text-slate-400 border-slate-800'
+                                }`}
+                              >
+                                <Smartphone className="w-3.5 h-3.5" />
+                                <span>إنستاباي</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Section for New / Renew Subscription */}
+                    {seatingForm.directEntryType === 'new_subscription' && (
+                      <div className="p-4 rounded-xl bg-slate-900/90 border border-emerald-500/40 space-y-3.5">
+                        <div className="flex items-center justify-between">
+                          <div className="text-xs font-black text-emerald-400 flex items-center gap-1.5">
+                            <Sparkles className="w-4 h-4" />
+                            <span>بيانات الاشتراك وتفاصيل التحصيل المالي:</span>
+                          </div>
+                          {seatingForm.isSubAlreadyRenewed && (
+                            <span className="text-[11px] font-bold text-emerald-400 bg-emerald-500/20 px-2.5 py-1 rounded-full border border-emerald-500/30 flex items-center gap-1">
+                              <Check className="w-3 h-3" />
+                              <span>تم التحصيل والتفعيل مسبقاً</span>
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          {/* Plan Name */}
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                              اسم الباقة / نوع الاشتراك:
+                            </label>
+                            <input
+                              type="text"
+                              required
+                              value={seatingForm.subPlanName}
+                              onChange={(e) => setSeatingForm({ ...seatingForm, subPlanName: e.target.value })}
+                              placeholder="مثال: اشتراك شهري صالة الجيم"
+                              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-bold focus:outline-none focus:border-emerald-400"
+                            />
+                          </div>
+
+                          {/* Duration Days */}
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="text-[11px] font-bold text-slate-300">
+                                المدة (بالأيام):
+                              </label>
+                              <div className="flex items-center gap-1">
+                                {[30, 60, 90].map((d) => (
+                                  <button
+                                    key={d}
+                                    type="button"
+                                    onClick={() => setSeatingForm({ ...seatingForm, subDurationDays: d })}
+                                    className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition cursor-pointer ${
+                                      seatingForm.subDurationDays === d
+                                        ? 'bg-emerald-500 text-slate-950'
+                                        : 'bg-slate-800 text-slate-400 hover:text-white'
+                                    }`}
+                                  >
+                                    {d} يوم
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                            <input
+                              type="number"
+                              min="1"
+                              required
+                              value={seatingForm.subDurationDays}
+                              onChange={(e) =>
+                                setSeatingForm({ ...seatingForm, subDurationDays: Number(e.target.value) })
+                              }
+                              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono font-bold text-white focus:outline-none focus:border-emerald-400"
+                            />
+                          </div>
+
+                          {/* Subscription Fee */}
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                              سعر الاشتراك المطلوب تحصيله (ج.م):
+                            </label>
+                            <div className="relative">
+                              <input
+                                type="number"
+                                min="0"
+                                required
+                                value={seatingForm.subFee}
+                                onChange={(e) => {
+                                  const val = Number(e.target.value);
+                                  setSeatingForm({ ...seatingForm, subFee: val, amount: val });
+                                }}
+                                className="w-full bg-slate-950 border border-emerald-500/50 rounded-xl px-3 py-2 text-xs font-black font-mono text-emerald-400 focus:outline-none focus:border-emerald-400"
+                              />
+                              <span className="absolute left-2.5 top-2 text-[10px] text-slate-500 font-bold">
+                                ج.م
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Payment Method: Cash vs InstaPay */}
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                              طريقة تحصيل الاشتراك:
+                            </label>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setSeatingForm({ ...seatingForm, subPaymentMethod: 'cash' })}
+                                className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                                  seatingForm.subPaymentMethod === 'cash'
+                                    ? 'bg-emerald-500 text-slate-950 border-emerald-500 font-black shadow-md'
+                                    : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+                                }`}
+                              >
+                                <Banknote className="w-3.5 h-3.5" />
+                                <span>كاش بالدرج</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSeatingForm({ ...seatingForm, subPaymentMethod: 'instapay' })}
+                                className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                                  seatingForm.subPaymentMethod === 'instapay'
+                                    ? 'bg-indigo-500 text-white border-indigo-500 font-black shadow-md'
+                                    : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+                                }`}
+                              >
+                                <Smartphone className="w-3.5 h-3.5" />
+                                <span>إنستاباي (InstaPay)</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Action Button: تم التحصيل وتفعيل الاشتراك فوراً */}
+                        <div className="pt-2 border-t border-slate-800 flex items-center gap-3">
+                          <button
+                            type="button"
+                            disabled={seatingForm.isSubAlreadyRenewed}
+                            onClick={() => {
+                              if (!selectedLogForSeating) return;
+                              renewMemberSubscription(
+                                selectedLogForSeating.memberId,
+                                seatingForm.subPlanName,
+                                Number(seatingForm.subDurationDays) || 30,
+                                Number(seatingForm.subFee) || 0,
+                                seatingForm.subPaymentMethod,
+                                `اشتراك صالة فوري من شاشة التسكين (${seatingForm.subPlanName})`
+                              );
+                              setSeatingForm((prev) => ({ ...prev, isSubAlreadyRenewed: true }));
+                              sounds.playCashRegister();
+                              alert(`✓ تم تسجيل تحصيل مبلغ ${formatEGP(seatingForm.subFee)} بنجاح (${seatingForm.subPaymentMethod === 'cash' ? 'كاش بالدرج' : 'تحويل إنستاباي'}) وتفعيل اشتراك ${seatingForm.subDurationDays} يوم للاعب! وتم ترحيل الحركة للتقرير واليومية.`);
+                            }}
+                            className={`flex-1 py-2.5 px-4 rounded-xl font-black text-xs transition cursor-pointer flex items-center justify-center gap-2 ${
+                              seatingForm.isSubAlreadyRenewed
+                                ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/40 cursor-not-allowed opacity-80'
+                                : 'bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 shadow-lg shadow-emerald-500/20'
+                            }`}
+                          >
+                            {seatingForm.isSubAlreadyRenewed ? (
+                              <>
+                                <Check className="w-4 h-4" />
+                                <span>تم التحصيل وتفعيل الاشتراك بنجاح ✓</span>
+                              </>
+                            ) : (
+                              <>
+                                <Banknote className="w-4 h-4" />
+                                <span>تم التحصيل وتفعيل الاشتراك ({formatEGP(seatingForm.subFee)})</span>
+                              </>
+                            )}
+                          </button>
                         </div>
                       </div>
                     )}
 
                     <div className="p-2.5 rounded-xl bg-teal-500/10 border border-teal-500/30 text-[11px] text-teal-200">
-                      💡 المتدرب داخل تمرين حر بأجهزة وأوزان الجيم لحساب الجيم مباشرة، بدون أي كابتن وبدون أي تحميلات أو مستحقات لأي مدرب (100% للجيم).
+                      💡 تمرين حر بأجهزة وأوزان الجيم لحساب الجيم مباشرة بدون أي مدرب، وتُسجل كافة الإيرادات مباشرة بحسابات اليومية والتقارير الشهرية.
                     </div>
                   </div>
                 )}
@@ -1498,6 +1865,8 @@ export const ReceptionPage: React.FC = () => {
                 </button>
               </div>
             </form>
+          );
+        })()}
           </div>
         </div>
       )}
