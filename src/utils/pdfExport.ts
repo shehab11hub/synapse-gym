@@ -7,6 +7,7 @@ import {
   TrainerTransaction,
   YearlyArchive,
   Coach,
+  PhysioBooking,
 } from '../types';
 import { formatEGP, formatTime12h } from './formatters';
 
@@ -333,7 +334,7 @@ export const printDailyShiftReportPDF = (
       </tbody>
     </table>
 
-    <!-- 2. مقبوضات واشتراكات اليوم -->
+    <!-- 2. مقبوضات واشتراكات اليوم المباشرة -->
     <div class="section-title">💳 مقبوضات واشتراكات اللاعبين المباشرة بالاستقبال</div>
     <table>
       <thead>
@@ -348,8 +349,9 @@ export const printDailyShiftReportPDF = (
       </thead>
       <tbody>
         ${
-          entries.length > 0
+          entries.filter((e) => e.paymentMethod !== 'coach_collected').length > 0
             ? entries
+                .filter((e) => e.paymentMethod !== 'coach_collected')
                 .map(
                   (e) => `
               <tr>
@@ -366,8 +368,8 @@ export const printDailyShiftReportPDF = (
             : '<tr><td colspan="6" class="text-center">لا توجد اشتراكات مسجلة في وردية اليوم.</td></tr>'
         }
         <tr class="total-row">
-          <td colspan="4">إجمالي اشتراكات اليوم المباشرة</td>
-          <td class="text-center text-teal">${formatEGP(entries.reduce((s, e) => s + e.amount, 0))}</td>
+          <td colspan="4">إجمالي مقبوضات واشتراكات اليوم المباشرة بالخزينة</td>
+          <td class="text-center text-teal">${formatEGP(entries.filter((e) => e.paymentMethod !== 'coach_collected').reduce((s, e) => s + e.amount, 0))}</td>
           <td>—</td>
         </tr>
       </tbody>
@@ -383,7 +385,7 @@ export const printDailyShiftReportPDF = (
           <th class="text-center">نوع الحركة</th>
           <th class="text-center">المبلغ</th>
           <th class="text-center">طريقة الدفع</th>
-          <th>البيان والسبب</th>
+          <th>البيان والتفاصيل</th>
         </tr>
       </thead>
       <tbody>
@@ -392,14 +394,21 @@ export const printDailyShiftReportPDF = (
             ? trainerTransactions
                 .map((t) => {
                   const isRepay = t.type === 'coach_repayment';
+                  const isPhysio = t.type === 'physio_charge';
+                  const label = isRepay
+                    ? 'سداد مديونية (+ للدرج)'
+                    : isPhysio
+                    ? 'مديونية مساج / تأهيل'
+                    : 'تحميل مديونية على الكابتن';
+                  const detail = t.payer_name ? `اللاعب/المريض: ${t.payer_name} | ${t.notes || ''}` : (t.notes || '—');
                   return `
                 <tr>
                   <td class="text-center">${t.created_at ? new Date(t.created_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
-                  <td><strong>${t.payer_name || t.coach_name || 'الكابتن'}</strong></td>
-                  <td class="text-center ${isRepay ? 'text-teal' : 'text-amber'}">${isRepay ? 'سداد مديونية (+ للدرج)' : 'تحميل مديونية على الكابتن'}</td>
+                  <td><strong>${t.coach_name || 'الكابتن'}</strong></td>
+                  <td class="text-center ${isRepay ? 'text-teal' : 'text-amber'}"><strong>${label}</strong></td>
                   <td class="text-center"><strong>${formatEGP(t.amount)}</strong></td>
                   <td class="text-center">${getPaymentMethodLabel(t.payment_method)}</td>
-                  <td>${t.notes || '—'}</td>
+                  <td>${detail}</td>
                 </tr>
               `;
                 })
@@ -723,4 +732,94 @@ export const printYearlyArchiveReportPDF = (archive: YearlyArchive) => {
   `;
 
   openPrintWindow(`تقرير سنة ${archive.year}`, html);
+};
+
+/**
+ * 4. Print Individual Physio / Massage Session Receipt PDF
+ */
+export const printPhysioReceiptPDF = (booking: PhysioBooking) => {
+  const isDebt = booking.paymentMethod === 'coach_debt';
+  const serviceLabel = booking.serviceType === 'massage' ? 'جلسة مساج واستشفاء' : 'جلسة تأهيل وعلاج طبيعي';
+  const methodLabel = isDebt
+    ? 'تحميل كمديونية رسمية على الكابتن'
+    : booking.paymentMethod === 'instapay'
+    ? `تحويل انستاباي (${booking.instapayRef || 'معتمد'})`
+    : 'نقداً بالخزينة (كاش)';
+
+  const html = `
+    <div class="header-banner">
+      <div>
+        <h1 class="header-title">SYNAPSE GYM - عيادة التأهيل والمساج والاستشفاء</h1>
+        <p class="header-subtitle">
+          إيصال محاسبة جلسة رسمية | رقم الجلسة: <strong>${booking.id}</strong> | تاريخ: <strong>${new Date(booking.startTime).toLocaleDateString('ar-EG')}</strong>
+        </p>
+      </div>
+      <div class="badge">${serviceLabel}</div>
+    </div>
+
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-label">المبلغ الإجمالي المحصل</div>
+        <div class="kpi-val text-teal">${formatEGP(booking.totalFee)}</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">طريقة السداد</div>
+        <div class="kpi-val text-amber" style="font-size: 13px;">${methodLabel}</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">المدة الزمنية للجلسة</div>
+        <div class="kpi-val">${booking.elapsedMinutes} دقيقة</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">حالة السداد</div>
+        <div class="kpi-val ${isDebt ? 'text-rose' : 'text-teal'}">${isDebt ? 'مديونية مؤجلة على الكابتن' : 'مسدد بالكامل'}</div>
+      </div>
+    </div>
+
+    <div class="section-title">📋 تفاصيل الجلسة والخدمات المقدمة</div>
+    <table>
+      <tbody>
+        <tr>
+          <td style="width: 25%; color: #64748b; font-weight: bold;">اسم المريض / المتدرب:</td>
+          <td style="width: 25%; font-weight: bold; font-size: 13px;">${booking.patientName}</td>
+          <td style="width: 25%; color: #64748b; font-weight: bold;">كود المتدرب:</td>
+          <td style="width: 25%; font-family: monospace;">${booking.patientCode || 'PHY-PATIENT'}</td>
+        </tr>
+        <tr>
+          <td style="color: #64748b; font-weight: bold;">الطبيب / المدرب المنفذ:</td>
+          <td style="font-weight: bold; font-size: 13px;">${booking.coachName || booking.doctorName}</td>
+          <td style="color: #64748b; font-weight: bold;">الغرفة / العيادة:</td>
+          <td>${booking.roomName}</td>
+        </tr>
+        <tr>
+          <td style="color: #64748b; font-weight: bold;">وقت بدء الجلسة:</td>
+          <td>${new Date(booking.startTime).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}</td>
+          <td style="color: #64748b; font-weight: bold;">وقت الانتهاء:</td>
+          <td>${booking.endTime ? new Date(booking.endTime).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+        </tr>
+        <tr>
+          <td style="color: #64748b; font-weight: bold;">الحد الأدنى المحتسب (ساعة):</td>
+          <td style="font-weight: bold;">${formatEGP(booking.hourlyRate)}</td>
+          <td style="color: #64748b; font-weight: bold;">تكلفة إضافية (تجاوز ساعة):</td>
+          <td style="font-weight: bold; color: #d97706;">${booking.extraFee ? `+${formatEGP(booking.extraFee)} (${booking.extraFeeReason || 'وقت إضافي'})` : 'لا يوجد'}</td>
+        </tr>
+        <tr>
+          <td style="color: #64748b; font-weight: bold;">الإجمالي المستحق:</td>
+          <td colspan="3" style="font-size: 15px; font-weight: bold; color: #0d9488;">${formatEGP(booking.totalFee)}</td>
+        </tr>
+        ${booking.notes ? `
+        <tr>
+          <td style="color: #64748b; font-weight: bold;">ملاحظات السداد:</td>
+          <td colspan="3">${booking.notes}</td>
+        </tr>` : ''}
+      </tbody>
+    </table>
+
+    <div class="footer" style="margin-top: 40px;">
+      <div>توقيع واستلام المتدرب / الكابتن: ________________________</div>
+      <div>ختم واعتماد قسم الاستقبال: ________________________</div>
+    </div>
+  `;
+
+  openPrintWindow(`إيصال جلسة ${booking.patientName}`, html);
 };

@@ -150,6 +150,9 @@ export const MasterReportPage: React.FC = () => {
   const todayIso = new Date().toISOString().slice(0, 10);
   const todayShiftStatus = getTodayShiftStatus();
 
+  // Today's all entries (including coach debts and direct payments)
+  const todayAllEntries = masterReportEntries.filter((e) => e.date?.startsWith(todayIso));
+
   // Today's direct cash collected at reception
   const todayDirectEntries = masterReportEntries.filter(
     (e) => e.date?.startsWith(todayIso) && e.paymentMethod !== 'coach_collected'
@@ -352,7 +355,7 @@ export const MasterReportPage: React.FC = () => {
 
     printDailyShiftReportPDF(
       todayShift,
-      todayDirectEntries,
+      todayAllEntries,
       todayExpenses,
       todayRepayments,
       transactions.filter((t) => t.timestamp.startsWith(todayIso)),
@@ -428,14 +431,31 @@ export const MasterReportPage: React.FC = () => {
       setShiftAuthPassword('');
       setShiftNotes('');
 
+      // Filter all shift data across both shiftClosingDayDate and shiftNextDayDate
+      const shiftEntries = masterReportEntries.filter(
+        (e) => e.date?.startsWith(shiftClosingDayDate) || (shiftNextDayDate && e.date?.startsWith(shiftNextDayDate))
+      );
+      const shiftExpenses = expenses.filter(
+        (e) => e.date?.startsWith(shiftClosingDayDate) || (shiftNextDayDate && e.date?.startsWith(shiftNextDayDate))
+      );
+      const shiftRepayments = cashInflows.filter(
+        (i) => i.type === 'coach_settlement' && (i.date?.startsWith(shiftClosingDayDate) || (shiftNextDayDate && i.date?.startsWith(shiftNextDayDate)))
+      );
+      const shiftPos = transactions.filter(
+        (t) => t.timestamp?.startsWith(shiftClosingDayDate) || (shiftNextDayDate && t.timestamp?.startsWith(shiftNextDayDate))
+      );
+      const shiftTrainerTrx = trainerTransactions.filter(
+        (t) => t.created_at?.startsWith(shiftClosingDayDate) || (shiftNextDayDate && t.created_at?.startsWith(shiftNextDayDate))
+      );
+
       // 1. Generate & open the Shift Closing PDF immediately
       printDailyShiftReportPDF(
         closed,
-        todayDirectEntries,
-        todayExpenses,
-        todayRepayments,
-        transactions.filter((t) => t.timestamp.startsWith(shiftClosingDayDate)),
-        trainerTransactions.filter((t) => t.created_at?.startsWith(shiftClosingDayDate))
+        shiftEntries,
+        shiftExpenses,
+        shiftRepayments,
+        shiftPos,
+        shiftTrainerTrx
       );
 
       // 2. Auto export Comprehensive Excel file immediately

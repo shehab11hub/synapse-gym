@@ -80,7 +80,10 @@ interface GymDataContextType {
   startPhysioSession: (data: {
     doctorName: string;
     doctorCode: string;
+    coachId?: string;
+    coachName?: string;
     patientName: string;
+    patientCode?: string;
     roomName: string;
     hourlyRate: number;
     serviceType?: 'physio' | 'massage';
@@ -100,6 +103,9 @@ interface GymDataContextType {
       instapayRef?: string;
       chargedToCoachId?: string;
       notes?: string;
+      totalAmount?: number;
+      extraFee?: number;
+      extraFeeReason?: string;
     }
   ) => void;
   assignArrivedMember: (
@@ -1371,6 +1377,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const startPhysioSession = (data: {
     doctorName: string;
     doctorCode: string;
+    coachId?: string;
+    coachName?: string;
     patientName: string;
     patientCode?: string;
     roomName: string;
@@ -1383,6 +1391,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       id: `${data.serviceType || 'physio'}-${Date.now()}`,
       doctorName: data.doctorName,
       doctorCode: data.doctorCode,
+      coachId: data.coachId,
+      coachName: data.coachName || data.doctorName,
       patientName: data.patientName,
       patientCode: data.patientCode,
       roomName: data.roomName,
@@ -1516,10 +1526,18 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       instapayRef?: string;
       chargedToCoachId?: string;
       notes?: string;
+      totalAmount?: number;
+      extraFee?: number;
+      extraFeeReason?: string;
     }
   ) => {
     const booking = physioBookings.find((b) => b.id === id);
     if (!booking) return;
+
+    const extra = billingData.extraFee || 0;
+    const finalFee = (billingData.totalAmount !== undefined && billingData.totalAmount > 0)
+      ? billingData.totalAmount
+      : (booking.totalFee + extra);
 
     setPhysioBookings((prev) => {
       const updated = prev.map((b) =>
@@ -1533,6 +1551,9 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
               paymentMethod: billingData.paymentMethod,
               instapayRef: billingData.instapayRef,
               chargedToCoachId: billingData.chargedToCoachId,
+              extraFee: (b.extraFee || 0) + extra,
+              extraFeeReason: billingData.extraFeeReason || b.extraFeeReason,
+              totalFee: finalFee,
               paid: billingData.paymentMethod !== 'coach_debt',
               notes: billingData.notes,
             }
@@ -1545,48 +1566,58 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       return updated;
     });
 
-    // If paid cash -> record to Cash Drawer
+    const targetCoach = coaches.find(
+      (c) =>
+        c.id === billingData.chargedToCoachId ||
+        c.id === booking.coachId ||
+        c.name.trim().toLowerCase() === (booking.doctorName || '').trim().toLowerCase() ||
+        (booking.doctorName && booking.doctorName.trim().toLowerCase().includes(c.name.trim().toLowerCase())) ||
+        (booking.doctorName && c.name.trim().toLowerCase().includes(booking.doctorName.trim().toLowerCase()))
+    );
+    const coachId = targetCoach?.id || billingData.chargedToCoachId || booking.coachId || coaches[0]?.id || 'COACH-01';
+    const coachName = targetCoach ? targetCoach.name : (booking.coachName || booking.doctorName || 'الكابتن');
     const serviceLabel = booking.serviceType === 'massage' ? 'مساج واستشفاء' : 'علاج طبيعي';
+
     if (billingData.paymentMethod === 'cash') {
       const inflow: CashInflowItem = {
         id: `inf-phy-${Date.now()}`,
         type: 'physio',
-        title: `إيراد جلسة ${serviceLabel} (${booking.roomName}) - ${booking.doctorName}`,
-        amount: booking.totalFee,
+        title: `إيراد جلسة ${serviceLabel} (${booking.roomName}) - كابتن ${coachName}`,
+        amount: finalFee,
         date: new Date().toISOString(),
         memberName: booking.patientName,
         paymentMethod: 'cash',
         recordedBy: 'الاستقبال',
       };
       setCashInflows((prev) => [inflow, ...prev]);
+      if (isSupabaseConfigured) {
+        supabaseService.insertCashInflow(inflow).catch(() => {});
+      }
     } else if (billingData.paymentMethod === 'instapay') {
       const inflow: CashInflowItem = {
         id: `inf-phy-${Date.now()}`,
         type: 'physio',
-        title: `تحويل انستاباي جلسة ${serviceLabel} (${booking.roomName}) - كود: ${billingData.instapayRef || 'N/A'}`,
-        amount: booking.totalFee,
+        title: `تحويل انستاباي جلسة ${serviceLabel} (${booking.roomName}) - كود: ${billingData.instapayRef || 'N/A'} - كابتن ${coachName}`,
+        amount: finalFee,
         date: new Date().toISOString(),
         memberName: booking.patientName,
         paymentMethod: 'instapay',
         recordedBy: 'الاستقبال',
       };
       setCashInflows((prev) => [inflow, ...prev]);
+      if (isSupabaseConfigured) {
+        supabaseService.insertCashInflow(inflow).catch(() => {});
+      }
     } else if (billingData.paymentMethod === 'coach_debt') {
-      const targetCoach = coaches.find(
-        (c) => c.id === billingData.chargedToCoachId || c.name.trim().toLowerCase() === booking.doctorName.trim().toLowerCase()
-      );
-      const coachId = targetCoach?.id || billingData.chargedToCoachId || 'COACH-MISC';
-      const coachName = targetCoach ? targetCoach.name : booking.doctorName;
-
       const coachDebtTrx: TrainerTransaction = {
-        transaction_id: `TRX-PHY-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`,
+        transaction_id: `TRX-PHY-${Date.now()}-${coachId.slice(-4)}`,
         coach_id: coachId,
         coach_name: coachName,
-        amount: booking.totalFee,
+        amount: finalFee,
         collected_by: 'coach',
         payer_type: `جلسة ${serviceLabel}`,
         payer_name: booking.patientName,
-        gym_share: booking.totalFee,
+        gym_share: finalFee,
         coach_share: 0,
         status: 'pending',
         created_at: new Date().toISOString(),
@@ -1604,45 +1635,60 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
             c.id === targetCoach.id
               ? {
                   ...c,
-                  currentBalance: (c.currentBalance || 0) - booking.totalFee,
+                  currentBalance: (c.currentBalance || 0) - finalFee,
                 }
               : c
           )
         );
       }
 
+      // إشعار مديونية بالدرج ليظهر في صفحة مصاريف وإدارة الدرج
+      const inflowRecord: CashInflowItem = {
+        id: `inf-cch-${Date.now()}-${coachId}`,
+        type: 'coach_settlement',
+        title: `تحميل على كابتن ${coachName} مبلغ ${finalFee} ج.م (جلسة: ${serviceLabel} - متدرب: ${booking.patientName})`,
+        amount: finalFee,
+        date: new Date().toISOString(),
+        memberName: coachName,
+        paymentMethod: 'cash',
+        recordedBy: 'السيستم (جلسة مساج/تأهيل)',
+      };
+      setCashInflows((prev) => [inflowRecord, ...prev]);
+
       if (isSupabaseConfigured) {
         supabaseService.upsertTrainerTransaction(coachDebtTrx).catch(() => {});
+        supabaseService.insertCashInflow(inflowRecord).catch(() => {});
         if (targetCoach) {
           supabaseService.upsertCoach({
             ...targetCoach,
-            currentBalance: (targetCoach.currentBalance || 0) - booking.totalFee,
+            currentBalance: (targetCoach.currentBalance || 0) - finalFee,
           }).catch(() => {});
         }
       }
     }
 
     // Auto record into Master Report!
-    const repCoach = coaches.find(
-      (c) => c.id === billingData.chargedToCoachId || c.name.trim().toLowerCase() === booking.doctorName.trim().toLowerCase()
-    );
     const newEntry: MasterReportEntry = {
-      id: `rep-${Date.now()}`,
+      id: `rep-phy-${Date.now()}`,
       month: currentMonth,
       date: new Date().toISOString(),
       playerName: booking.patientName,
       playerCode: booking.patientCode || 'PHY-PATIENT',
-      amount: booking.totalFee,
-      coachId: repCoach ? repCoach.id : billingData.chargedToCoachId,
-      coachName: repCoach ? repCoach.name : booking.doctorName,
+      amount: finalFee,
+      coachId: coachId,
+      coachName: coachName,
       sessionCategory: booking.serviceType === 'massage' ? 'massage' : 'physio',
       sessionTitle: `جلسة ${serviceLabel} (${booking.roomName})`,
       paymentMethod: billingData.paymentMethod === 'coach_debt' ? 'coach_collected' : billingData.paymentMethod,
       paymentStatus: billingData.paymentMethod === 'coach_debt' ? 'pending_on_coach' : 'paid',
-      notes: billingData.notes || `حساب: ${billingData.billedTo === 'patient' ? 'اللاعب' : 'الكوتش/الدكتور'}`,
+      notes: billingData.notes || `حساب: ${billingData.billedTo === 'patient' ? 'اللاعب' : 'الكوتش'}`,
       sourceType: 'physio',
     };
     setMasterReportEntries((prev) => [newEntry, ...prev]);
+
+    if (isSupabaseConfigured) {
+      supabaseService.upsertMasterReportEntry(newEntry).catch(() => {});
+    }
   };
 
   const assignArrivedMember = (
@@ -1839,6 +1885,23 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       if (targetSessId) {
         assignPlayerToSession(targetSessId, member.id, true);
       }
+    }
+
+    // 4. إذا كانت الجلسة مساج أو علاج طبيعي، يتم إنشاء جلسة انتظار في قسم التأهيل والمساج تلقائياً
+    if (category === 'massage' || category === 'physio') {
+      const room = paymentDetails?.roomName || (category === 'massage' ? 'غرفة المساج والاستشفاء 1' : 'عيادة التأهيل الطبي 1');
+      startPhysioSession({
+        doctorName: coachName,
+        doctorCode: coach?.id || 'DOC-01',
+        coachId: coach?.id,
+        coachName: coachName,
+        patientName: member.name,
+        patientCode: member.code,
+        roomName: room,
+        hourlyRate: (feeAmount > 0 ? feeAmount : coach?.ratePerSession) || 180,
+        serviceType: category === 'massage' ? 'massage' : 'physio',
+        status: 'waiting',
+      });
     }
   };
 
@@ -3410,12 +3473,20 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       totalCoachDebtsLoadedToday: 0,
     };
 
-    const todayEntries = masterReportEntries.filter((e) => e.date?.startsWith(fallbackClosing.date));
-    const todayExpenses = expenses.filter((e) => e.date.startsWith(fallbackClosing.date));
-    const todayInflows = cashInflows.filter((i) => i.date.startsWith(fallbackClosing.date));
-    const todayTransactions = transactions.filter((t) => t.timestamp.startsWith(fallbackClosing.date));
-    const todayTrainerTransactions = trainerTransactions.filter((t) => t.created_at?.startsWith(fallbackClosing.date));
-    const todayCheckInLogs = checkInLogs.filter((l) => l.timestamp.startsWith(fallbackClosing.date));
+    const closingDate = fallbackClosing.closingDayDate || fallbackClosing.date;
+    const nextDate = fallbackClosing.nextDayDate;
+
+    const matchesDate = (d?: string) => {
+      if (!d) return false;
+      return d.startsWith(closingDate) || (nextDate ? d.startsWith(nextDate) : false);
+    };
+
+    const todayEntries = masterReportEntries.filter((e) => matchesDate(e.date));
+    const todayExpenses = expenses.filter((e) => matchesDate(e.date));
+    const todayInflows = cashInflows.filter((i) => matchesDate(i.date));
+    const todayTransactions = transactions.filter((t) => matchesDate(t.timestamp));
+    const todayTrainerTransactions = trainerTransactions.filter((t) => matchesDate(t.created_at));
+    const todayCheckInLogs = checkInLogs.filter((l) => matchesDate(l.timestamp));
 
     await exportDailyShiftToXLSX(
       fallbackClosing,

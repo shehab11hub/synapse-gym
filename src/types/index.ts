@@ -94,6 +94,8 @@ export interface PhysioBooking {
   doctorName: string;
   doctorCode: string;
   doctorPhone?: string;
+  coachId?: string;
+  coachName?: string;
   patientName: string;
   patientCode?: string;
   roomName: string;

@@ -22,11 +22,13 @@ import {
   Timer,
   CheckCircle2,
   X,
+  Printer,
 } from 'lucide-react';
 import { useGymData } from '../context/GymDataContext';
 import { PhysioBooking } from '../types';
 import { formatEGP } from '../utils/formatters';
 import { sounds } from '../utils/sound';
+import { printPhysioReceiptPDF } from '../utils/pdfExport';
 
 export const PhysiotherapyPage: React.FC = () => {
   const {
@@ -126,6 +128,8 @@ export const PhysiotherapyPage: React.FC = () => {
     startPhysioSession({
       doctorName: form.doctorName.trim(),
       doctorCode: form.doctorCode || 'DOC-01',
+      coachId: form.selectedCoachId !== 'custom' ? form.selectedCoachId : undefined,
+      coachName: form.doctorName.trim(),
       patientName: form.patientName.trim(),
       roomName: form.roomName || 'عيادة التأهيل والمساج 1',
       hourlyRate: Number(form.hourlyRate) || 180,
@@ -215,17 +219,25 @@ export const PhysiotherapyPage: React.FC = () => {
       );
     }
 
+    const finalTotalWithExtra = (selectedBookingForCheckout.totalFee || 0) + checkoutExtraFee;
+
     if (checkoutMode === 'player_cash') {
       billPhysioSession(selectedBookingForCheckout.id, {
         billedTo: 'patient',
         paymentMethod: 'cash',
         notes: checkoutNotes || 'سداد نقدي بالاستقبال من اللاعب',
+        totalAmount: finalTotalWithExtra,
+        extraFee: checkoutExtraFee,
+        extraFeeReason: checkoutExtraFee > 0 ? 'تكلفة وقت إضافي تجاوز الساعة' : undefined,
       });
     } else if (checkoutMode === 'doctor_cash') {
       billPhysioSession(selectedBookingForCheckout.id, {
         billedTo: 'doctor',
         paymentMethod: 'cash',
         notes: checkoutNotes || 'سداد نقدي مباشر من الطبيب/الكوتش بالاستقبال',
+        totalAmount: finalTotalWithExtra,
+        extraFee: checkoutExtraFee,
+        extraFeeReason: checkoutExtraFee > 0 ? 'تكلفة وقت إضافي تجاوز الساعة' : undefined,
       });
     } else if (checkoutMode === 'instapay') {
       billPhysioSession(selectedBookingForCheckout.id, {
@@ -233,6 +245,9 @@ export const PhysiotherapyPage: React.FC = () => {
         paymentMethod: 'instapay',
         instapayRef: instapayRef.trim(),
         notes: checkoutNotes || `تحويل انستاباي - كود: ${instapayRef.trim()}`,
+        totalAmount: finalTotalWithExtra,
+        extraFee: checkoutExtraFee,
+        extraFeeReason: checkoutExtraFee > 0 ? 'تكلفة وقت إضافي تجاوز الساعة' : undefined,
       });
     } else if (checkoutMode === 'coach_debt') {
       billPhysioSession(selectedBookingForCheckout.id, {
@@ -240,6 +255,9 @@ export const PhysiotherapyPage: React.FC = () => {
         paymentMethod: 'coach_debt',
         chargedToCoachId: selectedCoachForDebt,
         notes: checkoutNotes || 'تحميل على حساب الكابتن كمديونية للجيم تسدد بنهاية الشهر',
+        totalAmount: finalTotalWithExtra,
+        extraFee: checkoutExtraFee,
+        extraFeeReason: checkoutExtraFee > 0 ? 'تكلفة وقت إضافي تجاوز الساعة' : undefined,
       });
     }
 
@@ -528,12 +546,13 @@ export const PhysiotherapyPage: React.FC = () => {
                         onClick={() => {
                           finishPhysioSession(booking.id);
                           sounds.playSuccessDing();
+                          openCheckoutModal(booking);
                         }}
-                        className="py-1.5 px-3 rounded-xl bg-purple-600/30 hover:bg-purple-600 text-purple-200 hover:text-white border border-purple-500/40 font-bold text-xs flex items-center gap-1.5 transition"
-                        title="إنهاء الجلسة واكتمال المدرب"
+                        className="py-1.5 px-3 rounded-xl bg-purple-600/30 hover:bg-purple-600 text-purple-200 hover:text-white border border-purple-500/40 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+                        title="إنهاء الجلسة واكتمال المدرب والمحاسبة"
                       >
                         <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>إنهاء واكتمال المدرب</span>
+                        <span>إنهاء ومحاسبة الجلسة</span>
                       </button>
                     </div>
                   </div>
@@ -659,14 +678,42 @@ export const PhysiotherapyPage: React.FC = () => {
                       )}
                     </td>
                     <td className="py-3 px-4">
-                      {b.paymentMethod === 'coach_debt' ? (
-                        <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 text-[10px] font-bold">
-                          تسوية آخر الشهر
-                        </span>
+                      {!b.paid && b.paymentMethod !== 'coach_debt' ? (
+                        <button
+                          onClick={() => openCheckoutModal(b)}
+                          className="px-2.5 py-1 rounded-xl bg-purple-600/30 hover:bg-purple-600 text-purple-200 hover:text-white border border-purple-500/40 text-[10px] font-bold transition flex items-center gap-1 cursor-pointer"
+                        >
+                          <Receipt className="w-3.5 h-3.5" />
+                          <span>محاسبة وتسوية</span>
+                        </button>
+                      ) : b.paymentMethod === 'coach_debt' ? (
+                        <div className="flex items-center gap-2">
+                          <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 text-[10px] font-bold">
+                            تسوية آخر الشهر
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => printPhysioReceiptPDF(b)}
+                            className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+                            title="طباعة إيصال الجلسة PDF"
+                          >
+                            <Printer className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       ) : (
-                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
-                          تم الدفع بالخزينة
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+                            تم الدفع بالخزينة
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => printPhysioReceiptPDF(b)}
+                            className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+                            title="طباعة إيصال الجلسة PDF"
+                          >
+                            <Printer className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -1221,12 +1268,23 @@ export const PhysiotherapyPage: React.FC = () => {
               </div>
             </div>
 
-            <button
-              onClick={() => setSelectedBookingForReceipt(null)}
-              className="w-full py-2.5 rounded-xl bg-teal-500 text-slate-950 font-bold text-xs"
-            >
-              تم
-            </button>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => printPhysioReceiptPDF(selectedBookingForReceipt)}
+                className="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+              >
+                <Printer className="w-4 h-4" />
+                <span>طباعة إيصال الجلسة (PDF)</span>
+              </button>
+
+              <button
+                onClick={() => setSelectedBookingForReceipt(null)}
+                className="w-full py-2.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold text-xs transition cursor-pointer"
+              >
+                إغلاق
+              </button>
+            </div>
           </div>
         </div>
       )}
