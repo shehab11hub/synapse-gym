@@ -634,12 +634,12 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           const now = Date.now();
           const pausedSec = booking.totalPausedSeconds || 0;
           const elapsedMinutes = Math.max(1, Math.round(((now - start) / 1000 - pausedSec) / 60));
-          const fee = Math.round((elapsedMinutes / 60) * booking.hourlyRate * 10) / 10;
           const extra = booking.extraFee || 0;
+          // Minimum charge is 1 full hour (booking.hourlyRate). Any extra beyond 1 hour is added MANUALLY ONLY via extraFee!
           return {
             ...booking,
             elapsedMinutes,
-            totalFee: Math.max(booking.hourlyRate * 0.25, fee) + extra,
+            totalFee: Math.max(booking.hourlyRate, booking.hourlyRate) + extra,
           };
         })
       );
@@ -1525,11 +1525,12 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     });
 
     // If paid cash -> record to Cash Drawer
+    const serviceLabel = booking.serviceType === 'massage' ? 'مساج واستشفاء' : 'علاج طبيعي';
     if (billingData.paymentMethod === 'cash') {
       const inflow: CashInflowItem = {
         id: `inf-phy-${Date.now()}`,
         type: 'physio',
-        title: `إيراد جلسة علاج طبيعي (${booking.roomName}) - ${booking.doctorName}`,
+        title: `إيراد جلسة ${serviceLabel} (${booking.roomName}) - ${booking.doctorName}`,
         amount: booking.totalFee,
         date: new Date().toISOString(),
         memberName: booking.patientName,
@@ -1541,7 +1542,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const inflow: CashInflowItem = {
         id: `inf-phy-${Date.now()}`,
         type: 'physio',
-        title: `تحويل انستاباي جلسة علاج طبيعي (${booking.roomName}) - كود: ${billingData.instapayRef || 'N/A'}`,
+        title: `تحويل انستاباي جلسة ${serviceLabel} (${booking.roomName}) - كود: ${billingData.instapayRef || 'N/A'}`,
         amount: booking.totalFee,
         date: new Date().toISOString(),
         memberName: booking.patientName,
@@ -1550,11 +1551,60 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       };
       setCashInflows((prev) => [inflow, ...prev]);
     } else if (billingData.paymentMethod === 'coach_debt') {
-      // لا يتم تحميل أي مديونية على الكابتن من العلاج الطبيعي - التحميل فقط عند بدء وإنهاء الحصص (endSession)
+      const targetCoach = coaches.find(
+        (c) => c.id === billingData.chargedToCoachId || c.name.trim().toLowerCase() === booking.doctorName.trim().toLowerCase()
+      );
+      const coachId = targetCoach?.id || billingData.chargedToCoachId || 'COACH-MISC';
+      const coachName = targetCoach ? targetCoach.name : booking.doctorName;
+
+      const coachDebtTrx: TrainerTransaction = {
+        transaction_id: `TRX-PHY-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`,
+        coach_id: coachId,
+        coach_name: coachName,
+        amount: booking.totalFee,
+        collected_by: 'coach',
+        payer_type: `جلسة ${serviceLabel}`,
+        payer_name: booking.patientName,
+        gym_share: booking.totalFee,
+        coach_share: 0,
+        status: 'pending',
+        created_at: new Date().toISOString(),
+        month: currentMonth,
+        type: 'physio_charge',
+        payment_method: 'coach_collected',
+        notes: billingData.notes || `مديونية جلسة ${serviceLabel} (${booking.roomName}) محملة على الكابتن`,
+      };
+
+      setTrainerTransactions((prev) => [coachDebtTrx, ...prev]);
+
+      if (targetCoach) {
+        setCoaches((prev) =>
+          prev.map((c) =>
+            c.id === targetCoach.id
+              ? {
+                  ...c,
+                  currentBalance: (c.currentBalance || 0) - booking.totalFee,
+                }
+              : c
+          )
+        );
+      }
+
+      if (isSupabaseConfigured) {
+        supabaseService.upsertTrainerTransaction(coachDebtTrx).catch(() => {});
+        if (targetCoach) {
+          supabaseService.upsertCoach({
+            ...targetCoach,
+            currentBalance: (targetCoach.currentBalance || 0) - booking.totalFee,
+          }).catch(() => {});
+        }
+      }
     }
 
     // Auto record into Master Report!
-    const repCoach = coaches.find((c) => c.id === billingData.chargedToCoachId);
+    const repCoach = coaches.find(
+      (c) => c.id === billingData.chargedToCoachId || c.name.trim().toLowerCase() === booking.doctorName.trim().toLowerCase()
+    );
     const newEntry: MasterReportEntry = {
       id: `rep-${Date.now()}`,
       month: currentMonth,
@@ -1562,10 +1612,10 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       playerName: booking.patientName,
       playerCode: booking.patientCode || 'PHY-PATIENT',
       amount: booking.totalFee,
-      coachId: billingData.chargedToCoachId,
+      coachId: repCoach ? repCoach.id : billingData.chargedToCoachId,
       coachName: repCoach ? repCoach.name : booking.doctorName,
-      sessionCategory: 'physio',
-      sessionTitle: `جلسة علاج طبيعي (${booking.roomName})`,
+      sessionCategory: booking.serviceType === 'massage' ? 'massage' : 'physio',
+      sessionTitle: `جلسة ${serviceLabel} (${booking.roomName})`,
       paymentMethod: billingData.paymentMethod === 'coach_debt' ? 'coach_collected' : billingData.paymentMethod,
       paymentStatus: billingData.paymentMethod === 'coach_debt' ? 'pending_on_coach' : 'paid',
       notes: billingData.notes || `حساب: ${billingData.billedTo === 'patient' ? 'اللاعب' : 'الكوتش/الدكتور'}`,

@@ -61,30 +61,74 @@ export const PhysiotherapyPage: React.FC = () => {
   const [instapayRef, setInstapayRef] = useState('');
   const [selectedCoachForDebt, setSelectedCoachForDebt] = useState(coaches[0]?.id || '');
   const [checkoutNotes, setCheckoutNotes] = useState('');
+  const [checkoutExtraFee, setCheckoutExtraFee] = useState<number>(0);
 
   // New Booking Form
   const [form, setForm] = useState({
-    doctorName: '',
-    doctorCode: '',
+    selectedCoachId: coaches[0]?.id || 'custom',
+    doctorName: coaches[0]?.name || '',
+    doctorCode: coaches[0]?.id || 'COACH-01',
+    selectedMemberId: 'custom',
     patientName: '',
-    roomName: 'عيادة التأهيل الطبي 1',
-    hourlyRate: 150,
-    serviceType: 'physio' as 'physio' | 'massage',
+    roomName: 'عيادة التأهيل والمساج 1',
+    hourlyRate: coaches[0]?.ratePerSession || 180,
+    serviceType: 'massage' as 'physio' | 'massage',
   });
+
+  const handleCoachChange = (coachId: string) => {
+    if (coachId === 'custom') {
+      setForm((prev) => ({
+        ...prev,
+        selectedCoachId: 'custom',
+        doctorName: '',
+        doctorCode: 'DOC-EXT',
+      }));
+    } else {
+      const coach = coaches.find((c) => c.id === coachId);
+      if (coach) {
+        setForm((prev) => ({
+          ...prev,
+          selectedCoachId: coach.id,
+          doctorName: coach.name,
+          doctorCode: coach.id,
+          hourlyRate: coach.ratePerSession || 180,
+        }));
+      }
+    }
+  };
+
+  const handleMemberChange = (memberId: string) => {
+    if (memberId === 'custom') {
+      setForm((prev) => ({
+        ...prev,
+        selectedMemberId: 'custom',
+        patientName: '',
+      }));
+    } else {
+      const member = members.find((m) => m.id === memberId);
+      if (member) {
+        setForm((prev) => ({
+          ...prev,
+          selectedMemberId: member.id,
+          patientName: member.name,
+        }));
+      }
+    }
+  };
 
   const handleStartBooking = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.doctorName || !form.patientName) {
-      alert('يرجى ملء بيانات الطبيب والمريض');
+    if (!form.doctorName.trim() || !form.patientName.trim()) {
+      alert('يرجى اختيار أو كتابة بيانات المدرب واللاعب');
       return;
     }
 
     startPhysioSession({
-      doctorName: form.doctorName,
+      doctorName: form.doctorName.trim(),
       doctorCode: form.doctorCode || 'DOC-01',
-      patientName: form.patientName,
-      roomName: form.roomName,
-      hourlyRate: Number(form.hourlyRate),
+      patientName: form.patientName.trim(),
+      roomName: form.roomName || 'عيادة التأهيل والمساج 1',
+      hourlyRate: Number(form.hourlyRate) || 180,
       serviceType: form.serviceType,
       status: 'active',
     });
@@ -92,12 +136,14 @@ export const PhysiotherapyPage: React.FC = () => {
     sounds.playSuccessDing();
     setIsNewModalOpen(false);
     setForm({
-      doctorName: '',
-      doctorCode: '',
+      selectedCoachId: coaches[0]?.id || 'custom',
+      doctorName: coaches[0]?.name || '',
+      doctorCode: coaches[0]?.id || 'COACH-01',
+      selectedMemberId: 'custom',
       patientName: '',
-      roomName: 'عيادة التأهيل الطبي 1',
-      hourlyRate: 150,
-      serviceType: 'physio',
+      roomName: 'عيادة التأهيل والمساج 1',
+      hourlyRate: coaches[0]?.ratePerSession || 180,
+      serviceType: 'massage',
     });
   };
 
@@ -119,7 +165,10 @@ export const PhysiotherapyPage: React.FC = () => {
     setCheckoutMode('player_cash');
     setInstapayRef('');
     setCheckoutNotes('');
-    const matchingCoach = coaches.find((c) => c.name.includes(booking.doctorName));
+    setCheckoutExtraFee(0);
+    const matchingCoach = coaches.find(
+      (c) => c.name.includes(booking.doctorName) || booking.doctorName.includes(c.name)
+    );
     if (matchingCoach) {
       setSelectedCoachForDebt(matchingCoach.id);
     } else if (coaches[0]) {
@@ -157,6 +206,15 @@ export const PhysiotherapyPage: React.FC = () => {
       return;
     }
 
+    // If extra fee was entered in checkout modal, add it first
+    if (checkoutExtraFee > 0) {
+      addExtraFeeToPhysio(
+        selectedBookingForCheckout.id,
+        checkoutExtraFee,
+        'تكلفة وقت إضافي تجاوز الساعة (تم إقرارها عند المحاسبة)'
+      );
+    }
+
     if (checkoutMode === 'player_cash') {
       billPhysioSession(selectedBookingForCheckout.id, {
         billedTo: 'patient',
@@ -188,6 +246,7 @@ export const PhysiotherapyPage: React.FC = () => {
     sounds.playCashRegister();
     const settledBooking = {
       ...selectedBookingForCheckout,
+      totalFee: selectedBookingForCheckout.totalFee + checkoutExtraFee,
       paid: checkoutMode !== 'coach_debt',
       paymentMethod: checkoutMode === 'coach_debt' ? ('coach_debt' as const) : checkoutMode === 'instapay' ? ('instapay' as const) : ('cash' as const),
     };
@@ -479,6 +538,19 @@ export const PhysiotherapyPage: React.FC = () => {
                     </div>
                   </div>
 
+                  {/* Overtime Warning if elapsed > 60 minutes */}
+                  {booking.elapsedMinutes > 60 && (
+                    <div className="mb-4 p-3 rounded-2xl bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs flex items-center gap-2">
+                      <AlertCircle className="w-5 h-5 text-amber-400 shrink-0" />
+                      <div>
+                        <div className="font-bold">⚠️ تنبيه: العميل تجاوز مدة الساعة!</div>
+                        <div className="text-[11px] text-amber-200/80 mt-0.5">
+                          الوقت المنقضي ({hours} س و {mins} د). الحد الأدنى للجلسة هو ساعة ({formatEGP(booking.hourlyRate)}). وأي حساب للوقت الإضافي يُضاف يدوياً فقط بالاتفاق.
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* PROMINENT AMOUNT DUE BOX (الرقم المراد تحصيله + تكلفة يدوية إضافية) */}
                   <div className="p-4 rounded-2xl bg-gradient-to-r from-purple-950/40 to-indigo-950/40 border border-purple-500/30 space-y-2 mb-4">
                     <div className="flex items-center justify-between">
@@ -488,7 +560,7 @@ export const PhysiotherapyPage: React.FC = () => {
                           <span>المبلغ المراد تحصيله الآن:</span>
                         </div>
                         <div className="text-[10px] text-slate-400 mt-0.5">
-                          الأجر الأساسي ({booking.elapsedMinutes} دقيقة): {formatEGP(baseCalculatedFee)}
+                          الحد الأدنى المحتسب (ساعة كاملة): {formatEGP(booking.hourlyRate)}
                         </div>
                       </div>
                       <div className="text-2xl font-black text-white font-mono">
@@ -752,18 +824,47 @@ export const PhysiotherapyPage: React.FC = () => {
                   <span className="font-mono text-purple-300 font-bold">{selectedBookingForCheckout.elapsedMinutes} دقيقة</span>
                 </div>
 
+                <div className="flex justify-between text-slate-400">
+                  <span>الحد الأدنى للجلسة (ساعة كاملة):</span>
+                  <span className="font-mono text-white font-bold">{formatEGP(selectedBookingForCheckout.hourlyRate)}</span>
+                </div>
+
                 {/* Extra Fee Breakdown if present */}
                 {selectedBookingForCheckout.extraFee && selectedBookingForCheckout.extraFee > 0 ? (
                   <div className="flex justify-between text-amber-300">
-                    <span>تكلفة إضافية (تجاوز ساعة / وقت إضافي):</span>
+                    <span>تكلفة إضافية مسجلة مسبقاً (وقت إضافي):</span>
                     <span className="font-mono font-bold">+{formatEGP(selectedBookingForCheckout.extraFee)}</span>
                   </div>
                 ) : null}
 
+                {/* Prompt for manual extra fee if elapsed > 60 */}
+                {selectedBookingForCheckout.elapsedMinutes > 60 && (
+                  <div className="p-3 rounded-xl bg-amber-500/15 border border-amber-500/40 space-y-2">
+                    <div className="flex items-center gap-2 text-amber-300 font-bold text-xs">
+                      <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>تجاوز مدة الساعة ({selectedBookingForCheckout.elapsedMinutes} دقيقة)</span>
+                    </div>
+                    <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                      الحد الأدنى للمساج ساعة كاملة ({formatEGP(selectedBookingForCheckout.hourlyRate)}). طبقاً لسياسة الجيم، يُضاف حساب الوقت الإضافي <strong>يدوياً فقط</strong>:
+                    </p>
+                    <div className="flex items-center gap-2 pt-1">
+                      <label className="text-xs text-slate-300 font-bold">مبلغ الوقت الإضافي (EGP):</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={checkoutExtraFee || ''}
+                        onChange={(e) => setCheckoutExtraFee(Math.max(0, Number(e.target.value)))}
+                        placeholder="0"
+                        className="w-28 bg-slate-900 border border-amber-500/50 rounded-xl px-2.5 py-1.5 text-xs text-white font-mono font-bold focus:outline-none focus:border-amber-400"
+                      />
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex justify-between border-t border-slate-800 pt-2 font-bold items-center">
                   <span className="text-slate-200">المبلغ المراد تحصيله النهائي:</span>
                   <span className="text-xl font-black text-emerald-400 font-mono">
-                    {formatEGP(selectedBookingForCheckout.totalFee)}
+                    {formatEGP(selectedBookingForCheckout.totalFee + checkoutExtraFee)}
                   </span>
                 </div>
               </div>
@@ -833,7 +934,7 @@ export const PhysiotherapyPage: React.FC = () => {
                       <ArrowUpRight className="w-4 h-4 text-amber-400" />
                       <span>تحميل على الكابتن لآخر الشهر</span>
                     </div>
-                    <div className="text-[10px] text-slate-400">مديونية تسدد عند تصفية الحساب</div>
+                    <div className="text-[10px] text-slate-400">مديونية رسمية على الكابتن للجيم</div>
                   </button>
                 </div>
               </div>
@@ -861,12 +962,12 @@ export const PhysiotherapyPage: React.FC = () => {
               {checkoutMode === 'coach_debt' && (
                 <div className="p-3.5 rounded-2xl bg-amber-950/30 border border-amber-500/30 space-y-2">
                   <label className="block text-xs font-bold text-amber-300">
-                    اختر الكابتن / الطبيب لتحميل المديونية عليه:
+                    اختر الكابتن لتحميل المديونية عليه:
                   </label>
                   <select
                     value={selectedCoachForDebt}
                     onChange={(e) => setSelectedCoachForDebt(e.target.value)}
-                    className="w-full bg-slate-900 border border-amber-500/40 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400"
+                    className="w-full bg-slate-900 border border-amber-500/40 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400 font-bold"
                   >
                     {coaches.map((c) => (
                       <option key={c.id} value={c.id}>
@@ -874,9 +975,17 @@ export const PhysiotherapyPage: React.FC = () => {
                       </option>
                     ))}
                   </select>
-                  <p className="text-[10px] text-amber-300/80">
-                    💡 سيتم إضافة {formatEGP(selectedBookingForCheckout.totalFee)} تلقائياً كمديونية على الكابتن (عليه فلوس للجيم)، وتظل معلقة حتى يتم تحصيلها وتصفيتها.
-                  </p>
+                  <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-200/90 space-y-1 mt-2">
+                    <p className="font-bold">
+                      💡 سيتم تحميل مبلغ {formatEGP(selectedBookingForCheckout.totalFee + checkoutExtraFee)} كمديونية رسمية على الكابتن:
+                    </p>
+                    <ul className="list-disc list-inside space-y-0.5 text-[10px] text-amber-300/90">
+                      <li>تُدرج فوراً في <strong>صفحة حسابات المدربين</strong> وتُسجل كمديونية معلقة.</li>
+                      <li>تظهر في <strong>صفحة مصاريف وإدارة الدرج</strong> ضمن إجمالي مديونيات المدربين.</li>
+                      <li>تُسجل في <strong>التقرير الشامل</strong> لجميع الأنشطة والصالات.</li>
+                      <li>تُدرج في كافة <strong>تقارير PDF والإكسيل</strong> (تقفيل اليومية والوردية، والتقفيل الشهري).</li>
+                    </ul>
+                  </div>
                 </div>
               )}
 
@@ -930,35 +1039,75 @@ export const PhysiotherapyPage: React.FC = () => {
                 <select
                   value={form.serviceType}
                   onChange={(e) => setForm({ ...form, serviceType: e.target.value as 'physio' | 'massage' })}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500 font-bold"
                 >
-                  <option value="physio">تأهيل وعلاج طبيعي (Physio)</option>
                   <option value="massage">مساج واستشفاء رياضي (Massage)</option>
+                  <option value="physio">تأهيل وعلاج طبيعي (Physio)</option>
                 </select>
               </div>
 
+              {/* Coach Selection from gym coaches or external */}
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">اسم الطبيب أو المدرب</label>
-                <input
-                  type="text"
-                  required
-                  value={form.doctorName}
-                  onChange={(e) => setForm({ ...form, doctorName: e.target.value })}
-                  placeholder="مثال: د. حسام فاروق"
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500"
-                />
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  الكابتن / المدرب المسجل بالجيم
+                </label>
+                <select
+                  value={form.selectedCoachId}
+                  onChange={(e) => handleCoachChange(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500 mb-2 font-bold"
+                >
+                  <optgroup label="مدربو وكباتن الجيم">
+                    {coaches.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} ({c.specialty})
+                      </option>
+                    ))}
+                  </optgroup>
+                  <option value="custom">طبيب أو أخصائي خارجي (إدخال يدوي)</option>
+                </select>
+
+                {form.selectedCoachId === 'custom' && (
+                  <input
+                    type="text"
+                    required
+                    value={form.doctorName}
+                    onChange={(e) => setForm({ ...form, doctorName: e.target.value })}
+                    placeholder="اكتب اسم الطبيب أو المدرب الخارجي..."
+                    className="w-full bg-slate-900 border border-purple-500/40 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500"
+                  />
+                )}
               </div>
 
+              {/* Player / Member Selection */}
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">اسم المريض أو اللاعب</label>
-                <input
-                  type="text"
-                  required
-                  value={form.patientName}
-                  onChange={(e) => setForm({ ...form, patientName: e.target.value })}
-                  placeholder="اسم اللاعب"
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500"
-                />
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  اللاعب / العميل
+                </label>
+                <select
+                  value={form.selectedMemberId}
+                  onChange={(e) => handleMemberChange(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500 mb-2 font-bold"
+                >
+                  <option value="custom">عميل خارجي أو زائر (إدخال يدوي)</option>
+                  <optgroup label="أعضاء ومشتركو الجيم">
+                    {members.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name} ({m.code})
+                      </option>
+                    ))}
+                  </optgroup>
+                </select>
+
+                {form.selectedMemberId === 'custom' && (
+                  <input
+                    type="text"
+                    required
+                    value={form.patientName}
+                    onChange={(e) => setForm({ ...form, patientName: e.target.value })}
+                    placeholder="اكتب اسم العميل أو اللاعب..."
+                    className="w-full bg-slate-900 border border-purple-500/40 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500"
+                  />
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -972,14 +1121,28 @@ export const PhysiotherapyPage: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">سعر الساعة (EGP)</label>
+                  <label className="block text-xs font-bold text-slate-300 mb-1">سعر الساعة (أقل مبلغ يُدفع)</label>
                   <input
                     type="number"
+                    min="1"
                     value={form.hourlyRate}
                     onChange={(e) => setForm({ ...form, hourlyRate: Number(e.target.value) })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500 font-bold"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500 font-mono font-bold"
                   />
                 </div>
+              </div>
+
+              {/* Pricing Policy Box */}
+              <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs space-y-1">
+                <div className="flex items-center gap-1.5 font-bold">
+                  <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>سياسة تسعير جلسات المساج والعلاج الطبيعي:</span>
+                </div>
+                <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                  • <strong>أقل مبلغ يُدفع</strong> في الجلسة هو ساعة كاملة ({formatEGP(form.hourlyRate || 0)}) حتى لو كانت مدة الجلسة أقل من ذلك.
+                  <br />
+                  • في حال تجاوز العميل مدة الساعة، <strong>لا يتم احتساب وقت إضافي آلياً بل يُضاف يدوياً فقط</strong> حسب الاتفاق.
+                </p>
               </div>
 
               <div className="flex items-center gap-3 pt-3">
