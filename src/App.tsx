@@ -46,7 +46,7 @@ const MainDashboard: React.FC = () => {
       case 'expenses':
         return <ExpensesPage />;
       case 'master_report':
-        return <MasterReportPage />;
+        return currentUser.role === 'admin' ? <MasterReportPage /> : <ReceptionPage />;
       case 'analytics':
         return currentUser.role === 'admin' ? <AnalyticsPage /> : <ReceptionPage />;
       case 'pos':

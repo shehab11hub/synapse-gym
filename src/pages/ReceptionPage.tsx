@@ -36,7 +36,7 @@ import { useGymData } from '../context/GymDataContext';
 import { Member, SessionCategory, Coach, CheckInLog } from '../types';
 import { DeskQRCodeModal } from '../components/checkin/DeskQRCodeModal';
 import { CheckInModal } from '../components/checkin/CheckInModal';
-import { formatDateAr, formatEGP } from '../utils/formatters';
+import { formatDateAr, formatEGP, formatArabicDayMonth, getSubscriptionStatus } from '../utils/formatters';
 import { generateQRDataUrl } from '../utils/qrGenerator';
 import { sounds } from '../utils/sound';
 
@@ -222,9 +222,8 @@ export const ReceptionPage: React.FC = () => {
     const targetMember = members.find(
       (m) => m.id === log.memberId || m.code === log.memberCode
     );
-    const hasActiveSub = Boolean(
-      targetMember?.active && ((targetMember?.remainingDays || 0) > 0 || (targetMember?.remainingSessions || 0) > 0)
-    );
+    const subInfo = getSubscriptionStatus(targetMember);
+    const hasActiveSub = subInfo.isActive;
 
     const initialPathway = log.seatingPathway || (sessions.length > 0 ? 'coach_debt' : 'gym_direct_no_coach');
 
@@ -1029,17 +1028,66 @@ export const ReceptionPage: React.FC = () => {
                       })}
                     </td>
                     <td className="py-3 px-4">
-                      {log.subscriptionValid ? (
-                        <span className="text-emerald-400 font-bold flex items-center gap-1">
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>ساري ومقبول</span>
-                        </span>
-                      ) : (
-                        <span className="text-rose-400 font-bold flex items-center gap-1">
-                          <AlertCircle className="w-3.5 h-3.5" />
-                          <span>منتهي</span>
-                        </span>
-                      )}
+                      {(() => {
+                        const targetMember = members.find(
+                          (m) => m.id === log.memberId || m.code === log.memberCode
+                        );
+                        const subInfo = getSubscriptionStatus(targetMember);
+
+                        if (subInfo.status === 'expired') {
+                          return (
+                            <div className="space-y-0.5">
+                              <span className="text-rose-400 font-black text-xs flex items-center gap-1">
+                                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                                <span>اشتراك منتهي</span>
+                              </span>
+                              <span className="text-[10px] text-rose-300 font-bold block">
+                                {subInfo.dateFormatted ? `انتهى: ${subInfo.dateFormatted}` : 'انتهت الصلاحية'}
+                              </span>
+                            </div>
+                          );
+                        }
+
+                        if (subInfo.status === 'active') {
+                          return (
+                            <div className="space-y-0.5">
+                              <span className="text-emerald-400 font-black text-xs flex items-center gap-1">
+                                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                <span>ساري ({subInfo.remainingDays} يوم)</span>
+                              </span>
+                              <span className="text-[10px] text-emerald-300 font-bold block">
+                                حتى: {subInfo.dateFormatted}
+                              </span>
+                            </div>
+                          );
+                        }
+
+                        if (subInfo.status === 'active_sessions') {
+                          return (
+                            <div className="space-y-0.5">
+                              <span className="text-teal-400 font-black text-xs flex items-center gap-1">
+                                <Clock className="w-3.5 h-3.5 shrink-0" />
+                                <span>ساري بالحصة</span>
+                              </span>
+                              <span className="text-[10px] text-teal-300 font-bold block">
+                                متبقي {subInfo.remainingSessions} حصة
+                              </span>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div className="space-y-0.5">
+                            <span className="text-amber-400 font-bold text-xs flex items-center gap-1">
+                              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                              <span>بدون اشتراك</span>
+                            </span>
+                            <span className="text-[10px] text-slate-400 block">
+                              بحاجة لتفعيل
+                            </span>
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-1.5">
@@ -1119,43 +1167,93 @@ export const ReceptionPage: React.FC = () => {
               const targetMember = members.find(
                 (m) => m.id === selectedLogForSeating.memberId || m.code === selectedLogForSeating.memberCode
               );
-              const isSubscribed = Boolean(
-                targetMember?.active && ((targetMember?.remainingDays || 0) > 0 || (targetMember?.remainingSessions || 0) > 0)
-              );
+              const subInfo = getSubscriptionStatus(targetMember);
+              const isSubscribed = subInfo.isActive;
 
               return (
                 <form onSubmit={handleConfirmSeating} className="flex flex-col flex-1 overflow-hidden min-h-0 pt-3">
                   <div className="overflow-y-auto flex-1 space-y-4 pr-1 pl-1">
                     {/* Member Status Badge */}
-                    {isSubscribed ? (
-                      <div className="p-3 rounded-2xl bg-emerald-950/40 border border-emerald-500/40 space-y-1">
+                    {subInfo.status === 'active' && (
+                      <div className="p-3.5 rounded-2xl bg-emerald-950/40 border border-emerald-500/40 space-y-1.5 animate-scale-up">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             <ShieldCheck className="w-4 h-4 text-emerald-400" />
                             <span className="text-xs font-black text-emerald-300">
-                              اشتراك ساري: {targetMember?.subscriptionPlan}
+                              اشتراك ساري: {targetMember?.subscriptionPlan || 'اشتراك صالة'}
                             </span>
                           </div>
-                          <span className="text-[11px] font-mono text-emerald-300 bg-emerald-500/20 px-2.5 py-0.5 rounded-full border border-emerald-500/30">
-                            {targetMember?.remainingDays ? `متبقي ${targetMember.remainingDays} يوم` : ''}
-                            {targetMember?.remainingSessions ? ` • متبقي ${targetMember.remainingSessions} حصة` : ''}
+                          <span className="text-[11px] font-bold text-emerald-300 bg-emerald-500/20 px-2.5 py-0.5 rounded-full border border-emerald-500/30">
+                            متبقي {subInfo.remainingDays} يوم
                           </span>
                         </div>
-                        <p className="text-[11px] text-slate-300 leading-relaxed">
+                        <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                          <span>📅 صلاحية الاشتراك:</span>
+                          <span className="text-emerald-300 font-extrabold">{subInfo.fullText}</span>
+                        </div>
+                        <p className="text-[11px] text-slate-300 leading-relaxed pt-0.5">
                           ✓ يمكن للمتدرب الدخول لتمرين حر مجاناً باشتراكه، أو يمكنك تسكينه في حصة خاصة / برايفت / مساج مع اختيار طريقة الحساب (على الكابتن أو بالاستقبال مع نسبة للكابتن).
                         </p>
                       </div>
-                    ) : (
-                      <div className="p-3 rounded-2xl bg-amber-950/40 border border-amber-500/40 flex items-center justify-between text-xs">
-                        <div className="flex items-center gap-2">
-                          <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-                          <span className="font-bold text-amber-300">
-                            اللاعب ليس لديه اشتراك نشط حالياً.
+                    )}
+
+                    {subInfo.status === 'active_sessions' && (
+                      <div className="p-3.5 rounded-2xl bg-teal-950/40 border border-teal-500/40 space-y-1 animate-scale-up">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Clock className="w-4 h-4 text-teal-400" />
+                            <span className="text-xs font-black text-teal-300">
+                              اشتراك حصص ساري: {targetMember?.subscriptionPlan}
+                            </span>
+                          </div>
+                          <span className="text-[11px] font-bold text-teal-300 bg-teal-500/20 px-2.5 py-0.5 rounded-full border border-teal-500/30">
+                            متبقي {subInfo.remainingSessions} حصة
                           </span>
                         </div>
-                        <span className="text-[11px] text-amber-300 font-bold bg-amber-500/20 px-2.5 py-0.5 rounded-full border border-amber-500/30">
-                          يمكن عمل وتفعيل اشتراك جديد فوراً من خيار "تمرين حر"
-                        </span>
+                        <p className="text-[11px] text-slate-300 leading-relaxed">
+                          ✓ {subInfo.fullText}
+                        </p>
+                      </div>
+                    )}
+
+                    {subInfo.status === 'expired' && (
+                      <div className="p-3.5 rounded-2xl bg-rose-950/40 border-2 border-rose-500/50 space-y-1.5 animate-scale-up">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <AlertCircle className="w-4 h-4 text-rose-400" />
+                            <span className="text-xs font-black text-rose-300">
+                              ⚠️ تنبيه: اشتراك اللاعب منتهي!
+                            </span>
+                          </div>
+                          <span className="text-[11px] font-bold text-rose-300 bg-rose-500/20 px-2.5 py-0.5 rounded-full border border-rose-500/40">
+                            منتهي الصلاحية
+                          </span>
+                        </div>
+                        <div className="text-xs font-bold text-white">
+                          اللاعب انتهى اشتراكه بتاريخ: <strong className="text-rose-300 font-extrabold">{subInfo.dateFormatted || 'سابقاً'}</strong>
+                        </div>
+                        <p className="text-[11px] text-slate-300 leading-relaxed">
+                          يرجى عمل وتفعيل اشتراك جديد للاعب الآن من مسار "تمرين حر" بالأسفل أو تحصيل تذكرة يومية، أو تسكينه في حصة كابتن.
+                        </p>
+                      </div>
+                    )}
+
+                    {subInfo.status === 'none' && (
+                      <div className="p-3.5 rounded-2xl bg-amber-950/40 border border-amber-500/40 space-y-1 animate-scale-up">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                            <span className="text-xs font-bold text-amber-300">
+                              اللاعب ليس لديه اشتراك نشط حالياً.
+                            </span>
+                          </div>
+                          <span className="text-[11px] text-amber-300 font-bold bg-amber-500/20 px-2.5 py-0.5 rounded-full border border-amber-500/30">
+                            عضوية غير مفعلة
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-300 leading-relaxed">
+                          يمكن عمل وتفعيل اشتراك جديد فوراً من خيار "تمرين حر" بالأسفل وتوريد المبلغ بالدرج أو إنستاباي.
+                        </p>
                       </div>
                     )}
 

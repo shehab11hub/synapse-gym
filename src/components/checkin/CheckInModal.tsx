@@ -14,7 +14,7 @@ import {
 import confetti from 'canvas-confetti';
 import { Member } from '../../types';
 import { sounds } from '../../utils/sound';
-import { formatDateAr } from '../../utils/formatters';
+import { formatDateAr, getSubscriptionStatus } from '../../utils/formatters';
 
 interface CheckInModalProps {
   member: Member | null;
@@ -60,8 +60,9 @@ export const CheckInModal: React.FC<CheckInModalProps> = ({
 
   if (!isOpen || !member) return null;
 
-  const isExpired = member.remainingDays <= 0 && member.remainingSessions <= 0;
-  const isExpiringSoon = member.remainingDays <= 7 && member.remainingDays > 0;
+  const subInfo = getSubscriptionStatus(member);
+  const isExpired = subInfo.isExpired;
+  const isExpiringSoon = (member.remainingDays || 0) <= 7 && (member.remainingDays || 0) > 0;
 
   return (
     <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
@@ -129,21 +130,45 @@ export const CheckInModal: React.FC<CheckInModalProps> = ({
             {/* Subscription Status Highlight */}
             <div
               className={`p-4 rounded-2xl border mb-5 ${
-                isExpired
-                  ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
-                  : isExpiringSoon
-                  ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
-                  : 'bg-teal-500/10 border-teal-500/30 text-teal-300'
+                subInfo.status === 'expired'
+                  ? 'bg-rose-500/15 border-rose-500/40 text-rose-300'
+                  : subInfo.status === 'active'
+                  ? isExpiringSoon
+                    ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+                    : 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                  : 'bg-teal-500/15 border-teal-500/40 text-teal-300'
               }`}
             >
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs font-semibold">باقة الاشتراك الحالية:</span>
-                <span className="text-xs font-bold font-mono">
-                  {isExpired ? 'الاشتراك منتهي' : isExpiringSoon ? 'أوشك على الانتهاء' : 'نشط وساري'}
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-xs font-semibold">حالة وصلاحية الاشتراك:</span>
+                <span className="text-xs font-black font-mono px-2 py-0.5 rounded-full bg-slate-900/60 border border-current">
+                  {subInfo.badgeText}
                 </span>
               </div>
-              <div className="text-base font-extrabold text-white">
+              <div className="text-base font-extrabold text-white mb-1">
                 {member.subscriptionPlan}
+              </div>
+              <div className="text-xs font-bold leading-relaxed pt-1 border-t border-slate-700/50">
+                {subInfo.status === 'expired' && (
+                  <span className="text-rose-300 font-black">
+                    ⚠️ {subInfo.fullText}
+                  </span>
+                )}
+                {subInfo.status === 'active' && (
+                  <span className="text-emerald-300 font-black">
+                    ✓ {subInfo.fullText}
+                  </span>
+                )}
+                {subInfo.status === 'active_sessions' && (
+                  <span className="text-teal-300 font-black">
+                    ✓ {subInfo.fullText}
+                  </span>
+                )}
+                {subInfo.status === 'none' && (
+                  <span className="text-amber-300 font-bold">
+                    ⚠️ اللاعب غير مسجل باشتراك نشط حالياً
+                  </span>
+                )}
               </div>
             </div>
 
@@ -166,7 +191,9 @@ export const CheckInModal: React.FC<CheckInModalProps> = ({
                   من إجمالي {member.totalDays} يوم
                 </div>
                 <div className="text-[10px] text-slate-400 mt-1">
-                  ينتهي: {formatDateAr(member.endDate)}
+                  {subInfo.status === 'expired'
+                    ? `انتهى: ${subInfo.dateFormatted || formatDateAr(member.endDate)}`
+                    : `ساري حتى: ${subInfo.dateFormatted || formatDateAr(member.endDate)}`}
                 </div>
               </div>
 

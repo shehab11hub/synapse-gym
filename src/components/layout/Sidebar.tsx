@@ -76,6 +76,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: FileSpreadsheet,
       pageKey: 'master_report',
       badge: 'Excel',
+      adminOnly: true,
     },
     {
       id: 'analytics',

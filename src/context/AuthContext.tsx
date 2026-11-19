@@ -167,16 +167,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!currentUser) return false;
     if (currentUser.role === 'admin') return true;
 
-    // Receptionist access permissions:
-    // Page 1 (reception), Page 2 (sessions), Page 3 (physio), Page 4 (trainers), expenses, master_report, pos
-    // Analytics is strictly restricted to manager (admin) only!
+    // Receptionist is strictly blocked from:
+    // 1. 'analytics' (التقارير والرسومات البيانية)
+    // 2. 'users' (إدارة المستخدمين والصلاحيات)
+    // 3. 'master_report' (التقرير الشامل والأرشيف)
+    const blockedPages = ['analytics', 'users', 'master_report'];
+    if (blockedPages.includes(page)) return false;
+
+    // Allowed pages for receptionist:
     const receptionistAllowed = [
       'reception',
       'sessions',
       'physiotherapy',
       'trainers',
       'expenses',
-      'master_report',
       'pos',
     ];
     return receptionistAllowed.includes(page);

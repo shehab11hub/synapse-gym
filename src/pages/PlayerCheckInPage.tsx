@@ -19,7 +19,7 @@ import {
 import confetti from 'canvas-confetti';
 import { useGymData } from '../context/GymDataContext';
 import { Member, SessionCategory } from '../types';
-import { formatDateAr } from '../utils/formatters';
+import { formatDateAr, formatArabicDayMonth, getSubscriptionStatus } from '../utils/formatters';
 import { sounds } from '../utils/sound';
 
 const STORAGE_MEMBER_ID = 'synapse_member_id';
@@ -367,11 +367,26 @@ export const PlayerCheckInPage: React.FC = () => {
 
             {/* Subscription Metrics Breakdown */}
             {(() => {
-              const hasDuration = (checkedMember.remainingDays || 0) > 0 && checkedMember.active;
-              const hasSessions = (checkedMember.remainingSessions || 0) > 0;
-              const isUnsubscribed = !hasDuration && !hasSessions;
+              const subInfo = getSubscriptionStatus(checkedMember);
 
-              if (isUnsubscribed) {
+              if (subInfo.status === 'expired') {
+                return (
+                  <div className="p-4 rounded-2xl bg-rose-500/15 border-2 border-rose-500/40 text-rose-300 text-center space-y-2.5 animate-scale-up">
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 font-bold text-xs border border-rose-500/30">
+                      <AlertCircle className="w-4 h-4 text-rose-400" />
+                      <span>اشتراكك منتهي الصلاحية</span>
+                    </div>
+                    <div className="text-sm font-black text-white">
+                      ⚠️ انتهى اشتراكك بتاريخ: <span className="text-rose-300">{subInfo.dateFormatted || 'سابقاً'}</span>
+                    </div>
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      تم تسجيل وصولك وإشعار الاستقبال. يرجى التوجه لموظف الاستقبال الآن لتجديد باقة الاشتراك أو دفع تذكرة يومية لمتابعة تمرينك.
+                    </p>
+                  </div>
+                );
+              }
+
+              if (subInfo.status === 'none') {
                 return (
                   <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-center space-y-2">
                     <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 font-bold text-xs">
@@ -383,11 +398,14 @@ export const PlayerCheckInPage: React.FC = () => {
                     </p>
                     <div className="text-[11px] text-slate-400 pt-1 border-t border-amber-500/20 flex items-center justify-center gap-2">
                       <span className="font-bold text-slate-300">الحالة:</span>
-                      <span>عضوية جديدة - بانتظار التسكين والتفعيل</span>
+                      <span>عضوية مسجلة - بانتظار التسكين والتفعيل</span>
                     </div>
                   </div>
                 );
               }
+
+              const hasDuration = subInfo.status === 'active';
+              const hasSessions = (checkedMember.remainingSessions || 0) > 0;
 
               return (
                 <>
@@ -433,13 +451,13 @@ export const PlayerCheckInPage: React.FC = () => {
                       <span className="text-slate-400">صلاحية الاشتراك:</span>
                       <span className="font-bold text-emerald-400 flex items-center gap-1">
                         <ShieldCheck className="w-3.5 h-3.5" />
-                        <span>{checkedMember.active ? 'ساري وصالح' : 'معلق'}</span>
+                        <span>{subInfo.badgeText}</span>
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
-                      <span className="text-slate-400">تاريخ الانتهاء:</span>
-                      <span className="font-mono text-slate-300">
-                        {checkedMember.endDate ? formatDateAr(checkedMember.endDate) : (hasSessions ? 'عند استهلاك رصيد الحصص' : 'غير محدد')}
+                      <span className="text-slate-400">صلاحية الاشتراك وسريانه:</span>
+                      <span className="font-bold text-emerald-300 font-mono text-[11px]">
+                        {subInfo.fullText}
                       </span>
                     </div>
                   </div>
