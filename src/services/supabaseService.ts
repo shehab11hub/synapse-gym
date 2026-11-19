@@ -932,6 +932,23 @@ export const supabaseService = {
     }
   },
 
+  // ─── PERIOD ARCHIVE & CLOUD STORAGE PURGING ───────────────────
+  async purgeDataForMonths(months: string[]): Promise<boolean> {
+    if (!isSupabaseConfigured || !supabase || !months || months.length === 0) return false;
+    try {
+      // 1. Delete master report entries for these months
+      await supabase.from('master_report_entries').delete().in('month', months);
+      // 2. Delete trainer transactions for these months
+      await supabase.from('trainer_transactions').delete().in('month', months);
+      // 3. Delete monthly archives for these months
+      await supabase.from('monthly_archives').delete().in('month', months);
+      return true;
+    } catch (e) {
+      console.warn('Purge data for months error in Supabase:', e);
+      return false;
+    }
+  },
+
   // ─── COMPLETE OPERATIONAL DATA WIPE (RESET DATABASE TO ZERO) ──
   async wipeAllOperationalData(): Promise<boolean> {
     if (!isSupabaseConfigured || !supabase) return false;

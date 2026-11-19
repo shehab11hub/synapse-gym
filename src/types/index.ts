@@ -262,6 +262,7 @@ export interface MonthlyBillingCycle {
   id: string;
   name: string; // e.g. "أكتوبر 2026"
   startDate: string;
+  endDate?: string; // تاريخ نهاية الشهر المحدد e.g. "2026-10-31"
   closedDate?: string;
   isActive: boolean;
   totalCollected: number;
@@ -319,10 +320,26 @@ export interface YearlyArchive {
   cashInflowsSnapshot: CashInflowItem[];
 }
 
+// PERIOD DATA ARCHIVE TYPES (أرشفة وتفريغ فترات سابقة لتوفير مساحة السيرفر)
+export interface PeriodArchive {
+  id: string;
+  periodName: string;
+  selectedMonths: string[];
+  archivedAt: string;
+  archivedBy: string;
+  totalRevenue: number;
+  totalExpenses: number;
+  netProfit: number;
+  recordsCount: number;
+}
+
 // DAILY SHIFT CLOSING TYPES (تقفيل اليومية والدرج)
 export interface DailyShiftClosing {
   id: string;
   date: string; // YYYY-MM-DD
+  closingDayDate?: string; // تاريخ اليوم المُقفل e.g. "2026-11-19"
+  nextDayDate?: string; // تاريخ اليوم التالي المنتهية عنده الوردية e.g. "2026-11-20"
+  shiftDateLabel?: string; // e.g. "وردية يوم 2026-11-19 حتى صباح 2026-11-20"
   closedAt: string;
   closedBy: string;
   totalDirectCash: number;

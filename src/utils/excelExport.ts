@@ -749,7 +749,8 @@ export const exportDailyShiftToXLSX = async (
   todayInflows: CashInflowItem[],
   todayTransactions?: POSTransaction[],
   todayTrainerTransactions?: TrainerTransaction[],
-  todayCheckInLogs?: CheckInLog[]
+  todayCheckInLogs?: CheckInLog[],
+  allCoaches?: Coach[]
 ) => {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Synapse Gym SaaS Pro';
@@ -771,7 +772,10 @@ export const exportDailyShiftToXLSX = async (
 
   sheet.mergeCells('A2:D2');
   const sub = sheet.getCell('A2');
-  sub.value = `تاريخ الوردية: ${closing.date} | وقت الإقفال: ${new Date(closing.closedAt).toLocaleTimeString('ar-EG')} | المقفل بواسطة: ${closing.closedBy}`;
+  const shiftDateText = closing.closingDayDate && closing.nextDayDate
+    ? `وردية يوم: ${closing.closingDayDate} حتى صباح: ${closing.nextDayDate}`
+    : `تاريخ الوردية: ${closing.date}`;
+  sub.value = `${shiftDateText} | وقت الإقفال: ${new Date(closing.closedAt).toLocaleTimeString('ar-EG')} | المقفل بواسطة: ${closing.closedBy}`;
   sub.alignment = { vertical: 'middle', horizontal: 'center' };
   sub.font = { italic: true, size: 10, color: { argb: 'FF94A3B8' } };
   sub.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
@@ -1129,7 +1133,243 @@ export const exportDailyShiftToXLSX = async (
   styleTotalRow(expTotalRow);
   finalizeWorksheet(expSheet, 18);
 
-  await downloadWorkbook(workbook, `تقفيل_وردية_${closing.date}.xlsx`);
+  // -------------------------------------------------------------
+  // TAB 6: سجل اللاعبين والحصص وتوزيع حسابات المدربين
+  // -------------------------------------------------------------
+  const playersSheet = workbook.addWorksheet('اللاعبين والحصص والمدربين');
+  playersSheet.mergeCells('A1:J1');
+  const plTitle = playersSheet.getCell('A1');
+  const dateHeading = closing.closingDayDate && closing.nextDayDate
+    ? `وردية يوم ${closing.closingDayDate} حتى صباح ${closing.nextDayDate}`
+    : `وردية ${closing.date}`;
+  plTitle.value = `سجل حضور وتسكين اللاعبين والحصص وتوزيع أرباح ومديونيات المدربين - ${dateHeading}`;
+  plTitle.alignment = { vertical: 'middle', horizontal: 'center' };
+  plTitle.font = { bold: true, size: 13, color: { argb: 'FFFFFFFF' } };
+  plTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TITLE_BANNER_BG } };
+  playersSheet.getRow(1).height = 34;
+
+  playersSheet.addRow([]);
+
+  // SECTION 1: DETAILED PLAYERS ATTENDANCE & SESSIONS
+  const plSection = playersSheet.addRow(['أولاً: بيان اللاعبين الذين حضروا وتمرنوا مع الكباتن والأنشطة اليوم']);
+  plSection.font = { bold: true, size: 11, color: { argb: 'FF0369A1' } };
+
+  const plHeader = playersSheet.addRow([
+    'م',
+    'اسم اللاعب',
+    'كود اللاعب',
+    'المدرب / الكابتن',
+    'نوع الحصة / النشاط',
+    'قيمة الحصة (ج.م)',
+    'مسار السداد والتحصيل',
+    'حصة الكابتن (ج.م)',
+    'حصة الجيم الصافية (ج.م)',
+    'مديونية الكابتن (ج.م)',
+  ]);
+  styleHeaderRow(plHeader);
+
+  let totalPlayerFees = 0;
+  let totalCoachSharesSum = 0;
+  let totalGymSharesSum = 0;
+  let totalCoachDebtsSum = 0;
+
+  todayEntries.forEach((e, idx) => {
+    totalPlayerFees += e.amount;
+    const isDebt = e.paymentMethod === 'coach_collected';
+
+    // Look up coach share from matching trainer transactions
+    const matchingTx = (todayTrainerTransactions || []).find(
+      (t) => (t.payer_name && t.payer_name === e.playerName) || (t.coach_id && t.coach_id === e.coachId && t.amount === e.amount)
+    );
+
+    const coachShare = isDebt ? 0 : (matchingTx?.coach_share ?? 0);
+    const gymShare = isDebt ? 0 : (matchingTx ? matchingTx.gym_share : e.amount - coachShare);
+    const coachDebt = isDebt ? e.amount : 0;
+
+    totalCoachSharesSum += coachShare;
+    totalGymSharesSum += gymShare;
+    totalCoachDebtsSum += coachDebt;
+
+    let pathwayLabel = 'دفع مباشر للجيم بدون مدرب';
+    if (isDebt) {
+      pathwayLabel = 'محمل كمديونية على الكابتن';
+    } else if (coachShare > 0 || e.coachId) {
+      pathwayLabel = 'دفع للجيم مع نسبة/حصة للكابتن';
+    }
+
+    const plRow = playersSheet.addRow([
+      idx + 1,
+      e.playerName,
+      e.playerCode || '—',
+      e.coachName || 'بدون مدرب',
+      e.sessionTitle || getCategoryLabel(e.sessionCategory),
+      `${e.amount.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م`,
+      pathwayLabel,
+      `${coachShare.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م`,
+      `${gymShare.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م`,
+      `${coachDebt.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م`,
+    ]);
+    plRow.height = 22;
+    plRow.getCell(1).alignment = { vertical: 'middle', horizontal: 'center' };
+    plRow.getCell(2).alignment = { vertical: 'middle', horizontal: 'right' };
+    plRow.getCell(2).font = { bold: true };
+    plRow.getCell(3).alignment = { vertical: 'middle', horizontal: 'center' };
+    plRow.getCell(4).alignment = { vertical: 'middle', horizontal: 'right' };
+    plRow.getCell(5).alignment = { vertical: 'middle', horizontal: 'center' };
+    plRow.getCell(6).alignment = { vertical: 'middle', horizontal: 'center' };
+    plRow.getCell(6).font = { bold: true, color: { argb: 'FF0D9488' } };
+    plRow.getCell(7).alignment = { vertical: 'middle', horizontal: 'center' };
+    plRow.getCell(8).alignment = { vertical: 'middle', horizontal: 'center' };
+    plRow.getCell(8).font = { bold: true, color: { argb: 'FF16A34A' } };
+    plRow.getCell(9).alignment = { vertical: 'middle', horizontal: 'center' };
+    plRow.getCell(10).alignment = { vertical: 'middle', horizontal: 'center' };
+    if (coachDebt > 0) {
+      plRow.getCell(10).font = { bold: true, color: { argb: 'FFE11D48' } };
+    }
+
+    if (idx % 2 === 1) {
+      plRow.eachCell((c) => {
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+      });
+    }
+  });
+
+  const plTotalRow = playersSheet.addRow([
+    'الإجمالي',
+    '—',
+    '—',
+    '—',
+    '—',
+    `${totalPlayerFees.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م`,
+    '—',
+    `${totalCoachSharesSum.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م`,
+    `${totalGymSharesSum.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م`,
+    `${totalCoachDebtsSum.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م`,
+  ]);
+  styleTotalRow(plTotalRow);
+
+  playersSheet.addRow([]);
+
+  // SECTION 2: PER-COACH ACCOUNTS SUMMARY
+  const coachSection = playersSheet.addRow(['ثانياً: كشف حساب وتصفية كل مدرب على حدة لليوم']);
+  coachSection.font = { bold: true, size: 11, color: { argb: 'FFD97706' } };
+
+  const coachSummaryHeader = playersSheet.addRow([
+    'اسم الكابتن',
+    'التخصص',
+    'عدد اللاعبين الحاضرين معه',
+    'إجمالي إيراد حصصه (ج.م)',
+    'مديونية الكابتن للجيم (عليه فلوس)',
+    'مستحقات وأرباح الكابتن (له فلوس)',
+    'صافي الحساب لليوم (له أم عليه)',
+    'ملاحظات وتصفية',
+  ]);
+  styleHeaderRow(coachSummaryHeader);
+
+  // Group by coach
+  const coachMap = new Map<string, {
+    name: string;
+    specialty: string;
+    playersCount: number;
+    revenue: number;
+    debtOnCoach: number;
+    earningsForCoach: number;
+  }>();
+
+  (allCoaches || []).forEach((c) => {
+    coachMap.set(c.id, {
+      name: c.name,
+      specialty: c.specialty || 'مدرب جيم',
+      playersCount: 0,
+      revenue: 0,
+      debtOnCoach: 0,
+      earningsForCoach: 0,
+    });
+  });
+
+  todayEntries.forEach((e) => {
+    if (!e.coachId && !e.coachName) return;
+    const key = e.coachId || e.coachName;
+    if (!coachMap.has(key)) {
+      coachMap.set(key, {
+        name: e.coachName || 'كابتن',
+        specialty: 'مدرب',
+        playersCount: 0,
+        revenue: 0,
+        debtOnCoach: 0,
+        earningsForCoach: 0,
+      });
+    }
+    const item = coachMap.get(key)!;
+    item.playersCount += 1;
+    item.revenue += e.amount;
+    if (e.paymentMethod === 'coach_collected') {
+      item.debtOnCoach += e.amount;
+    }
+  });
+
+  (todayTrainerTransactions || []).forEach((t) => {
+    const key = t.coach_id || t.coach_name;
+    if (coachMap.has(key)) {
+      const item = coachMap.get(key)!;
+      if (t.collected_by === 'gym' && t.coach_share > 0) {
+        item.earningsForCoach += t.coach_share;
+      }
+    }
+  });
+
+  Array.from(coachMap.values())
+    .filter((c) => c.playersCount > 0 || c.revenue > 0 || c.debtOnCoach > 0 || c.earningsForCoach > 0)
+    .forEach((cData, cIdx) => {
+      const net = cData.earningsForCoach - cData.debtOnCoach;
+      const netText = net === 0
+        ? 'متوازن (0.00 ج.م)'
+        : net > 0
+        ? `له عند الجيم (+${net.toLocaleString('ar-EG')} ج.م)`
+        : `عليه للجيم (-${Math.abs(net).toLocaleString('ar-EG')} ج.م)`;
+
+      const cRow = playersSheet.addRow([
+        cData.name,
+        cData.specialty,
+        cData.playersCount,
+        `${cData.revenue.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م`,
+        `${cData.debtOnCoach.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م`,
+        `${cData.earningsForCoach.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م`,
+        netText,
+        net < 0 ? 'يلزم التوريد للخزينة' : net > 0 ? 'مستحق صرف للمدرب' : 'خالص',
+      ]);
+      cRow.height = 22;
+      cRow.getCell(1).alignment = { vertical: 'middle', horizontal: 'right' };
+      cRow.getCell(1).font = { bold: true };
+      cRow.getCell(2).alignment = { vertical: 'middle', horizontal: 'center' };
+      cRow.getCell(3).alignment = { vertical: 'middle', horizontal: 'center' };
+      cRow.getCell(4).alignment = { vertical: 'middle', horizontal: 'center' };
+      cRow.getCell(4).font = { bold: true };
+      cRow.getCell(5).alignment = { vertical: 'middle', horizontal: 'center' };
+      if (cData.debtOnCoach > 0) {
+        cRow.getCell(5).font = { bold: true, color: { argb: 'FFE11D48' } };
+      }
+      cRow.getCell(6).alignment = { vertical: 'middle', horizontal: 'center' };
+      if (cData.earningsForCoach > 0) {
+        cRow.getCell(6).font = { bold: true, color: { argb: 'FF16A34A' } };
+      }
+      cRow.getCell(7).alignment = { vertical: 'middle', horizontal: 'center' };
+      cRow.getCell(7).font = { bold: true };
+      cRow.getCell(8).alignment = { vertical: 'middle', horizontal: 'center' };
+
+      if (cIdx % 2 === 1) {
+        cRow.eachCell((cell) => {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+        });
+      }
+    });
+
+  finalizeWorksheet(playersSheet, 18);
+
+  const outFileName = closing.closingDayDate && closing.nextDayDate
+    ? `تقفيل_وردية_${closing.closingDayDate}_الى_${closing.nextDayDate}.xlsx`
+    : `تقفيل_وردية_${closing.date}.xlsx`;
+  await downloadWorkbook(workbook, outFileName);
 };
 
 // ============================================================================
@@ -1212,6 +1452,138 @@ export const exportYearlyArchiveToJSON = (archive: YearlyArchive) => {
   const a = document.createElement('a');
   a.href = url;
   a.download = `أرشيف_سنة_${archive.year}_الكامل.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
+};
+
+// ============================================================================
+// 4. PERIOD ARCHIVE & PURGE EXPORTERS (.xlsx & .json)
+// ============================================================================
+export interface PeriodArchivePayload {
+  periodName: string;
+  selectedMonths: string[];
+  archivedAt: string;
+  archivedBy: string;
+  masterEntries: MasterReportEntry[];
+  expenses: ExpenseItem[];
+  cashInflows: CashInflowItem[];
+  trainerTransactions: TrainerTransaction[];
+  posTransactions?: POSTransaction[];
+  checkInLogs?: CheckInLog[];
+}
+
+export const exportPeriodArchiveToXLSX = async (payload: PeriodArchivePayload) => {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Synapse Gym SaaS Pro';
+
+  const totalRev = payload.masterEntries.reduce((s, e) => s + e.amount, 0);
+  const totalExp = payload.expenses.reduce((s, e) => s + e.amount, 0);
+  const netProfit = totalRev - totalExp;
+
+  // TAB 1: ملخص الفترة المالية
+  const sumSheet = workbook.addWorksheet('ملخص الفترة المؤرشفة');
+  sumSheet.mergeCells('A1:C1');
+  const sTitle = sumSheet.getCell('A1');
+  sTitle.value = `أرشيف تفريغ الفترة المالية السحابية - ${payload.periodName}`;
+  sTitle.alignment = { vertical: 'middle', horizontal: 'center' };
+  sTitle.font = { bold: true, size: 14, color: { argb: 'FFFFFFFF' } };
+  sTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TITLE_BANNER_BG } };
+  sumSheet.getRow(1).height = 36;
+
+  sumSheet.addRow([]);
+
+  const kHeader = sumSheet.addRow(['البند الإحصائي', 'القيمة', 'البيان والتفاصيل']);
+  styleHeaderRow(kHeader);
+
+  const kpis = [
+    { label: 'اسم الفترة المؤرشفة', val: payload.periodName, desc: 'حزمة تفريغ المساحة' },
+    { label: 'الشهور المشمولة والمحذوفة من السيرفر', val: payload.selectedMonths.join('، '), desc: `${payload.selectedMonths.length} شهور مالية` },
+    { label: 'تاريخ وساعة الأرشفة', val: new Date(payload.archivedAt).toLocaleString('ar-EG'), desc: `بواسطة: ${payload.archivedBy}` },
+    { label: 'إجمالي الإيرادات المؤرشفة', val: `${totalRev.toLocaleString('ar-EG')} ج.م`, desc: 'كافة اشتراكات وقيود الفترة' },
+    { label: 'إجمالي المصروفات المنصرفة', val: `${totalExp.toLocaleString('ar-EG')} ج.م`, desc: 'كافة مصاريف الفترة' },
+    { label: 'صافي أرباح الفترة', val: `${netProfit.toLocaleString('ar-EG')} ج.م`, desc: 'الفائض المالي الصافي' },
+    { label: 'إجمالي القيود المسجلة', val: payload.masterEntries.length, desc: 'قيد اشتراك وتسكين' },
+    { label: 'إجمالي بنود المصاريف', val: payload.expenses.length, desc: 'حركة صرف' },
+    { label: 'إجمالي حركات المدربين', val: payload.trainerTransactions.length, desc: 'حركة مديونية وسداد' },
+  ];
+
+  kpis.forEach((k) => {
+    const row = sumSheet.addRow([k.label, k.val, k.desc]);
+    row.height = 24;
+    row.getCell(1).alignment = { vertical: 'middle', horizontal: 'right' };
+    row.getCell(2).alignment = { vertical: 'middle', horizontal: 'center' };
+    row.getCell(2).font = { bold: true };
+    row.getCell(3).alignment = { vertical: 'middle', horizontal: 'right' };
+  });
+
+  finalizeWorksheet(sumSheet, 18);
+
+  // TAB 2: قيود الاشتراكات
+  const entSheet = workbook.addWorksheet('قيود الاشتراكات');
+  const eHeader = entSheet.addRow(['التاريخ', 'الشهر', 'اسم اللاعب', 'الكود', 'الكابتن', 'النشاط', 'المبلغ', 'طريقة الدفع', 'الملاحظات']);
+  styleHeaderRow(eHeader);
+  payload.masterEntries.forEach((e) => {
+    entSheet.addRow([
+      e.date?.slice(0, 10) || '—',
+      e.month || '—',
+      e.playerName,
+      e.playerCode || '—',
+      e.coachName || 'بدون مدرب',
+      e.sessionTitle || getCategoryLabel(e.sessionCategory),
+      `${e.amount} ج.م`,
+      getPaymentMethodLabel(e.paymentMethod),
+      e.notes || '—',
+    ]);
+  });
+  finalizeWorksheet(entSheet, 16);
+
+  // TAB 3: المصروفات
+  const expSheet = workbook.addWorksheet('المصروفات');
+  const expH = expSheet.addRow(['التاريخ', 'البند', 'التصنيف', 'المبلغ', 'طريقة الدفع', 'المسؤول']);
+  styleHeaderRow(expH);
+  payload.expenses.forEach((exp) => {
+    expSheet.addRow([
+      exp.date.slice(0, 10),
+      exp.title,
+      getExpenseCategoryLabel(exp.category),
+      `${exp.amount} ج.م`,
+      getPaymentMethodLabel(exp.paymentMethod),
+      exp.recordedBy || 'الاستقبال',
+    ]);
+  });
+  finalizeWorksheet(expSheet, 16);
+
+  // TAB 4: حركات المدربين
+  const trSheet = workbook.addWorksheet('حركات المدربين');
+  const trH = trSheet.addRow(['التاريخ', 'الكابتن', 'اللاعب', 'المبلغ', 'حصة الجيم', 'حصة الكابتن', 'طريقة الدفع', 'الحالة', 'البيان']);
+  styleHeaderRow(trH);
+  payload.trainerTransactions.forEach((t) => {
+    trSheet.addRow([
+      t.created_at?.slice(0, 10) || '—',
+      t.coach_name || 'الكابتن',
+      t.payer_name || '—',
+      `${t.amount} ج.م`,
+      `${t.gym_share} ج.م`,
+      `${t.coach_share} ج.م`,
+      getPaymentMethodLabel(t.payment_method),
+      t.status === 'pending' ? 'معلق' : 'تمت التصفية',
+      t.notes || '—',
+    ]);
+  });
+  finalizeWorksheet(trSheet, 16);
+
+  await downloadWorkbook(workbook, `أرشيف_فترة_${payload.periodName.replace(/\s+/g, '_')}.xlsx`);
+};
+
+export const exportPeriodArchiveToJSON = (payload: PeriodArchivePayload) => {
+  const jsonStr = JSON.stringify(payload, null, 2);
+  const blob = new Blob([jsonStr], { type: 'application/json' });
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `أرشيف_فترة_${payload.periodName.replace(/\s+/g, '_')}.json`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

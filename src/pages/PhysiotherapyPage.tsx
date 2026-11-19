@@ -798,19 +798,30 @@ export const PhysiotherapyPage: React.FC = () => {
 
       {/* Checkout Modal (محاسبة الجلسة المراد تحصيلها: كاش لاعب، كاش كوتش، انستاباي، أو مديونية لآخر الشهر) */}
       {selectedBookingForCheckout && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-purple-500/40 rounded-3xl max-w-lg w-full p-6 shadow-2xl">
-            <h3 className="text-lg font-black text-white mb-1 flex items-center gap-2">
-              <Receipt className="w-5 h-5 text-purple-400" />
-              <span>محاسبة وإنهاء جلسة العلاج الطبيعي والمساج</span>
-            </h3>
-            <p className="text-xs text-slate-400 mb-4">
-              اختر طريقة السداد: نقداً من اللاعب، أو من الكوتش، أو عبر انستاباي، أو كمديونية على الكابتن لآخر الشهر
-            </p>
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-hidden">
+          <div className="bg-[#0f172a] border border-purple-500/40 rounded-3xl max-w-lg w-full max-h-[92vh] flex flex-col p-4 sm:p-6 shadow-2xl overflow-hidden">
+            <div className="flex-shrink-0 mb-3 flex items-center justify-between pb-2 border-b border-slate-800">
+              <div>
+                <h3 className="text-base sm:text-lg font-black text-white flex items-center gap-2">
+                  <Receipt className="w-5 h-5 text-purple-400" />
+                  <span>محاسبة وإنهاء جلسة العلاج الطبيعي والمساج</span>
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  اختر طريقة السداد: كاش لاعب، كاش كوتش، انستاباي، أو مديونية على الكابتن
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedBookingForCheckout(null)}
+                className="p-1 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-            <form onSubmit={handleConfirmCheckout} className="space-y-4">
+            <form onSubmit={handleConfirmCheckout} className="space-y-3.5 overflow-y-auto pr-1 flex-1 custom-scrollbar">
               {/* Summary Cards */}
-              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-2 text-xs">
+              <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 space-y-1.5 text-xs">
                 <div className="flex justify-between">
                   <span className="text-slate-400">الطبيب / الكابتن:</span>
                   <span className="font-bold text-white">{selectedBookingForCheckout.doctorName}</span>
@@ -839,7 +850,7 @@ export const PhysiotherapyPage: React.FC = () => {
 
                 {/* Prompt for manual extra fee if elapsed > 60 */}
                 {selectedBookingForCheckout.elapsedMinutes > 60 && (
-                  <div className="p-3 rounded-xl bg-amber-500/15 border border-amber-500/40 space-y-2">
+                  <div className="p-2.5 rounded-xl bg-amber-500/15 border border-amber-500/40 space-y-1.5">
                     <div className="flex items-center gap-2 text-amber-300 font-bold text-xs">
                       <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
                       <span>تجاوز مدة الساعة ({selectedBookingForCheckout.elapsedMinutes} دقيقة)</span>
@@ -847,7 +858,7 @@ export const PhysiotherapyPage: React.FC = () => {
                     <p className="text-[11px] text-amber-200/90 leading-relaxed">
                       الحد الأدنى للمساج ساعة كاملة ({formatEGP(selectedBookingForCheckout.hourlyRate)}). طبقاً لسياسة الجيم، يُضاف حساب الوقت الإضافي <strong>يدوياً فقط</strong>:
                     </p>
-                    <div className="flex items-center gap-2 pt-1">
+                    <div className="flex items-center gap-2 pt-0.5">
                       <label className="text-xs text-slate-300 font-bold">مبلغ الوقت الإضافي (EGP):</label>
                       <input
                         type="number"
@@ -855,15 +866,15 @@ export const PhysiotherapyPage: React.FC = () => {
                         value={checkoutExtraFee || ''}
                         onChange={(e) => setCheckoutExtraFee(Math.max(0, Number(e.target.value)))}
                         placeholder="0"
-                        className="w-28 bg-slate-900 border border-amber-500/50 rounded-xl px-2.5 py-1.5 text-xs text-white font-mono font-bold focus:outline-none focus:border-amber-400"
+                        className="w-28 bg-slate-900 border border-amber-500/50 rounded-xl px-2.5 py-1 text-xs text-white font-mono font-bold focus:outline-none focus:border-amber-400"
                       />
                     </div>
                   </div>
                 )}
 
-                <div className="flex justify-between border-t border-slate-800 pt-2 font-bold items-center">
+                <div className="flex justify-between border-t border-slate-800 pt-1.5 font-bold items-center">
                   <span className="text-slate-200">المبلغ المراد تحصيله النهائي:</span>
-                  <span className="text-xl font-black text-emerald-400 font-mono">
+                  <span className="text-lg font-black text-emerald-400 font-mono">
                     {formatEGP(selectedBookingForCheckout.totalFee + checkoutExtraFee)}
                   </span>
                 </div>
@@ -871,19 +882,19 @@ export const PhysiotherapyPage: React.FC = () => {
 
               {/* Mode Selection */}
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-2">طريقة تسوية الحساب:</label>
+                <label className="block text-xs font-bold text-slate-300 mb-1.5">طريقة تسوية الحساب:</label>
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
                     onClick={() => setCheckoutMode('player_cash')}
-                    className={`p-3 rounded-2xl border text-right transition ${
+                    className={`p-2.5 rounded-2xl border text-right transition ${
                       checkoutMode === 'player_cash'
                         ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 font-bold'
                         : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
                     }`}
                   >
-                    <div className="flex items-center gap-1.5 text-xs font-black mb-1">
-                      <Banknote className="w-4 h-4 text-emerald-400" />
+                    <div className="flex items-center gap-1.5 text-xs font-black mb-0.5">
+                      <Banknote className="w-3.5 h-3.5 text-emerald-400" />
                       <span>كاش من اللاعب</span>
                     </div>
                     <div className="text-[10px] text-slate-400">سداد فوري يضاف لدرج الخزينة</div>
@@ -892,14 +903,14 @@ export const PhysiotherapyPage: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setCheckoutMode('doctor_cash')}
-                    className={`p-3 rounded-2xl border text-right transition ${
+                    className={`p-2.5 rounded-2xl border text-right transition ${
                       checkoutMode === 'doctor_cash'
                         ? 'bg-purple-500/20 border-purple-500 text-purple-300 font-bold'
                         : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
                     }`}
                   >
-                    <div className="flex items-center gap-1.5 text-xs font-black mb-1">
-                      <User className="w-4 h-4 text-purple-400" />
+                    <div className="flex items-center gap-1.5 text-xs font-black mb-0.5">
+                      <User className="w-3.5 h-3.5 text-purple-400" />
                       <span>كاش من الطبيب/الكوتش</span>
                     </div>
                     <div className="text-[10px] text-slate-400">دفع الكوتش مباشرة الآن للخزينة</div>
@@ -908,14 +919,14 @@ export const PhysiotherapyPage: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setCheckoutMode('instapay')}
-                    className={`p-3 rounded-2xl border text-right transition ${
+                    className={`p-2.5 rounded-2xl border text-right transition ${
                       checkoutMode === 'instapay'
                         ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300 font-bold'
                         : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
                     }`}
                   >
-                    <div className="flex items-center gap-1.5 text-xs font-black mb-1">
-                      <Smartphone className="w-4 h-4 text-cyan-400" />
+                    <div className="flex items-center gap-1.5 text-xs font-black mb-0.5">
+                      <Smartphone className="w-3.5 h-3.5 text-cyan-400" />
                       <span>تحويل انستاباي</span>
                     </div>
                     <div className="text-[10px] text-slate-400">سداد إلكتروني مع كود التحويل</div>
@@ -924,14 +935,14 @@ export const PhysiotherapyPage: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setCheckoutMode('coach_debt')}
-                    className={`p-3 rounded-2xl border text-right transition ${
+                    className={`p-2.5 rounded-2xl border text-right transition ${
                       checkoutMode === 'coach_debt'
                         ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold'
                         : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
                     }`}
                   >
-                    <div className="flex items-center gap-1.5 text-xs font-black mb-1">
-                      <ArrowUpRight className="w-4 h-4 text-amber-400" />
+                    <div className="flex items-center gap-1.5 text-xs font-black mb-0.5">
+                      <ArrowUpRight className="w-3.5 h-3.5 text-amber-400" />
                       <span>تحميل على الكابتن لآخر الشهر</span>
                     </div>
                     <div className="text-[10px] text-slate-400">مديونية رسمية على الكابتن للجيم</div>
@@ -941,7 +952,7 @@ export const PhysiotherapyPage: React.FC = () => {
 
               {/* Specific inputs based on checkoutMode */}
               {checkoutMode === 'instapay' && (
-                <div className="p-3.5 rounded-2xl bg-cyan-950/30 border border-cyan-500/30 space-y-2">
+                <div className="p-3 rounded-2xl bg-cyan-950/30 border border-cyan-500/30 space-y-1.5">
                   <label className="block text-xs font-bold text-cyan-300">
                     رقم أو كود تحويل انستاباي (Reference Code):
                   </label>
@@ -951,7 +962,7 @@ export const PhysiotherapyPage: React.FC = () => {
                     value={instapayRef}
                     onChange={(e) => setInstapayRef(e.target.value)}
                     placeholder="مثال: IP-998823 أو اسم المحول"
-                    className="w-full bg-slate-900 border border-cyan-500/40 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-cyan-400 font-mono"
+                    className="w-full bg-slate-900 border border-cyan-500/40 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-400 font-mono"
                   />
                   <p className="text-[10px] text-cyan-300/80">
                     سيتم تأكيد الإيداع في سجل تحويلات انستاباي فور الحفظ.
@@ -960,14 +971,14 @@ export const PhysiotherapyPage: React.FC = () => {
               )}
 
               {checkoutMode === 'coach_debt' && (
-                <div className="p-3.5 rounded-2xl bg-amber-950/30 border border-amber-500/30 space-y-2">
+                <div className="p-3 rounded-2xl bg-amber-950/30 border border-amber-500/30 space-y-1.5">
                   <label className="block text-xs font-bold text-amber-300">
                     اختر الكابتن لتحميل المديونية عليه:
                   </label>
                   <select
                     value={selectedCoachForDebt}
                     onChange={(e) => setSelectedCoachForDebt(e.target.value)}
-                    className="w-full bg-slate-900 border border-amber-500/40 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400 font-bold"
+                    className="w-full bg-slate-900 border border-amber-500/40 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-400 font-bold"
                   >
                     {coaches.map((c) => (
                       <option key={c.id} value={c.id}>
@@ -975,7 +986,7 @@ export const PhysiotherapyPage: React.FC = () => {
                       </option>
                     ))}
                   </select>
-                  <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-200/90 space-y-1 mt-2">
+                  <div className="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[10px] text-amber-200/90 space-y-0.5 mt-1">
                     <p className="font-bold">
                       💡 سيتم تحميل مبلغ {formatEGP(selectedBookingForCheckout.totalFee + checkoutExtraFee)} كمديونية رسمية على الكابتن:
                     </p>
@@ -996,14 +1007,15 @@ export const PhysiotherapyPage: React.FC = () => {
                   value={checkoutNotes}
                   onChange={(e) => setCheckoutNotes(e.target.value)}
                   placeholder="ملاحظات على الجلسة أو السداد..."
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-purple-500"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-purple-500"
                 />
               </div>
 
-              <div className="flex items-center gap-3 pt-2">
+              {/* Action Buttons */}
+              <div className="flex-shrink-0 pt-2 border-t border-slate-800 flex items-center gap-3">
                 <button
                   type="submit"
-                  className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 text-slate-950 font-black text-xs shadow-lg transition"
+                  className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 text-slate-950 font-black text-xs shadow-lg transition cursor-pointer"
                 >
                   {checkoutMode === 'instapay'
                     ? 'تأكيد الدفع انستاباي وإصدار الفاتورة'
@@ -1014,7 +1026,7 @@ export const PhysiotherapyPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setSelectedBookingForCheckout(null)}
-                  className="py-3 px-4 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs"
+                  className="py-2.5 px-4 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs cursor-pointer hover:bg-slate-700 transition"
                 >
                   إلغاء
                 </button>
@@ -1026,14 +1038,23 @@ export const PhysiotherapyPage: React.FC = () => {
 
       {/* New Booking Modal */}
       {isNewModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-700 rounded-3xl max-w-md w-full p-6 shadow-2xl">
-            <h3 className="text-lg font-black text-white mb-4 flex items-center gap-2">
-              <Stethoscope className="w-5 h-5 text-purple-400" />
-              <span>بدء جلسة وتأجير غرفة علاج طبيعي / مساج</span>
-            </h3>
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-hidden">
+          <div className="bg-[#0f172a] border border-slate-700 rounded-3xl max-w-md w-full max-h-[92vh] flex flex-col p-4 sm:p-6 shadow-2xl overflow-hidden">
+            <div className="flex-shrink-0 mb-3 flex items-center justify-between pb-2 border-b border-slate-800">
+              <h3 className="text-base sm:text-lg font-black text-white flex items-center gap-2">
+                <Stethoscope className="w-5 h-5 text-purple-400" />
+                <span>بدء جلسة وتأجير غرفة علاج طبيعي / مساج</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsNewModalOpen(false)}
+                className="p-1 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-            <form onSubmit={handleStartBooking} className="space-y-4">
+            <form onSubmit={handleStartBooking} className="space-y-3.5 overflow-y-auto pr-1 flex-1 custom-scrollbar">
               <div>
                 <label className="block text-xs font-bold text-slate-300 mb-1">نوع الخدمة</label>
                 <select

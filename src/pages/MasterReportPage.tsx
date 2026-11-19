@@ -3,7 +3,6 @@ import {
   FileSpreadsheet,
   Download,
   Calendar,
-  Filter,
   Search,
   Plus,
   CheckCircle2,
@@ -16,20 +15,15 @@ import {
   CreditCard,
   Banknote,
   Smartphone,
-  ChevronDown,
   Receipt,
   ArrowDownLeft,
-  ArrowUpRight,
   Wallet,
-  Activity,
   Layers,
-  Building,
   Lock,
   ShieldCheck,
   Archive,
   Database,
   Printer,
-  FileCheck,
   X,
 } from 'lucide-react';
 import { useGymData } from '../context/GymDataContext';
@@ -79,6 +73,8 @@ export const MasterReportPage: React.FC = () => {
     coaches,
     expenses,
     cashInflows,
+    periodArchives,
+    archivePeriodAndPurge,
     yearlyArchives,
     archiveYear,
     exportYearlyArchiveXLSX,
@@ -108,9 +104,15 @@ export const MasterReportPage: React.FC = () => {
   const [isNewMonthModalOpen, setIsNewMonthModalOpen] = useState(false);
   const [selectedNewMonthName, setSelectedNewMonthName] = useState<string>('نوفمبر');
   const [selectedNewMonthYear, setSelectedNewMonthYear] = useState<number>(new Date().getFullYear());
+  const [newMonthStartDate, setNewMonthStartDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [newMonthEndDate, setNewMonthEndDate] = useState(() => {
+    const now = new Date();
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    return lastDay.toISOString().slice(0, 10);
+  });
   const [isAddEntryModalOpen, setIsAddEntryModalOpen] = useState(false);
 
-  // Shift Closing Modals & States (تقفيل اليومية والدرج)
+  // Shift Closing Modals & States (تقفيل اليومية والدرج وتاريخين)
   const [isShiftAuthModalOpen, setIsShiftAuthModalOpen] = useState(false);
   const [isShiftClosingModalOpen, setIsShiftClosingModalOpen] = useState(false);
   const [shiftAuthUsername, setShiftAuthUsername] = useState(currentUser?.username || '');
@@ -120,12 +122,29 @@ export const MasterReportPage: React.FC = () => {
   const [shiftNotes, setShiftNotes] = useState('');
   const [isExportingShift, setIsExportingShift] = useState(false);
 
-  // Yearly Archive Modal & States (أرشفة السنة وبدء سنة جديدة)
-  const [isYearArchiveModalOpen, setIsYearArchiveModalOpen] = useState(false);
-  const [yearToArchiveInput, setYearToArchiveInput] = useState<number>(new Date().getFullYear());
+  // Two dates for Shift Closing (اليوم المقفل + اليوم التالي)
+  const [shiftClosingDayDate, setShiftClosingDayDate] = useState(() => {
+    const now = new Date();
+    if (now.getHours() < 6) {
+      const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      return yesterday.toISOString().slice(0, 10);
+    }
+    return now.toISOString().slice(0, 10);
+  });
+  const [shiftNextDayDate, setShiftNextDayDate] = useState(() => {
+    const now = new Date();
+    if (now.getHours() < 6) {
+      return now.toISOString().slice(0, 10);
+    }
+    const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    return tomorrow.toISOString().slice(0, 10);
+  });
 
-  // XLSX export loading state
-  const [isExportingXLSX, setIsExportingXLSX] = useState(false);
+  // Period Archive Modal & States (أرشفة وتفريغ فترات سابقة لتوفير مساحة السيرفر)
+  const [isPeriodArchiveModalOpen, setIsPeriodArchiveModalOpen] = useState(false);
+  const [selectedMonthsToArchive, setSelectedMonthsToArchive] = useState<string[]>([]);
+  const [periodArchiveName, setPeriodArchiveName] = useState('أرشيف فترة سابقة');
+  const [isArchivingPeriod, setIsArchivingPeriod] = useState(false);
 
   // Today's shift financial calculations
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -300,18 +319,6 @@ export const MasterReportPage: React.FC = () => {
     sounds.playSuccessDing();
   };
 
-  const handleExportXLSX = async () => {
-    setIsExportingXLSX(true);
-    try {
-      await exportMasterReportXLSX(selectedMonth);
-      sounds.playSuccessDing();
-    } catch {
-      // ignore
-    } finally {
-      setIsExportingXLSX(false);
-    }
-  };
-
   const handlePrintMonthPDF = () => {
     printMonthlyMasterReportPDF(
       selectedMonth,
@@ -383,12 +390,25 @@ export const MasterReportPage: React.FC = () => {
 
   const handleConfirmShiftClose = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Check month expiration rule:
+    const activeCycle = billingCycles.find((c) => c.isActive);
+    if (activeCycle?.endDate && shiftClosingDayDate > activeCycle.endDate) {
+      alert(
+        `⚠️ لا يمكن تقفيل اليومية!\n\nلقد انتهت الفترة المحددة للشهر الحالي (${activeCycle.name} الممتدة حتى ${activeCycle.endDate}).\nيجب تقفيل وبدء شهر جديد أولاً قبل إقفال اليومية.`
+      );
+      return;
+    }
+
     const actualCashNum = parseFloat(actualCountedCashInput) || 0;
     const diff = actualCashNum - todayExpectedNetCash;
 
     try {
-      closeDailyShift({
-        date: todayIso,
+      const closed = closeDailyShift({
+        date: shiftClosingDayDate,
+        closingDayDate: shiftClosingDayDate,
+        nextDayDate: shiftNextDayDate,
+        shiftDateLabel: `وردية يوم ${shiftClosingDayDate} حتى صباح ${shiftNextDayDate}`,
         closedBy: currentUser?.name || shiftAuthUsername || 'المدير العام',
         totalDirectCash: todayDirectCash,
         totalRepayments: todayRepaymentsAmount,
@@ -408,14 +428,25 @@ export const MasterReportPage: React.FC = () => {
       setShiftAuthPassword('');
       setShiftNotes('');
 
-      // Auto export Excel file immediately upon shift closing
-      await exportDailyShiftXLSX();
+      // 1. Generate & open the Shift Closing PDF immediately
+      printDailyShiftReportPDF(
+        closed,
+        todayDirectEntries,
+        todayExpenses,
+        todayRepayments,
+        transactions.filter((t) => t.timestamp.startsWith(shiftClosingDayDate)),
+        trainerTransactions.filter((t) => t.created_at?.startsWith(shiftClosingDayDate))
+      );
+
+      // 2. Auto export Comprehensive Excel file immediately
+      await exportDailyShiftXLSX(closed.id);
 
       alert(
         `✅ تم إقفال وردية اليوم بنجاح!\n` +
-        `• تم مسح وتصفير قائمة الحضور بالاستقبال لبدء اليومية الجديدة.\n` +
-        `• تم تصفير رصيد الدرج النشط والمصروفات اليومية لبدء الوردية الجديدة من 0.00 ج.م.\n` +
-        `• تم تنزيل شيت إكسيل تقفيل الوردية متضمناً تفاصيل مبيعات البار، المصروفات، وحركات الكباتن.`
+        `• الوردية: من ${shiftClosingDayDate} حتى صباح ${shiftNextDayDate}.\n` +
+        `• تم إصدار وتجهيز تقرير الوردية الشامل PDF للطباعة والحفظ.\n` +
+        `• تم تنزيل شيت الإكسيل الشامل (.xlsx) محتوياً على كشف تفصيلي بحسابات اللاعبين والمدربين ومبيعات البار.\n` +
+        `• تم مسح وتصفير حضور وتسجيلات الاستقبال لبدء الوردية التالية من 0.00 ج.م.`
       );
     } catch (err: any) {
       alert(err.message || 'حدث خطأ أثناء تقفيل اليومية');
@@ -434,16 +465,38 @@ export const MasterReportPage: React.FC = () => {
     }
   };
 
-  const handleConfirmYearArchive = (e: React.FormEvent) => {
+  const handleConfirmPeriodArchive = async (e: React.FormEvent) => {
     e.preventDefault();
     if (currentUser?.role !== 'admin') {
-      alert('عفواً، أرشفة السنة وبدء سنة جديدة تتطلب صلاحيات المدير العام.');
+      alert('عفواً، أرشفة وتفريغ فترات السيرفر تتطلب صلاحيات المدير العام.');
       return;
     }
-    archiveYear(yearToArchiveInput, currentUser?.name || 'المدير العام');
-    sounds.playCashRegister();
-    setIsYearArchiveModalOpen(false);
-    setSelectedYearFilter(String(yearToArchiveInput));
+    if (selectedMonthsToArchive.length === 0) {
+      alert('يرجى تحديد شهر واحد على الأقل للأرشفة والتفريغ.');
+      return;
+    }
+
+    setIsArchivingPeriod(true);
+    try {
+      await archivePeriodAndPurge(
+        periodArchiveName.trim() || `أرشيف فترات ${selectedMonthsToArchive.join(' - ')}`,
+        selectedMonthsToArchive,
+        currentUser?.name || 'المدير العام'
+      );
+      sounds.playCashRegister();
+      setIsPeriodArchiveModalOpen(false);
+      setSelectedMonthsToArchive([]);
+      alert(
+        `✅ تم بنجاح أرشفة وتفريغ الفترة المحددة!\n` +
+        `• تم تنزيل ملف الإكسيل الشامل (.xlsx) وملف النسخة الاحتياطية (.json) على جهازك.\n` +
+        `• تم مسح وتفريغ سجلات الشهور (${selectedMonthsToArchive.join('، ')}) من قاعدة البيانات السحابية (Supabase) لتوفير المساحة تماماً.\n` +
+        `• تم تدوين العملية في سجل أرشيف الفترات.`
+      );
+    } catch (err: any) {
+      alert(err.message || 'حدث خطأ أثناء الأرشفة والتفريغ');
+    } finally {
+      setIsArchivingPeriod(false);
+    }
   };
 
   const handleStartNewMonthSubmit = (e: React.FormEvent) => {
@@ -451,11 +504,12 @@ export const MasterReportPage: React.FC = () => {
     const compositeName = `${selectedNewMonthName} ${selectedNewMonthYear}`.trim();
     if (!compositeName) return;
 
-    startNewMonth(compositeName);
+    startNewMonth(compositeName, newMonthStartDate, newMonthEndDate);
     setSelectedMonth(compositeName);
     setSelectedYearFilter(String(selectedNewMonthYear));
     setIsNewMonthModalOpen(false);
     sounds.playCashRegister();
+    alert(`✅ تم بدء الشهر المالي الجديد (${compositeName}) بنجاح!\nالفترة المحددة: من ${newMonthStartDate} إلى ${newMonthEndDate}.`);
   };
 
   const handleCreateEntrySubmit = (e: React.FormEvent) => {
@@ -606,16 +660,6 @@ export const MasterReportPage: React.FC = () => {
 
           {/* Action Buttons */}
           <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
-            {/* Export to XLSX (Excel) */}
-            <button
-              onClick={handleExportXLSX}
-              disabled={isExportingXLSX}
-              className="flex-1 sm:flex-none py-3.5 px-5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 transition cursor-pointer disabled:opacity-60"
-            >
-              <Download className="w-4 h-4" />
-              <span>{isExportingXLSX ? 'جارِ التحميل...' : 'إكسيل شامل (.xlsx)'}</span>
-            </button>
-
             {/* Print Monthly Report PDF */}
             <button
               onClick={handlePrintMonthPDF}
@@ -639,6 +683,13 @@ export const MasterReportPage: React.FC = () => {
             {/* Daily Shift Closing Button */}
             <button
               onClick={() => {
+                const activeCycle = billingCycles.find((c) => c.isActive);
+                if (activeCycle?.endDate && shiftClosingDayDate > activeCycle.endDate) {
+                  alert(
+                    `⚠️ لا يمكن تقفيل اليومية!\n\nلقد انتهت الفترة المحددة للشهر المالي الحالي (${activeCycle.name} الممتدة حتى ${activeCycle.endDate}).\nيرجى بدء شهر جديد أولاً لإتاحة إغلاق اليومية.`
+                  );
+                  return;
+                }
                 const running = getRunningOperations();
                 if (running.hasRunning) {
                   const runningItems = [
@@ -660,15 +711,19 @@ export const MasterReportPage: React.FC = () => {
               <span>تقفيل اليومية والدرج</span>
             </button>
 
-            {/* Yearly Archive Button (Manager-Only) */}
+            {/* Period Archive Button (Manager-Only) */}
             {currentUser?.role === 'admin' && (
               <button
-                onClick={() => setIsYearArchiveModalOpen(true)}
+                onClick={() => {
+                  const pastCycles = billingCycles.filter((c) => !c.isActive);
+                  setSelectedMonthsToArchive(pastCycles.map((c) => c.name));
+                  setIsPeriodArchiveModalOpen(true);
+                }}
                 className="flex-1 sm:flex-none py-3.5 px-4 rounded-2xl bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/40 font-black text-xs flex items-center justify-center gap-2 transition cursor-pointer"
-                title="أرشفة وبدء سنة جديدة (صلاحيات المدير العام)"
+                title="أرشفة وتفريغ فترات سابقة لتوفير مساحة السيرفر السحابي (صلاحيات المدير العام)"
               >
                 <Archive className="w-4 h-4" />
-                <span>أرشفة وبدء سنة جديدة (المدير)</span>
+                <span>أرشفة وبدء فترة جديدة (تفريغ السيرفر)</span>
               </button>
             )}
 
@@ -738,32 +793,15 @@ export const MasterReportPage: React.FC = () => {
               </select>
             </div>
 
-            {/* Year Archive Status Banner if selected year is archived */}
-            {(() => {
-              const yrNum = parseInt(selectedYearFilter);
-              const arch = yearlyArchives.find((a) => a.year === yrNum);
-              if (!arch) return null;
-              return (
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-indigo-950/70 border border-indigo-500/40 text-xs">
-                  <Archive className="w-3.5 h-3.5 text-indigo-400" />
-                  <span className="text-indigo-300 font-bold">
-                    أرشيف {arch.year} ({arch.totalCheckIns} حضور)
-                  </span>
-                  <button
-                    onClick={() => exportYearlyArchiveXLSX(arch.year)}
-                    className="px-2 py-0.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-slate-950 font-black text-[10px] cursor-pointer"
-                  >
-                    إكسيل (.xlsx)
-                  </button>
-                  <button
-                    onClick={() => exportYearlyArchiveJSON(arch.year)}
-                    className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-[10px] border border-slate-700 cursor-pointer"
-                  >
-                    JSON
-                  </button>
-                </div>
-              );
-            })()}
+            {/* Period Archives Status Banner */}
+            {periodArchives.length > 0 && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-indigo-950/70 border border-indigo-500/40 text-xs">
+                <Archive className="w-3.5 h-3.5 text-indigo-400" />
+                <span className="text-indigo-300 font-bold">
+                  أرشيف الفترات ({periodArchives.length} فترة سابقة مفرغة)
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-4 text-xs text-slate-400">
@@ -1393,6 +1431,39 @@ export const MasterReportPage: React.FC = () => {
                 </div>
               </div>
 
+              {/* Month Start & End Date Inputs */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                    تاريخ بداية الشهر:
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={newMonthStartDate}
+                    onChange={(e) => setNewMonthStartDate(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-teal-300 font-mono font-bold focus:outline-none focus:border-teal-500 cursor-pointer"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                    تاريخ نهاية الشهر:
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={newMonthEndDate}
+                    onChange={(e) => setNewMonthEndDate(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-teal-300 font-mono font-bold focus:outline-none focus:border-teal-500 cursor-pointer"
+                  />
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-300 leading-relaxed">
+                ⚠️ عند انتهاء هذا الشهر وبلوغ تاريخ النهاية المحدد، سيتم إيقاف وحظر تقفيل اليومية تلقائياً حتى يتم فتح وبدء شهر جديد للحفاظ على دقة الحسابات الشهرية.
+              </div>
+
               {/* Live Preview Box */}
               <div className="p-3.5 rounded-2xl bg-teal-500/10 border border-teal-500/30 flex items-center justify-between text-xs">
                 <span className="text-slate-300 font-medium">اسم الدورة المالية الجديدة:</span>
@@ -1745,6 +1816,43 @@ export const MasterReportPage: React.FC = () => {
             </div>
 
             <form onSubmit={handleConfirmShiftClose} className="space-y-4 mt-6">
+              {/* Dual Dates: Closing Day and Next Day */}
+              <div className="p-4 rounded-2xl bg-slate-900 border border-amber-500/30 space-y-3">
+                <div className="flex items-center gap-2 text-amber-300 text-xs font-black">
+                  <Calendar className="w-4 h-4" />
+                  <span>تحديد تاريخ اليوم المُقفل وتاريخ اليوم التالي (لدقة التقفيل بعد منتصف الليل):</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                      تاريخ اليوم المُقفل (Shift Day):
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={shiftClosingDayDate}
+                      onChange={(e) => setShiftClosingDayDate(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-amber-300 font-mono font-bold focus:outline-none focus:border-amber-400 cursor-pointer"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                      تاريخ اليوم التالي (Next Day):
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={shiftNextDayDate}
+                      onChange={(e) => setShiftNextDayDate(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-amber-300 font-mono font-bold focus:outline-none focus:border-amber-400 cursor-pointer"
+                    />
+                  </div>
+                </div>
+                <p className="text-[10px] text-slate-400 leading-relaxed">
+                  💡 نظراً لأن إغلاق الوردية غالباً ما يتم بعد الساعة 12:00 ليلاً، يتم إثبات تاريخ الوردية الأساسي وتاريخ اليوم التالي لتوثيق وتسمية ملفات الـ PDF والإكسيل بدقة محاسبية تامة.
+                </p>
+              </div>
+
               {/* Actual counted cash field */}
               <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
                 <label className="block text-xs font-bold text-slate-200">
@@ -1810,10 +1918,10 @@ export const MasterReportPage: React.FC = () => {
                 />
               </div>
 
-              <div className="p-3.5 rounded-2xl bg-blue-500/10 border border-blue-500/20 text-xs text-blue-300 flex items-start gap-2.5">
-                <Sparkles className="w-4 h-4 shrink-0 text-blue-400 mt-0.5" />
+              <div className="p-3.5 rounded-2xl bg-teal-500/10 border border-teal-500/20 text-xs text-teal-300 flex items-start gap-2.5">
+                <Sparkles className="w-4 h-4 shrink-0 text-teal-400 mt-0.5" />
                 <p className="leading-relaxed">
-                  <strong>تأثير تقفيل اليومية:</strong> يتم حفظ تقرير الإغلاق واعتماده رسمياً، وإعادة ضبط حسابات الدرج اليومية لتبدأ غداً برصيد جديد ونظيف، مع بقاء كافة مديونيات الكباتن واشتراكات الأعضاء محفوظة بدون أي مساس.
+                  <strong>إجراءات التقفيل التلقائية:</strong> فور تأكيد التقفيل، سيتم فوراً تجهيز تقرير الـ PDF المعتمد، وتنزيل شيت الإكسيل الشامل (.xlsx) متضمناً كشف حضور اللاعبين وحسابات المدربين، مع تصفير حضور الاستقبال ومطابقة الدرج لبدء اليوم التالي نظيفاً.
                 </p>
               </div>
 
@@ -1834,7 +1942,7 @@ export const MasterReportPage: React.FC = () => {
                     className="flex-1 py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-amber-500/20 transition flex items-center justify-center gap-2"
                   >
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>تأكيد إغلاق الوردية وتصفير الدرج</span>
+                    <span>تأكيد إغلاق الوردية وإصدار التقارير (PDF + إكسيل)</span>
                   </button>
                   <button
                     type="button"
@@ -1850,69 +1958,144 @@ export const MasterReportPage: React.FC = () => {
         </div>
       )}
 
-      {/* 3. Yearly Archive Modal (Manager-Only) */}
-      {currentUser?.role === 'admin' && isYearArchiveModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-[#0f172a] border border-indigo-500/30 rounded-3xl max-w-lg w-full p-6 md:p-8 shadow-2xl relative">
+      {/* 3. Period Archive & Cloud Purge Modal (Manager-Only) */}
+      {currentUser?.role === 'admin' && isPeriodArchiveModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in overflow-y-auto">
+          <div className="bg-[#0f172a] border border-indigo-500/40 rounded-3xl max-w-2xl w-full p-6 md:p-8 shadow-2xl relative my-8">
             <div className="flex items-center justify-between pb-4 border-b border-slate-800">
               <div className="flex items-center gap-3">
                 <div className="p-2.5 rounded-2xl bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
                   <Archive className="w-6 h-6" />
                 </div>
                 <div>
-                  <h3 className="text-base font-black text-white">أرشفة وبدء سنة مالية جديدة</h3>
+                  <h3 className="text-base font-black text-white">أرشفة وتفريغ فترات سابقة (تنظيف المساحة السحابية)</h3>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    تجميع البيانات السنوية وحفظ سرعة وخفة السيستم
+                    تنزيل حزمة البيانات على جهازك وتفريغ قاعدة البيانات السحابية (Supabase) لتوفير المساحة
                   </p>
                 </div>
               </div>
               <button
-                onClick={() => setIsYearArchiveModalOpen(false)}
+                onClick={() => setIsPeriodArchiveModalOpen(false)}
                 className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleConfirmYearArchive} className="space-y-4 mt-5">
+            <form onSubmit={handleConfirmPeriodArchive} className="space-y-4 mt-5">
               <div>
                 <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                  حدد السنة المراد أرشفتها وإغلاق سنتها المالية
+                  عنوان أو اسم الأرشيف المحفوظ:
                 </label>
-                <select
-                  value={yearToArchiveInput}
-                  onChange={(e) => setYearToArchiveInput(Number(e.target.value))}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500 transition"
-                >
-                  {availableYears.map((y) => (
-                    <option key={y} value={y}>
-                      سنة {y} {String(y) === String(new Date().getFullYear()) ? '(السنة الحالية)' : ''}
-                    </option>
-                  ))}
-                  <option value={new Date().getFullYear() + 1}>
-                    سنة {new Date().getFullYear() + 1} (السنة القادمة)
-                  </option>
-                </select>
+                <input
+                  type="text"
+                  required
+                  value={periodArchiveName}
+                  onChange={(e) => setPeriodArchiveName(e.target.value)}
+                  placeholder="مثال: أرشيف الربع الأول أو شهور يناير وفبراير 2026"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500 transition"
+                />
               </div>
 
-              {/* Explanatory benefit boxes */}
-              <div className="space-y-2.5 text-xs">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-bold text-slate-300">
+                    اختر الشهور السابقة المراد أرشفتها وتفريغها من السيرفر:
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const pastMonths = billingCycles.filter((c) => !c.isActive).map((c) => c.name);
+                        setSelectedMonthsToArchive(pastMonths);
+                      }}
+                      className="text-[11px] text-indigo-400 hover:underline font-bold cursor-pointer"
+                    >
+                      تحديد الكل
+                    </button>
+                    <span className="text-slate-600">•</span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedMonthsToArchive([])}
+                      className="text-[11px] text-slate-400 hover:underline font-bold cursor-pointer"
+                    >
+                      إلغاء التحديد
+                    </button>
+                  </div>
+                </div>
+
+                {/* Past Months Checklist */}
+                {(() => {
+                  const pastCycles = billingCycles.filter((c) => !c.isActive);
+                  if (pastCycles.length === 0) {
+                    return (
+                      <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-400 text-center">
+                        لا توجد شهور مغلقة سابقة في السيستم حالياً. يتم إضافة الشهور هنا تلقائياً عند النقر على "بدء شهر جديد".
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                      {pastCycles.map((cycle) => {
+                        const isChecked = selectedMonthsToArchive.includes(cycle.name);
+                        const monthEntriesCount = masterReportEntries.filter((e) => e.month === cycle.name).length;
+                        const monthExpensesCount = expenses.filter((e) => e.date?.includes(cycle.name) || (cycle.startDate && cycle.endDate && e.date >= cycle.startDate && e.date <= cycle.endDate)).length;
+                        return (
+                          <label
+                            key={cycle.id}
+                            className={`flex items-center justify-between p-3 rounded-xl border cursor-pointer transition ${
+                              isChecked
+                                ? 'bg-indigo-950/40 border-indigo-500/50 text-white'
+                                : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:bg-slate-900'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedMonthsToArchive([...selectedMonthsToArchive, cycle.name]);
+                                  } else {
+                                    setSelectedMonthsToArchive(selectedMonthsToArchive.filter((m) => m !== cycle.name));
+                                  }
+                                }}
+                                className="w-4 h-4 rounded text-indigo-500 focus:ring-0 bg-slate-800 border-slate-700"
+                              />
+                              <div>
+                                <span className="text-xs font-bold">{cycle.name}</span>
+                                {cycle.startDate && cycle.endDate && (
+                                  <span className="text-[10px] text-slate-500 mr-2 font-mono">
+                                    ({cycle.startDate} إلى {cycle.endDate})
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <span className="text-[11px] text-slate-400 font-mono">
+                              {monthEntriesCount} قيد • {monthExpensesCount} مصروف
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Informational Boxes */}
+              <div className="space-y-2 text-xs">
                 <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 flex items-start gap-2.5 text-slate-300">
-                  <Database className="w-4 h-4 shrink-0 text-indigo-400 mt-0.5" />
+                  <Download className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
                   <span>
-                    <strong>تجميع شامل:</strong> يتم تحزيم وحساب إجمالي إيرادات ومصاريف وأرباح شهور سنة {yearToArchiveInput} وحفظها في جدول <code className="text-indigo-300">yearly_archives</code>.
+                    <strong>تنزيل حزمة الأرشيف فوراً:</strong> سيتم تنزيل شيت إكسيل شامل (.xlsx) متكامل + ملف نسخة احتياطية (.json) لشهور الفترة على جهازك فوراً.
                   </span>
                 </div>
-                <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 flex items-start gap-2.5 text-slate-300">
-                  <FileSpreadsheet className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
+
+                <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-start gap-2.5 text-rose-300">
+                  <Database className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
                   <span>
-                    <strong>تصدير فوري دائم:</strong> يمكنك تصفح سنة {yearToArchiveInput} في أي وقت وتحميل شيت إكسيل احترافي (.xlsx) أو ملف JSON متكامل بنقرة واحدة.
-                  </span>
-                </div>
-                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-start gap-2.5 text-amber-300">
-                  <Sparkles className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
-                  <span>
-                    <strong>تفريغ السجلات النشطة (Purge Logs):</strong> يتم مسح سجلات الحضور النشطة الخاصة بسنة {yearToArchiveInput} فقط بعد حفظ لقطة كاملة منها في الأرشيف لتخفيف قاعدة البيانات والحفاظ على سرعة السيستم.
+                    <strong>تفريغ ومسح السيرفر السحابي (Supabase Purge):</strong> سيتم مسح بيانات الشهور المحددة بالكامل من قاعدة البيانات السحابية لتفريغ المساحة تماماً وتجنب امتلاء السيرفر.
                   </span>
                 </div>
               </div>
@@ -1920,14 +2103,15 @@ export const MasterReportPage: React.FC = () => {
               <div className="flex items-center gap-3 pt-3">
                 <button
                   type="submit"
-                  className="flex-1 py-3 px-4 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-indigo-500/20 transition flex items-center justify-center gap-2"
+                  disabled={selectedMonthsToArchive.length === 0 || isArchivingPeriod}
+                  className="flex-1 py-3 px-4 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-indigo-500/20 transition flex items-center justify-center gap-2 disabled:opacity-50"
                 >
                   <Archive className="w-4 h-4" />
-                  <span>تأكيد أرشفة سنة {yearToArchiveInput} وبدء الدورة</span>
+                  <span>{isArchivingPeriod ? 'جارِ الأرشفة وتفريغ السيرفر...' : `تأكيد أرشفة وتفريغ (${selectedMonthsToArchive.length}) شهر من السيرفر`}</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => setIsYearArchiveModalOpen(false)}
+                  onClick={() => setIsPeriodArchiveModalOpen(false)}
                   className="py-3 px-4 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs cursor-pointer hover:bg-slate-700 transition"
                 >
                   إلغاء

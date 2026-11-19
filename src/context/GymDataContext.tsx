@@ -19,12 +19,15 @@ import {
   YearlyArchive,
   DailyShiftClosing,
   MonthlyArchive,
+  PeriodArchive,
 } from '../types';
 import {
   exportMasterReportToXLSX,
   exportDailyShiftToXLSX,
   exportYearlyArchiveToXLSX,
   exportYearlyArchiveToJSON,
+  exportPeriodArchiveToXLSX,
+  exportPeriodArchiveToJSON,
 } from '../utils/excelExport';
 import { sounds } from '../utils/sound';
 import { supabaseService } from '../services/supabaseService';
@@ -218,11 +221,19 @@ interface GymDataContextType {
   addMasterReportEntry: (entry: Omit<MasterReportEntry, 'id'>) => void;
   updateMasterReportEntry: (id: string, updates: Partial<MasterReportEntry>) => void;
   deleteMasterReportEntry: (id: string) => void;
-  startNewMonth: (newMonthName: string) => void;
+  startNewMonth: (newMonthName: string, startDate?: string, endDate?: string) => void;
   monthlyArchives: MonthlyArchive[];
   closeMonthlyBillingCycle: (adminUsername: string, nextMonthName?: string) => { success: boolean; archive?: MonthlyArchive; error?: string };
   exportMasterReportToCSV: (month?: string) => void;
   exportMasterReportXLSX: (month?: string) => Promise<void>;
+
+  // PERIOD ARCHIVES & CLOUD DATA PURGING
+  periodArchives: PeriodArchive[];
+  archivePeriodAndPurge: (
+    periodName: string,
+    selectedMonths: string[],
+    adminUsername: string
+  ) => Promise<{ success: boolean; periodArchive: PeriodArchive }>;
 
   // YEARLY ARCHIVES & DATA PURGING
   yearlyArchives: YearlyArchive[];
@@ -416,6 +427,16 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   useEffect(() => {
     localStorage.setItem('synapse_daily_closings', JSON.stringify(dailyShiftClosings));
   }, [dailyShiftClosings]);
+
+  // PERIOD ARCHIVES
+  const [periodArchives, setPeriodArchives] = useState<PeriodArchive[]>(() => {
+    const saved = localStorage.getItem('synapse_period_archives');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('synapse_period_archives', JSON.stringify(periodArchives));
+  }, [periodArchives]);
 
   // Persistence effects & Backend Directory Sync
   useEffect(() => {
@@ -2689,7 +2710,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
-  const startNewMonth = (newMonthName: string) => {
+  const startNewMonth = (newMonthName: string, startDate?: string, endDate?: string) => {
     // 1. Close current cycle
     setBillingCycles((prev) =>
       prev.map((c) =>
@@ -2703,7 +2724,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const newCycle: MonthlyBillingCycle = {
       id: `cycle-${Date.now()}`,
       name: newMonthName,
-      startDate: new Date().toISOString(),
+      startDate: startDate || new Date().toISOString().slice(0, 10),
+      endDate: endDate || undefined,
       isActive: true,
       totalCollected: 0,
       totalPendingOnCoaches: 0,
@@ -2712,6 +2734,10 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     // 3. Set current active month
     setCurrentMonth(newMonthName);
+
+    if (isSupabaseConfigured) {
+      supabaseService.upsertBillingCycle(newCycle).catch(() => {});
+    }
   };
 
   const getNextMonthName = (current: string): string => {
@@ -3177,6 +3203,74 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     exportYearlyArchiveToJSON(archive);
   };
 
+  // PERIOD ARCHIVE & CLOUD STORAGE PURGING
+  const archivePeriodAndPurge = async (
+    periodName: string,
+    selectedMonths: string[],
+    adminUsername: string
+  ): Promise<{ success: boolean; periodArchive: PeriodArchive }> => {
+    if (!selectedMonths || selectedMonths.length === 0) {
+      throw new Error('يرجى تحديد شهر واحد على الأقل للأرشفة والتفريغ');
+    }
+
+    // 1. Gather all data belonging to the selected months
+    const targetEntries = masterReportEntries.filter((e) => selectedMonths.includes(e.month));
+    const targetExpenses = expenses.filter((exp) =>
+      selectedMonths.some((m) => exp.notes?.includes(m) || exp.title?.includes(m))
+    );
+    const targetInflows = cashInflows.filter((inf) =>
+      selectedMonths.some((m) => inf.title?.includes(m))
+    );
+    const targetTrainerTx = trainerTransactions.filter((t) => t.month && selectedMonths.includes(t.month));
+
+    const totalRev = targetEntries.reduce((s, e) => s + e.amount, 0);
+    const totalExp = targetExpenses.reduce((s, e) => s + e.amount, 0);
+    const netProf = totalRev - totalExp;
+
+    const payload = {
+      periodName,
+      selectedMonths,
+      archivedAt: new Date().toISOString(),
+      archivedBy: adminUsername,
+      masterEntries: targetEntries,
+      expenses: targetExpenses,
+      cashInflows: targetInflows,
+      trainerTransactions: targetTrainerTx,
+    };
+
+    // 2. Download full Excel (.xlsx) and JSON archives to local machine
+    await exportPeriodArchiveToXLSX(payload);
+    exportPeriodArchiveToJSON(payload);
+
+    // 3. Purge from local state & cache
+    setMasterReportEntries((prev) => prev.filter((e) => !selectedMonths.includes(e.month)));
+    setTrainerTransactions((prev) => prev.filter((t) => !t.month || !selectedMonths.includes(t.month)));
+    setMonthlyArchives((prev) => prev.filter((m) => !selectedMonths.includes(m.month)));
+    setBillingCycles((prev) => prev.filter((c) => c.isActive || !selectedMonths.includes(c.name)));
+
+    // 4. Purge from Supabase cloud database if configured
+    if (isSupabaseConfigured) {
+      await supabaseService.purgeDataForMonths(selectedMonths);
+    }
+
+    // 5. Record period archive metadata
+    const periodArchiveRecord: PeriodArchive = {
+      id: `period-${Date.now()}`,
+      periodName,
+      selectedMonths,
+      archivedAt: new Date().toISOString(),
+      archivedBy: adminUsername,
+      totalRevenue: totalRev,
+      totalExpenses: totalExp,
+      netProfit: netProf,
+      recordsCount: targetEntries.length + targetExpenses.length + targetTrainerTx.length,
+    };
+
+    setPeriodArchives((prev) => [periodArchiveRecord, ...prev]);
+
+    return { success: true, periodArchive: periodArchiveRecord };
+  };
+
   // Check for any currently running sessions or physiotherapy
   const getRunningOperations = () => {
     const runningSessions = sessions.filter((s) => s.status === 'in-progress');
@@ -3199,6 +3293,17 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         ...running.runningPhysio.map((p) => `جلسة تأهيل: ${p.patientName} (${p.roomName})`),
       ].join('، ');
       throw new Error(`لا يمكن تقفيل اليومية! يوجد حالياً حصص تدريبية أو جلسات علاج طبيعي جارية: ${runningNames}`);
+    }
+
+    // Month expiration check:
+    const activeCycle = billingCycles.find((c) => c.isActive);
+    if (activeCycle?.endDate) {
+      const shiftDay = closingData.closingDayDate || closingData.date;
+      if (shiftDay > activeCycle.endDate) {
+        throw new Error(
+          `يرجى بدء شهر جديد أولاً! لقد انتهت الفترة المحددة للشهر الحالي (${activeCycle.name} الممتدة حتى ${activeCycle.endDate}). يجب تقفيل وبدء شهر جديد أولاً قبل إقفال اليومية.`
+        );
+      }
     }
 
     const todayCoachEarnings =
@@ -3319,7 +3424,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       todayInflows,
       todayTransactions,
       todayTrainerTransactions,
-      todayCheckInLogs
+      todayCheckInLogs,
+      coaches
     );
   };
 
@@ -3397,6 +3503,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         closeMonthlyBillingCycle,
         exportMasterReportToCSV,
         exportMasterReportXLSX,
+        periodArchives,
+        archivePeriodAndPurge,
         yearlyArchives,
         archiveYear,
         getYearlyArchive,

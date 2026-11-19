@@ -263,7 +263,11 @@ export const printDailyShiftReportPDF = (
       <div>
         <h1 class="header-title">SYNAPSE GYM - تقرير إقفال الوردية واليومية الشامل</h1>
         <p class="header-subtitle">
-          تاريخ الوردية: <strong>${closing.date}</strong> | وقت الإقفال: <strong>${new Date(closing.closedAt).toLocaleTimeString('ar-EG')}</strong> | المقفل بواسطة: <strong>${closing.closedBy}</strong>
+          ${
+            closing.closingDayDate && closing.nextDayDate
+              ? `وردية يوم: <strong>${closing.closingDayDate}</strong> حتى صباح: <strong>${closing.nextDayDate}</strong>`
+              : `تاريخ الوردية: <strong>${closing.date}</strong>`
+          } | وقت الإقفال: <strong>${new Date(closing.closedAt).toLocaleTimeString('ar-EG')}</strong> | المقفل بواسطة: <strong>${closing.closedBy}</strong>
         </p>
       </div>
       <div class="badge">تقرير معتمد للوردية</div>
@@ -391,7 +395,7 @@ export const printDailyShiftReportPDF = (
                   return `
                 <tr>
                   <td class="text-center">${t.created_at ? new Date(t.created_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
-                  <td><strong>${t.payer_name || 'الكابتن'}</strong></td>
+                  <td><strong>${t.payer_name || t.coach_name || 'الكابتن'}</strong></td>
                   <td class="text-center ${isRepay ? 'text-teal' : 'text-amber'}">${isRepay ? 'سداد مديونية (+ للدرج)' : 'تحميل مديونية على الكابتن'}</td>
                   <td class="text-center"><strong>${formatEGP(t.amount)}</strong></td>
                   <td class="text-center">${getPaymentMethodLabel(t.payment_method)}</td>
@@ -401,6 +405,50 @@ export const printDailyShiftReportPDF = (
                 })
                 .join('')
             : '<tr><td colspan="6" class="text-center">لا توجد حركات مالية للكباتن في وردية اليوم.</td></tr>'
+        }
+      </tbody>
+    </table>
+
+    <!-- 3.5 تفصيل حضور اللاعبين مع كل مدرب وحساباتهم لليوم -->
+    <div class="section-title">👥 كشف اللاعبين الذين تدربوا اليوم مع الكباتن والأنشطة وحساباتهم</div>
+    <table>
+      <thead>
+        <tr>
+          <th>اسم اللاعب</th>
+          <th class="text-center">الكود</th>
+          <th>المدرب المسؤول</th>
+          <th>نوع النشاط</th>
+          <th class="text-center">المبلغ</th>
+          <th class="text-center">مسار التحصيل</th>
+          <th class="text-center">حصة الكابتن</th>
+          <th class="text-center">مديونية الكابتن</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${
+          entries.length > 0
+            ? entries
+                .map((e) => {
+                  const isDebt = e.paymentMethod === 'coach_collected';
+                  const matchTrx = trainerTransactions.find((t) => t.payer_name === e.playerName || (t.coach_id === e.coachId && t.amount === e.amount));
+                  const coachShare = isDebt ? 0 : (matchTrx?.coach_share ?? 0);
+                  const coachDebt = isDebt ? e.amount : 0;
+                  const pathway = isDebt ? 'محمل مديونية على الكابتن' : coachShare > 0 ? 'دفع للجيم مع نسبة للكابتن' : 'دفع مباشر للجيم بدون مدرب';
+                  return `
+                <tr>
+                  <td><strong>${e.playerName}</strong></td>
+                  <td class="text-center">${e.playerCode || '—'}</td>
+                  <td>${e.coachName || 'بدون مدرب'}</td>
+                  <td>${e.sessionTitle || getCategoryLabel(e.sessionCategory)}</td>
+                  <td class="text-center text-teal"><strong>${formatEGP(e.amount)}</strong></td>
+                  <td class="text-center">${pathway}</td>
+                  <td class="text-center text-emerald">${coachShare > 0 ? formatEGP(coachShare) : '—'}</td>
+                  <td class="text-center ${coachDebt > 0 ? 'text-rose' : ''}">${coachDebt > 0 ? formatEGP(coachDebt) : '—'}</td>
+                </tr>
+              `;
+                })
+                .join('')
+            : '<tr><td colspan="8" class="text-center">لا توجد سجلات لاعبين في وردية اليوم.</td></tr>'
         }
       </tbody>
     </table>
