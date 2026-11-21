@@ -800,8 +800,8 @@ export const PlayerCheckInPage: React.FC = () => {
 
       {/* Staff Authentication Modal */}
       {isStaffModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-800 rounded-3xl p-6 sm:p-8 max-w-sm w-full space-y-5 shadow-2xl relative animate-scale-up" dir="rtl">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#0f172a] border border-slate-800 rounded-3xl p-5 sm:p-7 max-w-sm w-full max-h-[90vh] overflow-y-auto space-y-4 shadow-2xl relative animate-scale-up" dir="rtl">
             <button
               onClick={() => {
                 setIsStaffModalOpen(false);

@@ -496,6 +496,26 @@ export const supabaseService = {
     }
   },
 
+  async deleteCheckInLog(id: string): Promise<boolean> {
+    if (!isSupabaseConfigured || !supabase) return false;
+    try {
+      const { error } = await supabase.from('check_in_logs').delete().eq('id', id);
+      return !error;
+    } catch {
+      return false;
+    }
+  },
+
+  async clearAllCheckInLogs(): Promise<boolean> {
+    if (!isSupabaseConfigured || !supabase) return false;
+    try {
+      const { error } = await supabase.from('check_in_logs').delete().neq('id', '');
+      return !error;
+    } catch {
+      return false;
+    }
+  },
+
   async clearCheckInLogsForDate(datePrefix: string): Promise<boolean> {
     if (!isSupabaseConfigured || !supabase) return false;
     try {

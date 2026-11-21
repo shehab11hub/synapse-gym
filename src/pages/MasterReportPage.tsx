@@ -1748,16 +1748,17 @@ export const MasterReportPage: React.FC = () => {
 
       {/* 2. Daily Shift Reconciliation Modal */}
       {isShiftClosingModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in overflow-y-auto">
-          <div className="bg-[#0f172a] border border-slate-700 rounded-3xl max-w-2xl w-full p-6 md:p-8 shadow-2xl my-8">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 animate-in fade-in">
+          <div className="bg-[#0f172a] border border-slate-700 rounded-3xl max-w-2xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-scale-up" dir="rtl">
+            {/* Modal Header */}
+            <div className="flex-shrink-0 flex items-center justify-between p-4 sm:p-6 pb-3 border-b border-slate-800">
               <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                  <Banknote className="w-6 h-6" />
+                <div className="p-2 sm:p-2.5 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                  <Banknote className="w-5 h-5 sm:w-6 sm:h-6" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-black text-white">تقفيل اليومية ومطابقة النقدية بالدرج</h3>
-                  <div className="flex items-center gap-2 mt-1 text-xs text-slate-400">
+                  <h3 className="text-base sm:text-lg font-black text-white">تقفيل اليومية ومطابقة النقدية بالدرج</h3>
+                  <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-400">
                     <span className="flex items-center gap-1 font-mono text-amber-300">
                       <Clock className="w-3.5 h-3.5" />
                       {todayIso}
@@ -1768,241 +1769,249 @@ export const MasterReportPage: React.FC = () => {
                 </div>
               </div>
               <button
+                type="button"
                 onClick={() => setIsShiftClosingModalOpen(false)}
-                className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
+                className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {todayShiftStatus.isClosedToday && (
-              <div className="mt-4 p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2.5">
-                <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
-                <span>
-                  تنبيه: تم تسجيل تقفيل لليومية مسبقاً في تمام الساعة{' '}
-                  <strong className="font-mono">{new Date(todayShiftStatus.lastClosing!.closedAt).toLocaleTimeString('ar-EG')}</strong>{' '}
-                  بواسطة ({todayShiftStatus.lastClosing?.closedBy}). إعادة التقفيل ستحدث المحضر الحالي.
-                </span>
-              </div>
-            )}
+            {/* Scrollable Modal Body */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+              {todayShiftStatus.isClosedToday && (
+                <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2.5">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
+                  <span>
+                    تنبيه: تم تسجيل تقفيل لليومية مسبقاً في تمام الساعة{' '}
+                    <strong className="font-mono">{new Date(todayShiftStatus.lastClosing!.closedAt).toLocaleTimeString('ar-EG')}</strong>{' '}
+                    بواسطة ({todayShiftStatus.lastClosing?.closedBy}). إعادة التقفيل ستحدث المحضر الحالي.
+                  </span>
+                </div>
+              )}
 
-            {/* Financial Reconciliation KPI Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-5">
-              <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800">
-                <p className="text-[11px] font-bold text-slate-400">كاش اشتراكات الاستقبال</p>
-                <p className="text-base font-black text-emerald-400 font-mono mt-1">
-                  +{formatEGP(todayDirectCash)}
-                </p>
-                <span className="text-[10px] text-slate-500">{todayDirectEntries.length} حركة اشتراك مباشر</span>
+              {/* Financial Reconciliation KPI Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 sm:gap-3">
+                <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800">
+                  <p className="text-[11px] font-bold text-slate-400">كاش اشتراكات الاستقبال</p>
+                  <p className="text-sm sm:text-base font-black text-emerald-400 font-mono mt-1">
+                    +{formatEGP(todayDirectCash)}
+                  </p>
+                  <span className="text-[10px] text-slate-500">{todayDirectEntries.length} حركة اشتراك مباشر</span>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800">
+                  <p className="text-[11px] font-bold text-slate-400">سدادات الكباتن للدرج</p>
+                  <p className="text-sm sm:text-base font-black text-cyan-400 font-mono mt-1">
+                    +{formatEGP(todayRepaymentsAmount)}
+                  </p>
+                  <span className="text-[10px] text-slate-500">{todayRepayments.length} إيداع سداد مديونية</span>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800">
+                  <p className="text-[11px] font-bold text-slate-400">مصاريف مسحوبة من الدرج</p>
+                  <p className="text-sm sm:text-base font-black text-rose-400 font-mono mt-1">
+                    -{formatEGP(todayExpensesAmount)}
+                  </p>
+                  <span className="text-[10px] text-slate-500">{todayExpenses.length} بنود مصاريف نقدية</span>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-slate-900/60 border border-slate-800/80">
+                  <p className="text-[11px] font-bold text-slate-400">تحميلات مديونيات الكباتن</p>
+                  <p className="text-sm sm:text-base font-black text-amber-400 font-mono mt-1">
+                    {formatEGP(todayCoachDebtsAmount)}
+                  </p>
+                  <span className="text-[10px] text-slate-500">لا تدخل الدرج ككاش (تثبت كمديونية)</span>
+                </div>
+
+                <div className="col-span-2 p-3.5 rounded-2xl bg-gradient-to-r from-teal-950/40 to-emerald-950/30 border-2 border-teal-500/40 flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-black text-teal-300">الصافي النقدي المتوقع بالدرج (Expected Cash)</p>
+                    <p className="text-[10px] sm:text-[11px] text-slate-400 mt-0.5">
+                      (كاش الاشتراكات + سدادات الكباتن) - مصاريف الدرج
+                    </p>
+                  </div>
+                  <div className="text-left">
+                    <p className="text-lg sm:text-xl font-black text-teal-400 font-mono">
+                      {formatEGP(todayExpectedNetCash)}
+                    </p>
+                  </div>
+                </div>
               </div>
 
-              <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800">
-                <p className="text-[11px] font-bold text-slate-400">سدادات الكباتن للدرج</p>
-                <p className="text-base font-black text-cyan-400 font-mono mt-1">
-                  +{formatEGP(todayRepaymentsAmount)}
-                </p>
-                <span className="text-[10px] text-slate-500">{todayRepayments.length} إيداع سداد مديونية</span>
-              </div>
+              <form id="shift-closing-form" onSubmit={handleConfirmShiftClose} className="space-y-4">
+                {/* Dual Dates: Closing Day and Next Day */}
+                <div className="p-3.5 rounded-2xl bg-slate-900 border border-amber-500/30 space-y-2.5">
+                  <div className="flex items-center gap-2 text-amber-300 text-xs font-black">
+                    <Calendar className="w-4 h-4" />
+                    <span>تحديد تاريخ اليوم المُقفل وتاريخ اليوم التالي (لدقة التقفيل بعد منتصف الليل):</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                        تاريخ اليوم المُقفل (Shift Day):
+                      </label>
+                      <input
+                        type="date"
+                        required
+                        value={shiftClosingDayDate}
+                        onChange={(e) => setShiftClosingDayDate(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-amber-300 font-mono font-bold focus:outline-none focus:border-amber-400 cursor-pointer"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                        تاريخ اليوم التالي (Next Day):
+                      </label>
+                      <input
+                        type="date"
+                        required
+                        value={shiftNextDayDate}
+                        onChange={(e) => setShiftNextDayDate(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-amber-300 font-mono font-bold focus:outline-none focus:border-amber-400 cursor-pointer"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-relaxed">
+                    💡 نظراً لأن إغلاق الوردية غالباً ما يتم بعد الساعة 12:00 ليلاً، يتم إثبات تاريخ الوردية الأساسي وتاريخ اليوم التالي بدقة لتوثيق وتسمية ملفات الـ PDF والإكسيل.
+                  </p>
+                </div>
 
-              <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800">
-                <p className="text-[11px] font-bold text-slate-400">مصاريف مسحوبة من الدرج</p>
-                <p className="text-base font-black text-rose-400 font-mono mt-1">
-                  -{formatEGP(todayExpensesAmount)}
-                </p>
-                <span className="text-[10px] text-slate-500">{todayExpenses.length} بنود مصاريف نقدية</span>
-              </div>
+                {/* Actual counted cash field */}
+                <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 space-y-2.5">
+                  <label className="block text-xs font-bold text-slate-200">
+                    النقدية الفعلية المحصورة داخل الدرج الآن (العد الفعلي اليدوي):
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      step="0.5"
+                      required
+                      value={actualCountedCashInput}
+                      onChange={(e) => setActualCountedCashInput(e.target.value)}
+                      placeholder="أدخل إجمالي النقدية المعدودة بالدرج"
+                      className="w-full bg-slate-950 border-2 border-slate-700 rounded-xl px-4 py-2.5 text-base text-teal-300 font-mono font-black focus:outline-none focus:border-teal-500 transition"
+                    />
+                    <span className="absolute left-4 top-2.5 text-xs text-slate-500 font-bold">ج.م نقداً</span>
+                  </div>
 
-              <div className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/80">
-                <p className="text-[11px] font-bold text-slate-400">تحميلات مديونيات الكباتن</p>
-                <p className="text-base font-black text-amber-400 font-mono mt-1">
-                  {formatEGP(todayCoachDebtsAmount)}
-                </p>
-                <span className="text-[10px] text-slate-500">لا تدخل الدرج ككاش (تثبت كمديونية)</span>
-              </div>
+                  {/* Discrepancy indicator */}
+                  {(() => {
+                    const actualNum = parseFloat(actualCountedCashInput) || 0;
+                    const diff = actualNum - todayExpectedNetCash;
+                    if (actualCountedCashInput === '') return null;
+                    if (diff === 0) {
+                      return (
+                        <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-400 font-bold text-xs flex items-center justify-between">
+                          <span>حالة المطابقة:</span>
+                          <span className="flex items-center gap-1.5">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                            مطابق تماماً (لا يوجد أي عجز أو زيادة)
+                          </span>
+                        </div>
+                      );
+                    }
+                    if (diff > 0) {
+                      return (
+                        <div className="p-2.5 bg-cyan-500/10 border border-cyan-500/30 rounded-xl text-cyan-400 font-bold text-xs flex items-center justify-between">
+                          <span>فائض نقدي بالدرج (زيادة):</span>
+                          <span className="font-mono font-black text-sm">+{formatEGP(diff)}</span>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="p-2.5 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-400 font-bold text-xs flex items-center justify-between">
+                        <span>عجز نقدي بالدرج (نقص):</span>
+                        <span className="font-mono font-black text-sm">-{formatEGP(Math.abs(diff))}</span>
+                      </div>
+                    );
+                  })()}
+                </div>
 
-              <div className="col-span-2 p-4 rounded-2xl bg-gradient-to-r from-teal-950/40 to-emerald-950/30 border-2 border-teal-500/40 flex items-center justify-between">
+                {/* Notes */}
                 <div>
-                  <p className="text-xs font-black text-teal-300">الصافي النقدي المتوقع بالدرج (Expected Cash)</p>
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    (كاش الاشتراكات + سدادات الكباتن) - مصاريف الدرج
+                  <label className="block text-xs font-bold text-slate-300 mb-1">
+                    ملاحظات تقفيل الوردية (اختياري)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={shiftNotes}
+                    onChange={(e) => setShiftNotes(e.target.value)}
+                    placeholder="أي ملاحظات حول العجز/الفائض أو تسليم الوردية التالية..."
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-teal-500 transition"
+                  />
+                </div>
+
+                <div className="p-3 rounded-2xl bg-teal-500/10 border border-teal-500/20 text-[11px] text-teal-300 flex items-start gap-2.5">
+                  <Sparkles className="w-4 h-4 shrink-0 text-teal-400 mt-0.5" />
+                  <p className="leading-relaxed">
+                    <strong>إجراءات التقفيل التلقائية:</strong> فور تأكيد التقفيل، سيتم فوراً تجهيز تقرير الـ PDF المعتمد، وتنزيل شيت الإكسيل الشامل (.xlsx)، مع تصفير طابور وحضور الاستقبال لبدء اليوم التالي نظيفاً.
                   </p>
                 </div>
-                <div className="text-left">
-                  <p className="text-xl font-black text-teal-400 font-mono">
-                    {formatEGP(todayExpectedNetCash)}
-                  </p>
-                </div>
-              </div>
+              </form>
             </div>
 
-            <form onSubmit={handleConfirmShiftClose} className="space-y-4 mt-6">
-              {/* Dual Dates: Closing Day and Next Day */}
-              <div className="p-4 rounded-2xl bg-slate-900 border border-amber-500/30 space-y-3">
-                <div className="flex items-center gap-2 text-amber-300 text-xs font-black">
-                  <Calendar className="w-4 h-4" />
-                  <span>تحديد تاريخ اليوم المُقفل وتاريخ اليوم التالي (لدقة التقفيل بعد منتصف الليل):</span>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-300 mb-1">
-                      تاريخ اليوم المُقفل (Shift Day):
-                    </label>
-                    <input
-                      type="date"
-                      required
-                      value={shiftClosingDayDate}
-                      onChange={(e) => setShiftClosingDayDate(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-amber-300 font-mono font-bold focus:outline-none focus:border-amber-400 cursor-pointer"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-300 mb-1">
-                      تاريخ اليوم التالي (Next Day):
-                    </label>
-                    <input
-                      type="date"
-                      required
-                      value={shiftNextDayDate}
-                      onChange={(e) => setShiftNextDayDate(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-amber-300 font-mono font-bold focus:outline-none focus:border-amber-400 cursor-pointer"
-                    />
-                  </div>
-                </div>
-                <p className="text-[10px] text-slate-400 leading-relaxed">
-                  💡 نظراً لأن إغلاق الوردية غالباً ما يتم بعد الساعة 12:00 ليلاً، يتم إثبات تاريخ الوردية الأساسي وتاريخ اليوم التالي لتوثيق وتسمية ملفات الـ PDF والإكسيل بدقة محاسبية تامة.
-                </p>
-              </div>
+            {/* Pinned Action Buttons Footer */}
+            <div className="flex-shrink-0 p-3 sm:p-5 pt-3 border-t border-slate-800 bg-[#0b101d] flex flex-col sm:flex-row items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={handleExportDailyShiftFile}
+                disabled={isExportingShift}
+                className="w-full sm:w-auto py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-teal-400 border border-teal-500/30 font-bold text-xs cursor-pointer flex items-center justify-center gap-2 transition disabled:opacity-60"
+              >
+                <Download className="w-4 h-4" />
+                <span>{isExportingShift ? 'جارِ التحميل...' : 'تحميل شيت إكسيل (.xlsx)'}</span>
+              </button>
 
-              {/* Actual counted cash field */}
-              <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
-                <label className="block text-xs font-bold text-slate-200">
-                  النقدية الفعلية المحصورة داخل الدرج الآن (العد الفعلي اليدوي):
-                </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    step="0.5"
-                    required
-                    value={actualCountedCashInput}
-                    onChange={(e) => setActualCountedCashInput(e.target.value)}
-                    placeholder="أدخل إجمالي النقدية المعدودة بالدرج"
-                    className="w-full bg-slate-950 border-2 border-slate-700 rounded-xl px-4 py-3 text-base text-teal-300 font-mono font-black focus:outline-none focus:border-teal-500 transition"
-                  />
-                  <span className="absolute left-4 top-3 text-xs text-slate-500 font-bold">ج.م نقداً</span>
-                </div>
-
-                {/* Discrepancy indicator */}
-                {(() => {
-                  const actualNum = parseFloat(actualCountedCashInput) || 0;
-                  const diff = actualNum - todayExpectedNetCash;
-                  if (actualCountedCashInput === '') return null;
-                  if (diff === 0) {
-                    return (
-                      <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-400 font-bold text-xs flex items-center justify-between">
-                        <span>حالة المطابقة:</span>
-                        <span className="flex items-center gap-1.5">
-                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                          مطابق تماماً (لا يوجد أي عجز أو زيادة)
-                        </span>
-                      </div>
-                    );
-                  }
-                  if (diff > 0) {
-                    return (
-                      <div className="p-3 bg-cyan-500/10 border border-cyan-500/30 rounded-xl text-cyan-400 font-bold text-xs flex items-center justify-between">
-                        <span>فائض نقدي بالدرج (زيادة):</span>
-                        <span className="font-mono font-black text-sm">+{formatEGP(diff)}</span>
-                      </div>
-                    );
-                  }
-                  return (
-                    <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-400 font-bold text-xs flex items-center justify-between">
-                      <span>عجز نقدي بالدرج (نقص):</span>
-                      <span className="font-mono font-black text-sm">-{formatEGP(Math.abs(diff))}</span>
-                    </div>
-                  );
-                })()}
-              </div>
-
-              {/* Notes */}
-              <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">
-                  ملاحظات تقفيل الوردية (اختياري)
-                </label>
-                <textarea
-                  rows={2}
-                  value={shiftNotes}
-                  onChange={(e) => setShiftNotes(e.target.value)}
-                  placeholder="أي ملاحظات حول العجز/الفائض أو استلام النقدية أو تسليم الوردية التالية..."
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-teal-500 transition"
-                />
-              </div>
-
-              <div className="p-3.5 rounded-2xl bg-teal-500/10 border border-teal-500/20 text-xs text-teal-300 flex items-start gap-2.5">
-                <Sparkles className="w-4 h-4 shrink-0 text-teal-400 mt-0.5" />
-                <p className="leading-relaxed">
-                  <strong>إجراءات التقفيل التلقائية:</strong> فور تأكيد التقفيل، سيتم فوراً تجهيز تقرير الـ PDF المعتمد، وتنزيل شيت الإكسيل الشامل (.xlsx) متضمناً كشف حضور اللاعبين وحسابات المدربين، مع تصفير حضور الاستقبال ومطابقة الدرج لبدء اليوم التالي نظيفاً.
-                </p>
-              </div>
-
-              <div className="flex flex-col sm:flex-row items-center gap-3 pt-3">
+              <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
                 <button
                   type="button"
-                  onClick={handleExportDailyShiftFile}
-                  disabled={isExportingShift}
-                  className="w-full sm:w-auto py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-teal-400 border border-teal-500/30 font-bold text-xs cursor-pointer flex items-center justify-center gap-2 transition disabled:opacity-60"
+                  onClick={() => setIsShiftClosingModalOpen(false)}
+                  className="py-2.5 px-4 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs cursor-pointer hover:bg-slate-700 transition"
                 >
-                  <Download className="w-4 h-4" />
-                  <span>{isExportingShift ? 'جارِ التحميل...' : 'تحميل شيت إكسيل للوردية (.xlsx)'}</span>
+                  إلغاء
                 </button>
-
-                <div className="flex items-center gap-3 w-full sm:flex-1">
-                  <button
-                    type="submit"
-                    className="flex-1 py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-amber-500/20 transition flex items-center justify-center gap-2"
-                  >
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>تأكيد إغلاق الوردية وإصدار التقارير (PDF + إكسيل)</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setIsShiftClosingModalOpen(false)}
-                    className="py-3 px-4 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs cursor-pointer hover:bg-slate-700 transition"
-                  >
-                    إلغاء
-                  </button>
-                </div>
+                <button
+                  type="submit"
+                  form="shift-closing-form"
+                  className="flex-1 sm:flex-none py-2.5 px-5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-amber-500/20 transition flex items-center justify-center gap-2"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>تأكيد إغلاق الوردية وإصدار التقارير</span>
+                </button>
               </div>
-            </form>
+            </div>
           </div>
         </div>
       )}
 
       {/* 3. Period Archive & Cloud Purge Modal (Manager-Only) */}
       {currentUser?.role === 'admin' && isPeriodArchiveModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in overflow-y-auto">
-          <div className="bg-[#0f172a] border border-indigo-500/40 rounded-3xl max-w-2xl w-full p-6 md:p-8 shadow-2xl relative my-8">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 animate-in fade-in">
+          <div className="bg-[#0f172a] border border-indigo-500/40 rounded-3xl max-w-2xl w-full max-h-[92vh] flex flex-col shadow-2xl relative overflow-hidden animate-scale-up" dir="rtl">
+            <div className="flex-shrink-0 flex items-center justify-between p-4 sm:p-6 pb-3 border-b border-slate-800">
               <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-2xl bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
-                  <Archive className="w-6 h-6" />
+                <div className="p-2 sm:p-2.5 rounded-2xl bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+                  <Archive className="w-5 h-5 sm:w-6 sm:h-6" />
                 </div>
                 <div>
-                  <h3 className="text-base font-black text-white">أرشفة وتفريغ فترات سابقة (تنظيف المساحة السحابية)</h3>
+                  <h3 className="text-base sm:text-lg font-black text-white">أرشفة وتفريغ فترات سابقة (تنظيف المساحة السحابية)</h3>
                   <p className="text-xs text-slate-400 mt-0.5">
                     تنزيل حزمة البيانات على جهازك وتفريغ قاعدة البيانات السحابية (Supabase) لتوفير المساحة
                   </p>
                 </div>
               </div>
               <button
+                type="button"
                 onClick={() => setIsPeriodArchiveModalOpen(false)}
-                className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
+                className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleConfirmPeriodArchive} className="space-y-4 mt-5">
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+            <form onSubmit={handleConfirmPeriodArchive} className="space-y-4">
               <div>
                 <label className="block text-xs font-bold text-slate-300 mb-1.5">
                   عنوان أو اسم الأرشيف المحفوظ:
@@ -2138,6 +2147,7 @@ export const MasterReportPage: React.FC = () => {
                 </button>
               </div>
             </form>
+            </div>
           </div>
         </div>
       )}

@@ -46,6 +46,7 @@ interface GymDataContextType {
     fallbackMember?: Partial<Member>
   ) => { success: boolean; member?: Member; message?: string };
   cancelCheckIn: (checkInLogId: string) => { success: boolean };
+  clearAllCheckInLogs: () => void;
   renewMemberSubscription: (
     memberId: string,
     planName: string,
@@ -3004,10 +3005,19 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       )
     );
 
-    // 7. Remove the checkInLog itself
-    setCheckInLogs((prev) => prev.filter((l) => l.id !== checkInLogId));
+    // 7. Remove the checkInLog itself from state & localStorage immediately
+    setCheckInLogs((prev) => {
+      const remaining = prev.filter((l) => l.id !== checkInLogId);
+      localStorage.setItem('synapse_checkin_logs', JSON.stringify(remaining));
+      return remaining;
+    });
 
-    // 8. Delete from serverless relay /api/checkin if available
+    // 8. Delete from Supabase if configured so refresh will NOT restore it
+    if (isSupabaseConfigured) {
+      supabaseService.deleteCheckInLog(checkInLogId).catch(() => {});
+    }
+
+    // 9. Delete from serverless relay /api/checkin if available
     try {
       fetch(`/api/checkin?id=${checkInLogId}`, { method: 'DELETE' }).catch(() => {});
     } catch {
@@ -3015,6 +3025,14 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
 
     return { success: true };
+  };
+
+  const clearAllCheckInLogs = () => {
+    setCheckInLogs([]);
+    localStorage.setItem('synapse_checkin_logs', JSON.stringify([]));
+    if (isSupabaseConfigured) {
+      supabaseService.clearAllCheckInLogs().catch(() => {});
+    }
   };
 
   const wipeAllDataToCleanSlate = () => {
@@ -3440,8 +3458,9 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     }
 
-    // 1. تصفير ومسح حضور وتسجيلات الاستقبال اليومية لتبدأ اليومية الجديدة نظيفة
-    setCheckInLogs((prev) => prev.filter((l) => !l.timestamp.startsWith(newClosing.date)));
+    // 1. تصفير ومسح طابور وحضور وتسجيلات الاستقبال بالكامل لتبدأ اليومية الجديدة نظيفة
+    setCheckInLogs([]);
+    localStorage.setItem('synapse_checkin_logs', JSON.stringify([]));
 
     // 2. إعادة ضبط كافة الحصص لوضع الاستعداد (idle) وإفراغ التسكين المؤقت لليوم
     setSessions((prev) =>
@@ -3457,6 +3476,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     if (isSupabaseConfigured) {
       supabaseService.insertDailyShiftClosing(newClosing).catch(() => {});
+      supabaseService.clearAllCheckInLogs().catch(() => {});
       supabaseService.clearCheckInLogsForDate(newClosing.date).catch(() => {});
     }
 
@@ -3526,6 +3546,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       value={{
         members,
         cancelCheckIn,
+        clearAllCheckInLogs,
         renewMemberSubscription,
         wipeAllDataToCleanSlate,
         addMember,

@@ -722,8 +722,8 @@ export const ExpensesPage: React.FC = () => {
 
       {/* Add Expense Modal (كهربا، ميا، صيانة، إيجار، أدوات...) */}
       {isAddExpenseModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-rose-500/30 rounded-3xl max-w-md w-full p-6 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#0f172a] border border-rose-500/30 rounded-3xl max-w-md w-full max-h-[90vh] overflow-y-auto p-5 sm:p-6 shadow-2xl animate-scale-up">
             <h3 className="text-lg font-black text-white mb-4 flex items-center gap-2">
               <Plus className="w-5 h-5 text-rose-400" />
               <span>تسجيل مصروف جديد في الدرج</span>
@@ -827,8 +827,8 @@ export const ExpensesPage: React.FC = () => {
 
       {/* Cash Deposit Modal (إيداع نقدية بالخزينة) */}
       {isCashDepositModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-emerald-500/30 rounded-3xl max-w-md w-full p-6 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#0f172a] border border-emerald-500/30 rounded-3xl max-w-md w-full max-h-[90vh] overflow-y-auto p-5 sm:p-6 shadow-2xl animate-scale-up">
             <h3 className="text-lg font-black text-white mb-4 flex items-center gap-2">
               <ArrowDownCircle className="w-5 h-5 text-emerald-400" />
               <span>إيداع نقدية جديدة بالخزينة / الدرج</span>
@@ -1346,8 +1346,8 @@ export const ExpensesPage: React.FC = () => {
 
       {/* Manual Drawer Movement Modal (إيداع / سحب عهدة يدوية بالدرج) */}
       {isManualMovementModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-cyan-500/40 rounded-3xl max-w-md w-full p-6 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#0f172a] border border-cyan-500/40 rounded-3xl max-w-md w-full max-h-[90vh] overflow-y-auto p-5 sm:p-6 shadow-2xl animate-scale-up">
             <h3 className="text-lg font-black text-white mb-2 flex items-center gap-2">
               <WalletCards className="w-5 h-5 text-cyan-400" />
               <span>تسوية عهدة (سحب أو إيداع نقدي بالدرج)</span>

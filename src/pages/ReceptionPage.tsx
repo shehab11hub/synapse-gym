@@ -46,6 +46,7 @@ export const ReceptionPage: React.FC = () => {
     findMemberByCode,
     performCheckIn,
     cancelCheckIn,
+    clearAllCheckInLogs,
     toggleMemberAsDoctor,
     addMember,
     checkInLogs,
@@ -554,6 +555,21 @@ export const ReceptionPage: React.FC = () => {
               اضغط على أي لاعب وافد لتسكينه فورياً: مساج واستشفاء، كلاس جماعي، تدريب خاص (برايفت)، أو صالة الجيم العامة مع اختيار الكابتن
             </p>
           </div>
+
+          {checkInLogs.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm('هل أنت متأكد من تفريغ طابور الحضور لليوم بالكامل ومسح جميع الوافدين؟\nسيتم مسح الطابور نظيفاً لبدء استقبال جديد.')) {
+                  clearAllCheckInLogs();
+                }
+              }}
+              className="py-2 px-3.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 font-bold text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+              <span>تفريغ الطابور بالكامل</span>
+            </button>
+          )}
         </div>
 
         {checkInLogs.length > 0 ? (

@@ -33,8 +33,8 @@ export const DeskQRCodeModal: React.FC<DeskQRCodeModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-      <div className="bg-[#0f172a] border border-slate-700/80 rounded-3xl max-w-md w-full p-6 text-center shadow-2xl relative">
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+      <div className="bg-[#0f172a] border border-slate-700/80 rounded-3xl max-w-md w-full p-5 sm:p-6 text-center shadow-2xl relative max-h-[90vh] overflow-y-auto">
         <button
           onClick={onClose}
           className="absolute top-4 left-4 p-2 text-slate-400 hover:text-white rounded-xl bg-slate-800/80 transition"

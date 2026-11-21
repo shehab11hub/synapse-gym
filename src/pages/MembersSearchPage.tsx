@@ -647,8 +647,8 @@ export const MembersSearchPage: React.FC = () => {
 
       {/* MODAL 1: RENEW SUBSCRIPTION */}
       {renewalMember && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-800 rounded-3xl p-6 sm:p-8 max-w-lg w-full space-y-5 shadow-2xl relative animate-scale-up" dir="rtl">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#0f172a] border border-slate-800 rounded-3xl p-5 sm:p-7 max-w-lg w-full max-h-[90vh] overflow-y-auto space-y-4 shadow-2xl relative animate-scale-up" dir="rtl">
             <button
               onClick={() => setRenewalMember(null)}
               className="absolute top-4 left-4 p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white"
@@ -768,8 +768,8 @@ export const MembersSearchPage: React.FC = () => {
 
       {/* MODAL 2: EDIT MEMBER PROFILE */}
       {editingMember && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-800 rounded-3xl p-6 sm:p-8 max-w-md w-full space-y-5 shadow-2xl relative animate-scale-up" dir="rtl">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#0f172a] border border-slate-800 rounded-3xl p-5 sm:p-7 max-w-md w-full max-h-[90vh] overflow-y-auto space-y-4 shadow-2xl relative animate-scale-up" dir="rtl">
             <button
               onClick={() => setEditingMember(null)}
               className="absolute top-4 left-4 p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white"
@@ -869,8 +869,8 @@ export const MembersSearchPage: React.FC = () => {
 
       {/* MODAL 3: ADD NEW MEMBER */}
       {isNewMemberModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border border-slate-800 rounded-3xl p-6 sm:p-8 max-w-lg w-full space-y-5 shadow-2xl relative animate-scale-up" dir="rtl">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#0f172a] border border-slate-800 rounded-3xl p-5 sm:p-7 max-w-lg w-full max-h-[90vh] overflow-y-auto space-y-4 shadow-2xl relative animate-scale-up" dir="rtl">
             <button
               onClick={() => setIsNewMemberModalOpen(false)}
               className="absolute top-4 left-4 p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white"
@@ -1047,8 +1047,8 @@ export const MembersSearchPage: React.FC = () => {
 
       {/* MODAL 4: PERSONALIZED MEMBER QR CODE DISPLAY */}
       {qrModalMember && qrModalUrl && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-[#0f172a] border-2 border-emerald-500/50 rounded-3xl p-6 sm:p-8 max-w-sm w-full text-center space-y-5 shadow-2xl relative animate-scale-up" dir="rtl">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-[#0f172a] border-2 border-emerald-500/50 rounded-3xl p-5 sm:p-7 max-w-sm w-full max-h-[90vh] overflow-y-auto text-center space-y-4 shadow-2xl relative animate-scale-up" dir="rtl">
             <button
               onClick={() => {
                 setQrModalMember(null);
