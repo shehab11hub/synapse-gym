@@ -204,7 +204,7 @@ export const ExpensesPage: React.FC = () => {
 
       // Generate Personalized Member QR code
       const baseUrl = typeof window !== 'undefined' && window.location.origin ? window.location.origin : '';
-      const bindUrl = `${baseUrl}/checkin?code=${res.member.code}&bind=true`;
+      const bindUrl = `${baseUrl}/checkin?code=${res.member.code}&bind=true&t=${Date.now()}`;
       const qrData = await generateQRDataUrl(bindUrl);
       setQrModalMember(res.member);
       setQrModalUrl(qrData);
@@ -264,7 +264,7 @@ export const ExpensesPage: React.FC = () => {
 
     // Generate Personalized Member QR code
     const baseUrl = typeof window !== 'undefined' && window.location.origin ? window.location.origin : '';
-    const bindUrl = `${baseUrl}/checkin?code=${created.code}&bind=true`;
+    const bindUrl = `${baseUrl}/checkin?code=${created.code}&bind=true&t=${Date.now()}`;
     const qrData = await generateQRDataUrl(bindUrl);
     setQrModalMember(created);
     setQrModalUrl(qrData);

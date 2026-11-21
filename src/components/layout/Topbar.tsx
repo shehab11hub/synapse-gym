@@ -43,6 +43,8 @@ export const Topbar: React.FC<TopbarProps> = ({ activeTab, onOpenMobileMenu }) =
     switch (tab) {
       case 'reception':
         return { title: 'الاستقبال وتسجيل الحضور', subtitle: 'مسح الكيو آر كود والتحقق من اشتراكات اللاعبين' };
+      case 'members_search':
+        return { title: 'دليل وبحث الأعضاء والاشتراكات', subtitle: 'البحث الشامل بالاسم والتليفون والكود واستعراض خطط الأعضاء' };
       case 'sessions':
         return { title: 'جدول الحصص والتمارين', subtitle: 'إدارة الكلاسات، المدربين، واللاعبين المسجلين' };
       case 'physiotherapy':

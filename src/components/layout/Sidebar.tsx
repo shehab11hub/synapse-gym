@@ -13,6 +13,7 @@ import {
   BarChart3,
   FileSpreadsheet,
   X,
+  Search,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
@@ -39,6 +40,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: QrCode,
       pageKey: 'reception',
       badge: 'الرئيسية',
+    },
+    {
+      id: 'members_search',
+      label: 'دليل وبحث الأعضاء',
+      sublabel: 'بيانات اللاعبين والاشتراكات',
+      icon: Search,
+      pageKey: 'members_search',
+      badge: 'جديد',
     },
     {
       id: 'sessions',

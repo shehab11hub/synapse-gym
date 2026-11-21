@@ -15,8 +15,13 @@ import {
   RefreshCw,
   LogOut,
   Sparkles,
+  Lock,
+  Key,
+  X,
+  Phone,
 } from 'lucide-react';
 import { useGymData } from '../context/GymDataContext';
+import { useAuth } from '../context/AuthContext';
 import { Member, SessionCategory } from '../types';
 import { formatDateAr, formatArabicDayMonth, getSubscriptionStatus } from '../utils/formatters';
 import { sounds } from '../utils/sound';
@@ -93,20 +98,20 @@ const markScanAsConsumed = () => {
 
 export const PlayerCheckInPage: React.FC = () => {
   const { members, findMemberByCode, performCheckIn, addMember } = useGymData();
+  const { currentUser, login } = useAuth();
 
-  const [inputCode, setInputCode] = useState('');
+  const [phoneInput, setPhoneInput] = useState('');
   const [checkedMember, setCheckedMember] = useState<Member | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [step, setStep] = useState<'loading' | 'unregistered' | 'success' | 'verified_only'>('loading');
-  const [activeTab, setActiveTab] = useState<'link' | 'register'>('link');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // New player registration form
-  const [newPlayerForm, setNewPlayerForm] = useState({
-    name: '',
-    phone: '',
-    sessionCategory: 'gym' as SessionCategory,
-  });
+  // Staff Login Modal state (Protected Access to Dashboard)
+  const [isStaffModalOpen, setIsStaffModalOpen] = useState(false);
+  const [staffUsername, setStaffUsername] = useState('');
+  const [staffPassword, setStaffPassword] = useState('');
+  const [staffError, setStaffError] = useState('');
+  const [isStaffSubmitting, setIsStaffSubmitting] = useState(false);
 
   const autoCheckInAttempted = useRef(false);
 
@@ -244,16 +249,12 @@ export const PlayerCheckInPage: React.FC = () => {
             persistMemberAuthentication(target);
             autoCheckInAttempted.current = true;
 
-            if (isBindOnly || !isFreshScan) {
-              // Device linking or non-desk scan -> Verify profile only
-              setCheckedMember(target);
-              setStep('verified_only');
-              if (window.history && window.history.replaceState) {
-                window.history.replaceState({}, document.title, window.location.pathname);
-              }
-            } else {
-              markScanAsConsumed();
-              handleExecuteCheckIn(target, true);
+            // When scanning with URL code (desk QR or personalized member QR):
+            // Check in player immediately so they appear in reception seating!
+            markScanAsConsumed();
+            handleExecuteCheckIn(target, false);
+            if (window.history && window.history.replaceState) {
+              window.history.replaceState({}, document.title, window.location.pathname);
             }
             return;
           }
@@ -262,7 +263,7 @@ export const PlayerCheckInPage: React.FC = () => {
         // ignore
       }
 
-      // 3. Brand new device (no memberId found) -> show 1-time device linking screen
+      // 3. Brand new device (no memberId found) -> show 1-time phone checkin screen
       autoCheckInAttempted.current = true;
       setStep('unregistered');
     };
@@ -270,25 +271,29 @@ export const PlayerCheckInPage: React.FC = () => {
     executeAutoDetection();
   }, [members, findMemberByCode]);
 
-  // Handle 1-time device linking with existing membership
-  const handleLinkExistingSubmit = async (e: React.FormEvent) => {
+  // Handle phone-only checkin & 1-time device linking
+  const handlePhoneSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputCode.trim()) return;
+    const cleanPhone = phoneInput.trim();
+    if (!cleanPhone) return;
 
     setIsSubmitting(true);
     setErrorMessage('');
 
-    const clean = inputCode.trim().toUpperCase();
-
-    // 1. Search in local state
-    let target =
-      findMemberByCode(clean) ||
-      members.find((m) => m.phone === clean || m.code.toUpperCase() === clean);
+    // 1. Search in local state by phone, normalized digits, or code
+    const digitsOnly = cleanPhone.replace(/\D/g, '');
+    let target = members.find((m) => {
+      if (m.phone === cleanPhone || m.code.toUpperCase() === cleanPhone.toUpperCase()) return true;
+      if (digitsOnly.length >= 8 && m.phone) {
+        return m.phone.replace(/\D/g, '') === digitsOnly;
+      }
+      return false;
+    });
 
     // 2. Search in backend members directory if not found locally
     if (!target) {
       try {
-        const res = await fetch(`/api/members?q=${encodeURIComponent(clean)}`);
+        const res = await fetch(`/api/members?q=${encodeURIComponent(cleanPhone)}`);
         if (res.ok) {
           const data = await res.json();
           if (data.member) {
@@ -300,58 +305,46 @@ export const PlayerCheckInPage: React.FC = () => {
       }
     }
 
-    setIsSubmitting(false);
-
     if (target) {
-      // Success: Save to device and Auto-Checkin!
+      // Existing member found -> Bind device & check in immediately!
+      persistMemberAuthentication(target);
+      setIsSubmitting(false);
+      markScanAsConsumed();
       handleExecuteCheckIn(target, false);
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
     } else {
-      setErrorMessage(
-        'لم يتم العثور على عضو بهذا الكود أو رقم الهاتف. يمكنك تسجيل لاعب جديد من التاب المجاور.'
-      );
-      sounds.playCashRegister();
+      // New visitor/player -> Create membership record with this phone and check in!
+      const generatedCode = Math.floor(100000 + Math.random() * 900000).toString();
+      const created = addMember({
+        code: generatedCode,
+        name: `متدرب جديد (${cleanPhone})`,
+        phone: cleanPhone,
+        type: 'member',
+        subscriptionPlan: 'تمرين حر (غير مسجل اشتراك)',
+        subscriptionFee: 0,
+        startDate: new Date().toISOString().split('T')[0],
+        endDate: new Date().toISOString().split('T')[0],
+        totalDays: 0,
+        remainingDays: 0,
+        totalSessions: 0,
+        remainingSessions: 0,
+        active: true,
+        sessionCategory: 'gym',
+        paymentMethod: undefined,
+        paymentStatus: 'unpaid',
+        notes: 'تسجيل دخول ذاتي برقم الهاتف فقط',
+      });
+
+      persistMemberAuthentication(created);
+      setIsSubmitting(false);
+      markScanAsConsumed();
+      handleExecuteCheckIn(created, false);
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
     }
-  };
-
-  // Handle instant new player registration & 1-time linking
-  const handleNewPlayerSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newPlayerForm.name.trim() || !newPlayerForm.phone.trim()) {
-      setErrorMessage('يرجى إدخال اسم اللاعب ورقم الهاتف');
-      return;
-    }
-
-    const generatedCode = Math.floor(100000 + Math.random() * 900000).toString();
-    const categoryTitle =
-      newPlayerForm.sessionCategory === 'private'
-        ? 'تدريب خاص (Private PT)'
-        : newPlayerForm.sessionCategory === 'group'
-        ? 'كلاس تدريبي جماعي'
-        : newPlayerForm.sessionCategory === 'massage'
-        ? 'جلسة مساج'
-        : newPlayerForm.sessionCategory === 'physio'
-        ? 'علاج طبيعي'
-        : 'اشتراك صالة الجيم العامة';
-
-    const created = addMember({
-      name: newPlayerForm.name.trim(),
-      phone: newPlayerForm.phone.trim(),
-      code: generatedCode,
-      subscriptionPlan: 'بدون اشتراك نشط',
-      subscriptionFee: 0,
-      startDate: new Date().toISOString().split('T')[0],
-      endDate: '',
-      totalDays: 0,
-      remainingDays: 0,
-      totalSessions: 0,
-      remainingSessions: 0,
-      active: false,
-      type: 'member',
-      sessionCategory: newPlayerForm.sessionCategory,
-      paymentMethod: undefined,
-    });
-
-    handleExecuteCheckIn(created, false);
   };
 
   // Action: Switch Account / Logout from this device
@@ -364,7 +357,7 @@ export const PlayerCheckInPage: React.FC = () => {
       // ignore
     }
     setCheckedMember(null);
-    setInputCode('');
+    setPhoneInput('');
     setErrorMessage('');
     setStep('unregistered');
     autoCheckInAttempted.current = true;
@@ -730,52 +723,17 @@ export const PlayerCheckInPage: React.FC = () => {
           </div>
         )}
 
-        {/* VIEW 3: 1-TIME DEVICE LINKING (FOR NEW PHONES OR AFTER LOGOUT) */}
+        {/* VIEW 3: WRITE YOUR PHONE NUMBER ONLY (ZERO-FRICTION CHECK-IN) */}
         {step === 'unregistered' && (
           <div className="bg-[#0f172a]/95 border-2 border-emerald-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl backdrop-blur-xl space-y-6 animate-scale-up">
             <div className="text-center space-y-2">
               <div className="w-16 h-16 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center mx-auto shadow-inner">
-                <QrCode className="w-8 h-8" />
+                <Phone className="w-8 h-8" />
               </div>
-              <h2 className="text-xl font-black text-white">ربط الهاتف لمرة واحدة فقط</h2>
+              <h2 className="text-xl font-black text-white">تسجيل حضورك بالصالة</h2>
               <p className="text-xs text-slate-300 leading-relaxed">
-                اربط هاتفك بعضويتك الآن، ولن تحتاج لإدخال أي بيانات مجدداً! في كل مرة قادمة ستقوم بمسح الكود وسيتم تسجيل حضورك تلقائياً وبدون أي ضغطات (Auto-Checkin).
+                اكتب رقم تليفونك فقط لتسجيل حضورك وربط هاتفك بعضويتك فورياً
               </p>
-            </div>
-
-            {/* Selector Tabs: Link Existing vs New Member */}
-            <div className="grid grid-cols-2 gap-2 p-1 bg-slate-900 rounded-2xl border border-slate-800">
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveTab('link');
-                  setErrorMessage('');
-                }}
-                className={`py-2 px-3 rounded-xl font-black text-xs transition flex items-center justify-center gap-1.5 cursor-pointer ${
-                  activeTab === 'link'
-                    ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <UserCheck className="w-3.5 h-3.5" />
-                <span>عندي اشتراك مسبقاً</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveTab('register');
-                  setErrorMessage('');
-                }}
-                className={`py-2 px-3 rounded-xl font-black text-xs transition flex items-center justify-center gap-1.5 cursor-pointer ${
-                  activeTab === 'register'
-                    ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <UserPlus className="w-3.5 h-3.5" />
-                <span>تسجيل لاعب جديد</span>
-              </button>
             </div>
 
             {errorMessage && (
@@ -785,122 +743,150 @@ export const PlayerCheckInPage: React.FC = () => {
               </div>
             )}
 
-            {/* TAB 1: ONE-TIME PHONE LINKING */}
-            {activeTab === 'link' && (
-              <form onSubmit={handleLinkExistingSubmit} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                    كود العضوية أو رقم الهاتف المسجل:
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      required
-                      value={inputCode}
-                      onChange={(e) => setInputCode(e.target.value)}
-                      placeholder="مثال: 102938 أو 01012345678"
-                      inputMode="numeric"
-                      className="w-full bg-slate-900 border-2 border-emerald-500/40 rounded-2xl px-4 py-3.5 text-center text-sm font-black text-white font-mono placeholder:text-slate-600 focus:outline-none focus:border-emerald-400 transition tracking-wider"
-                      autoFocus
-                    />
-                    <Search className="w-4 h-4 text-slate-500 absolute left-4 top-4" />
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-sm shadow-xl shadow-emerald-500/25 transition flex items-center justify-center gap-2 cursor-pointer active:scale-98 disabled:opacity-50"
-                >
-                  <UserCheck className="w-5 h-5" />
-                  <span>{isSubmitting ? 'جاري التحقق...' : 'ربط الهاتف وتسجيل الحضور فوراً'}</span>
-                </button>
-              </form>
-            )}
-
-            {/* TAB 2: INSTANT VISITOR / NEW PLAYER REGISTER */}
-            {activeTab === 'register' && (
-              <form onSubmit={handleNewPlayerSubmit} className="space-y-3.5">
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">
-                    اسم اللاعب بالكامل:
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={newPlayerForm.name}
-                    onChange={(e) => setNewPlayerForm({ ...newPlayerForm, name: e.target.value })}
-                    placeholder="مثال: محمد السيد أحمد"
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-400"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">
-                    رقم الهاتف / الواتساب:
-                  </label>
+            <form onSubmit={handlePhoneSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-2 text-right">
+                  اكتب رقم تليفونك:
+                </label>
+                <div className="relative">
                   <input
                     type="tel"
                     required
-                    value={newPlayerForm.phone}
-                    onChange={(e) => setNewPlayerForm({ ...newPlayerForm, phone: e.target.value })}
-                    placeholder="010..."
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs font-mono text-white focus:outline-none focus:border-emerald-400"
+                    value={phoneInput}
+                    onChange={(e) => setPhoneInput(e.target.value)}
+                    placeholder="01xxxxxxxxx"
+                    inputMode="tel"
+                    className="w-full bg-slate-900 border-2 border-emerald-500/40 rounded-2xl px-4 py-4 text-center text-lg font-black text-white font-mono placeholder:text-slate-600 focus:outline-none focus:border-emerald-400 transition tracking-widest"
+                    autoFocus
                   />
+                  <Phone className="w-5 h-5 text-emerald-400 absolute left-4 top-4.5" />
                 </div>
+              </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">
-                    نوع النشاط المستهدف:
-                  </label>
-                  <select
-                    value={newPlayerForm.sessionCategory}
-                    onChange={(e) =>
-                      setNewPlayerForm({
-                        ...newPlayerForm,
-                        sessionCategory: e.target.value as SessionCategory,
-                      })
-                    }
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-400"
-                  >
-                    <option value="gym">🏋️ صالة الجيم العامة</option>
-                    <option value="private">🎯 تدريب خاص (Private PT)</option>
-                    <option value="group">👥 كلاس تدريبي جماعي</option>
-                    <option value="massage">💆‍♂️ مساج واستشفاء رياضي</option>
-                    <option value="physio">🩺 علاج طبيعي وتأهيل</option>
-                  </select>
-                </div>
+              <button
+                type="submit"
+                disabled={isSubmitting || !phoneInput.trim()}
+                className="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-sm shadow-xl shadow-emerald-500/25 transition flex items-center justify-center gap-2 cursor-pointer active:scale-98 disabled:opacity-50"
+              >
+                <CheckCircle className="w-5 h-5" />
+                <span>{isSubmitting ? 'جاري التحقق والتسجيل...' : 'تأكيد الحضور والدخول للصالة'}</span>
+              </button>
+            </form>
 
-                <button
-                  type="submit"
-                  className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-slate-950 font-black text-sm shadow-xl shadow-emerald-500/25 transition flex items-center justify-center gap-2 cursor-pointer active:scale-98"
-                >
-                  <UserPlus className="w-5 h-5" />
-                  <span>تسجيل العضوية وتأكيد الحضور بالريسبشن</span>
-                </button>
-              </form>
-            )}
-
-            {/* Quick Informational Pill */}
             <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-[11px] text-center leading-relaxed">
-              💡 بعد إتمام هذه الخطوة، سيتعرف الموقع على هاتفك تلقائياً في كل زيارة قادمة فور مسح الكود!
+              💡 بعد إدخال رقمك، سيتعرف الموقع على هاتفك تلقائياً في الزيارات القادمة بمجرد مسح الكود!
             </div>
           </div>
         )}
       </main>
 
-      {/* Footer Navigation */}
+      {/* Footer Navigation Protected for Gym Staff */}
       <footer className="relative z-10 max-w-md mx-auto w-full pb-3 text-center">
         <button
           onClick={() => {
-            window.location.href = '/';
+            if (currentUser) {
+              window.location.href = '/';
+            } else {
+              setIsStaffModalOpen(true);
+            }
           }}
-          className="text-xs text-slate-500 hover:text-emerald-400 font-bold transition flex items-center justify-center gap-1.5 mx-auto cursor-pointer"
+          className="text-xs text-slate-500 hover:text-emerald-400 font-bold transition flex items-center justify-center gap-1.5 mx-auto cursor-pointer p-2 rounded-xl hover:bg-slate-900/60"
         >
-          <span>الذهاب للوحة تحكم واستقبال الجيم</span>
+          <Lock className="w-3.5 h-3.5 text-slate-400" />
+          <span>بوابة طاقم الإدارة والاستقبال (موظفين فقط)</span>
           <ArrowRight className="w-3.5 h-3.5" />
         </button>
       </footer>
+
+      {/* Staff Authentication Modal */}
+      {isStaffModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#0f172a] border border-slate-800 rounded-3xl p-6 sm:p-8 max-w-sm w-full space-y-5 shadow-2xl relative animate-scale-up" dir="rtl">
+            <button
+              onClick={() => {
+                setIsStaffModalOpen(false);
+                setStaffError('');
+              }}
+              className="absolute top-4 left-4 p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="text-center space-y-1.5">
+              <div className="w-12 h-12 rounded-2xl bg-teal-500/20 border border-teal-500/40 text-teal-400 flex items-center justify-center mx-auto mb-2">
+                <Lock className="w-6 h-6" />
+              </div>
+              <h3 className="text-base font-black text-white">تسجيل دخول طاقم العمل</h3>
+              <p className="text-xs text-slate-400">
+                منطقة محمية خاصة بمدير الجيم وموظفي الاستقبال
+              </p>
+            </div>
+
+            {staffError && (
+              <div className="p-3 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-300 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{staffError}</span>
+              </div>
+            )}
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                setStaffError('');
+                setIsStaffSubmitting(true);
+                const res = login(staffUsername.trim(), staffPassword.trim());
+                setIsStaffSubmitting(false);
+                if (res.success) {
+                  sounds.playSuccessDing();
+                  window.location.href = '/';
+                } else {
+                  setStaffError(res.error || 'اسم المستخدم أو كلمة المرور غير صحيحة');
+                  sounds.playCashRegister();
+                }
+              }}
+              className="space-y-3.5"
+            >
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  اسم المستخدم:
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={staffUsername}
+                  onChange={(e) => setStaffUsername(e.target.value)}
+                  placeholder="اسم المستخدم"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-teal-400"
+                  autoFocus
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  كلمة المرور:
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={staffPassword}
+                  onChange={(e) => setStaffPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-teal-400"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={isStaffSubmitting}
+                className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-400 hover:to-cyan-400 text-slate-950 font-black text-xs shadow-lg shadow-teal-500/20 transition cursor-pointer flex items-center justify-center gap-2"
+              >
+                <Key className="w-4 h-4" />
+                <span>{isStaffSubmitting ? 'جاري التحقق...' : 'دخول لوحة التحكم'}</span>
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

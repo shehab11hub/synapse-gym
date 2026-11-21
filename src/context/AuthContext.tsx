@@ -177,6 +177,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Allowed pages for receptionist:
     const receptionistAllowed = [
       'reception',
+      'members_search',
       'sessions',
       'physiotherapy',
       'trainers',

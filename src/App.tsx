@@ -14,6 +14,7 @@ import { AnalyticsPage } from './pages/AnalyticsPage';
 import { PosPage } from './pages/PosPage';
 import { UsersPage } from './pages/UsersPage';
 import { PlayerCheckInPage } from './pages/PlayerCheckInPage';
+import { MembersSearchPage } from './pages/MembersSearchPage';
 
 const MainDashboard: React.FC = () => {
   const { currentUser, canAccessPage } = useAuth();
@@ -37,6 +38,8 @@ const MainDashboard: React.FC = () => {
     switch (activeTab) {
       case 'reception':
         return <ReceptionPage />;
+      case 'members_search':
+        return <MembersSearchPage />;
       case 'sessions':
         return <SessionsPage />;
       case 'physiotherapy':
