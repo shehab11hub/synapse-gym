@@ -120,16 +120,17 @@ export function getSubscriptionStatus(member?: {
 
   const dateFormatted = member.endDate ? formatArabicDayMonth(member.endDate) : '';
 
-  // 1. Expired subscription
-  if ((totalDays > 0 && remainingDays <= 0) || (member.endDate && isDatePast)) {
+  // 1. Expired subscription (If days ended, any unconsumed sessions are forfeit)
+  const hasExpiredDays = (totalDays > 0 && remainingDays <= 0) || (Boolean(member.endDate) && isDatePast);
+  if (hasExpiredDays) {
     return {
       status: 'expired',
       isExpired: true,
       isActive: false,
-      badgeText: 'اشتراك منتهي',
+      badgeText: 'اشتراك منتهي (انتهت الأيام)',
       fullText: dateFormatted
-        ? `اشتراك منتهي (انتهى بتاريخ ${dateFormatted})`
-        : 'اشتراك اللاعب منتهي الصلاحية',
+        ? `اشتراك منتهي (انتهت مدة الأيام في ${dateFormatted}${remainingSessions > 0 ? ` وسقطت ${remainingSessions} حصة متبقية` : ''})`
+        : `اشتراك منتهي الصلاحية (انتهت الأيام${remainingSessions > 0 ? ` وسقطت ${remainingSessions} حصة متبقية` : ''})`,
       color: 'rose',
       dateFormatted,
       remainingDays: 0,

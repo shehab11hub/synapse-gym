@@ -16,7 +16,6 @@ import {
   LogOut,
   Sparkles,
 } from 'lucide-react';
-import confetti from 'canvas-confetti';
 import { useGymData } from '../context/GymDataContext';
 import { Member, SessionCategory } from '../types';
 import { formatDateAr, formatArabicDayMonth, getSubscriptionStatus } from '../utils/formatters';
@@ -25,6 +24,72 @@ import { sounds } from '../utils/sound';
 const STORAGE_MEMBER_ID = 'synapse_member_id';
 const STORAGE_AUTH_TOKEN = 'synapse_auth_token';
 const STORAGE_PLAYER_IDENTITY = 'synapse_player_identity';
+const STORAGE_CONSUMED_TOKENS = 'synapse_consumed_scan_tokens';
+
+// Helper to determine if current visit is a fresh physical QR scan vs history/bookmark reopen
+const isScanFreshAndUnconsumed = (): boolean => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const kioskToken = params.get('kioskToken') || params.get('scanToken');
+    const timestampStr = params.get('t') || params.get('time');
+    const isDesk = params.get('desk') === 'true';
+
+    // If there are no scan query parameters, this is opened from browser history, home screen or refresh
+    if (!kioskToken && !timestampStr && !isDesk) {
+      return false;
+    }
+
+    const consumedRaw = localStorage.getItem(STORAGE_CONSUMED_TOKENS);
+    const consumedList: string[] = consumedRaw ? JSON.parse(consumedRaw) : [];
+
+    if (kioskToken && consumedList.includes(kioskToken)) {
+      return false; // Token already consumed by a prior scan
+    }
+
+    if (timestampStr) {
+      const t = Number(timestampStr);
+      // Valid for 5 minutes (300,000 ms)
+      if (isNaN(t) || Date.now() - t > 300000) {
+        return false;
+      }
+      if (consumedList.includes(`time-${t}`)) {
+        return false;
+      }
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const markScanAsConsumed = () => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const kioskToken = params.get('kioskToken') || params.get('scanToken');
+    const timestampStr = params.get('t') || params.get('time');
+
+    const consumedRaw = localStorage.getItem(STORAGE_CONSUMED_TOKENS);
+    const consumedList: string[] = consumedRaw ? JSON.parse(consumedRaw) : [];
+
+    if (kioskToken && !consumedList.includes(kioskToken)) {
+      consumedList.push(kioskToken);
+    }
+    if (timestampStr && !consumedList.includes(`time-${timestampStr}`)) {
+      consumedList.push(`time-${timestampStr}`);
+    }
+
+    const trimmed = consumedList.slice(-50);
+    localStorage.setItem(STORAGE_CONSUMED_TOKENS, JSON.stringify(trimmed));
+
+    // Clear query parameters from URL history so re-opening from history has no token!
+    if (window.history && window.history.replaceState) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  } catch {
+    // ignore
+  }
+};
 
 export const PlayerCheckInPage: React.FC = () => {
   const { members, findMemberByCode, performCheckIn, addMember } = useGymData();
@@ -32,7 +97,7 @@ export const PlayerCheckInPage: React.FC = () => {
   const [inputCode, setInputCode] = useState('');
   const [checkedMember, setCheckedMember] = useState<Member | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
-  const [step, setStep] = useState<'loading' | 'unregistered' | 'success'>('loading');
+  const [step, setStep] = useState<'loading' | 'unregistered' | 'success' | 'verified_only'>('loading');
   const [activeTab, setActiveTab] = useState<'link' | 'register'>('link');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -91,25 +156,15 @@ export const PlayerCheckInPage: React.FC = () => {
     setCheckedMember(res.member || targetMember);
     setStep('success');
     sounds.playSuccessDing();
-
-    // Trigger celebratory Confetti
-    try {
-      confetti({
-        particleCount: 80,
-        spread: 90,
-        origin: { y: 0.5 },
-        colors: ['#10b981', '#14b8a6', '#06b6d4', '#3b82f6', '#f59e0b'],
-      });
-    } catch {
-      // ignore
-    }
   };
 
-  // AUTO-CHECKIN ON SCAN ENGINE (Zero-Click Member Authentication)
+  // AUTO-CHECKIN ON SCAN ENGINE (Zero-Click Member Authentication with Fresh Scan Protection)
   useEffect(() => {
     if (autoCheckInAttempted.current) return;
 
     const executeAutoDetection = async () => {
+      const isFreshScan = isScanFreshAndUnconsumed();
+
       // 1. Check if device has stored memberId in localStorage
       const savedMemberId = localStorage.getItem(STORAGE_MEMBER_ID);
       const savedIdentityStr = localStorage.getItem(STORAGE_PLAYER_IDENTITY);
@@ -141,7 +196,16 @@ export const PlayerCheckInPage: React.FC = () => {
             };
 
             autoCheckInAttempted.current = true;
-            handleExecuteCheckIn(target, true);
+
+            if (isFreshScan) {
+              // Real physical scan at the desk -> Execute checkin & consume token
+              markScanAsConsumed();
+              handleExecuteCheckIn(target, true);
+            } else {
+              // Opened from history or reload -> Confirm identity only, do NOT trigger checkin!
+              setCheckedMember(target);
+              setStep('verified_only');
+            }
             return;
           }
         } catch {
@@ -153,6 +217,7 @@ export const PlayerCheckInPage: React.FC = () => {
       try {
         const params = new URLSearchParams(window.location.search);
         const urlCode = params.get('code') || params.get('memberCode') || params.get('id');
+        const isBindOnly = params.get('bind') === 'true';
 
         if (urlCode) {
           const cleanCode = urlCode.trim().toUpperCase();
@@ -176,8 +241,20 @@ export const PlayerCheckInPage: React.FC = () => {
           }
 
           if (target) {
+            persistMemberAuthentication(target);
             autoCheckInAttempted.current = true;
-            handleExecuteCheckIn(target, true);
+
+            if (isBindOnly || !isFreshScan) {
+              // Device linking or non-desk scan -> Verify profile only
+              setCheckedMember(target);
+              setStep('verified_only');
+              if (window.history && window.history.replaceState) {
+                window.history.replaceState({}, document.title, window.location.pathname);
+              }
+            } else {
+              markScanAsConsumed();
+              handleExecuteCheckIn(target, true);
+            }
             return;
           }
         }
@@ -488,13 +565,159 @@ export const PlayerCheckInPage: React.FC = () => {
             <div className="space-y-2.5 pt-2">
               <button
                 type="button"
-                onClick={() => handleExecuteCheckIn(checkedMember, false)}
-                className="w-full py-3 px-4 rounded-2xl bg-slate-800 hover:bg-slate-700 text-emerald-300 font-bold text-xs transition cursor-pointer border border-slate-700 flex items-center justify-center gap-2"
+                onClick={handleSwitchAccount}
+                className="w-full py-2.5 px-4 rounded-2xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 font-bold text-xs transition cursor-pointer flex items-center justify-center gap-2"
               >
-                <RefreshCw className="w-4 h-4" />
-                <span>تحديث / تسجيل حضور مجدداً</span>
+                <LogOut className="w-4 h-4 text-rose-400" />
+                <span>تبديل الحساب / تسجيل خروج من هذا الهاتف</span>
               </button>
+            </div>
+          </div>
+        )}
 
+        {/* VIEW 2.5: VERIFIED IDENTITY ONLY (OPENED FROM BROWSER HISTORY - NO CHECK-IN) */}
+        {step === 'verified_only' && checkedMember && (
+          <div className="bg-[#0f172a]/95 border-2 border-cyan-500/40 rounded-3xl p-6 sm:p-8 shadow-2xl backdrop-blur-xl text-center space-y-5 animate-scale-up">
+            {/* Identity Icon */}
+            <div className="relative py-2 flex items-center justify-center">
+              <div className="w-20 h-20 rounded-full bg-cyan-500/20 flex items-center justify-center border-2 border-cyan-500/40 shadow-xl shadow-cyan-500/20">
+                <ShieldCheck className="w-10 h-10 text-cyan-400 stroke-[2.5]" />
+              </div>
+            </div>
+
+            {/* Greeting & Player Identity */}
+            <div>
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-[11px] font-bold mb-2">
+                <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
+                <span>تم تأكيد الهوية وحسابك مسجل</span>
+              </div>
+              <h2 className="text-2xl font-black text-white">
+                أهلاً بك يا كابتن / {checkedMember.name}
+              </h2>
+              <div className="flex items-center justify-center gap-3 text-xs text-slate-400 font-mono mt-1">
+                <span>الكود: <strong className="text-white">{checkedMember.code}</strong></span>
+                {checkedMember.phone && <span>• {checkedMember.phone}</span>}
+              </div>
+            </div>
+
+            {/* Crucial Instruction: Physical QR scan required for checkin */}
+            <div className="p-4 rounded-2xl bg-gradient-to-r from-cyan-950/50 via-slate-900 to-cyan-950/50 border border-cyan-500/40 text-center space-y-2">
+              <div className="flex items-center justify-center gap-2 text-cyan-300 font-bold text-xs">
+                <QrCode className="w-4 h-4 text-cyan-400" />
+                <span>لتسجيل الدخول الفعلي وظهورك بالاستقبال:</span>
+              </div>
+              <p className="text-xs text-slate-200 leading-relaxed font-semibold">
+                يرجى مسح رمز الـ QR الموجود على كاونتر الاستقبال بالصالة لتأكيد حضورك اليوم.
+              </p>
+              <div className="text-[10px] text-cyan-400/80 pt-1 border-t border-cyan-500/20">
+                🔒 حماية الدخول: فتح الصفحة من السجل أو خارج الجيم لا يسجل حضوراً إلا بالمسح الفعلي لكود كاونتر الاستقبال.
+              </div>
+            </div>
+
+            {/* Subscription Metrics Breakdown */}
+            {(() => {
+              const subInfo = getSubscriptionStatus(checkedMember);
+
+              if (subInfo.status === 'expired') {
+                return (
+                  <div className="p-4 rounded-2xl bg-rose-500/15 border-2 border-rose-500/40 text-rose-300 text-center space-y-2.5">
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 font-bold text-xs border border-rose-500/30">
+                      <AlertCircle className="w-4 h-4 text-rose-400" />
+                      <span>اشتراكك منتهي الصلاحية (انتهت الأيام)</span>
+                    </div>
+                    <div className="text-sm font-black text-white">
+                      ⚠️ انتهى اشتراكك بتاريخ: <span className="text-rose-300">{subInfo.dateFormatted || 'سابقاً'}</span>
+                    </div>
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      انتهت مدة الأيام المحددة للاشتراك وسقطت أي حصص متبقية لانتهاء المدة. يرجى التوجه لموظف الاستقبال لتجديد الاشتراك.
+                    </p>
+                  </div>
+                );
+              }
+
+              if (subInfo.status === 'none') {
+                return (
+                  <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-center space-y-2">
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 font-bold text-xs">
+                      <AlertCircle className="w-4 h-4 text-amber-400" />
+                      <span>لا يوجد اشتراك نشط حالياً</span>
+                    </div>
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      حسابك مسجل. يرجى التوجه لموظف الاستقبال للاشتراك أو التسكين في حصة تدريبية.
+                    </p>
+                  </div>
+                );
+              }
+
+              const hasDuration = subInfo.status === 'active';
+              const hasSessions = (checkedMember.remainingSessions || 0) > 0;
+
+              return (
+                <>
+                  <div className={`grid ${hasDuration && hasSessions ? 'grid-cols-2' : 'grid-cols-1'} gap-3 pt-1`}>
+                    {hasDuration && (
+                      <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 text-center">
+                        <div className="text-[11px] text-slate-400 mb-1 flex items-center justify-center gap-1 font-bold">
+                          <Calendar className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>الأيام المتبقية</span>
+                        </div>
+                        <div className="text-2xl font-black font-mono text-emerald-300">
+                          {checkedMember.remainingDays} يوم
+                        </div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">
+                          من أصل {checkedMember.totalDays} يوم
+                        </div>
+                      </div>
+                    )}
+
+                    {hasSessions && (
+                      <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 text-center">
+                        <div className="text-[11px] text-slate-400 mb-1 flex items-center justify-center gap-1 font-bold">
+                          <Clock className="w-3.5 h-3.5 text-teal-400" />
+                          <span>الحصص المتبقية</span>
+                        </div>
+                        <div className="text-2xl font-black font-mono text-teal-300">
+                          {checkedMember.remainingSessions} حصة
+                        </div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">
+                          من أصل {checkedMember.totalSessions} حصة
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Plan Info Card */}
+                  <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-slate-800 text-xs space-y-2 text-right">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">نوع الباقة:</span>
+                      <span className="font-bold text-white">{checkedMember.subscriptionPlan || 'اشتراك ساري'}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">صلاحية الاشتراك:</span>
+                      <span className="font-bold text-emerald-400 flex items-center gap-1">
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span>{subInfo.badgeText}</span>
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">سريان الاشتراك:</span>
+                      <span className="font-bold text-emerald-300 font-mono text-[11px]">
+                        {subInfo.fullText}
+                      </span>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
+
+            {/* Persistent Auth Status Pill */}
+            <div className="text-[11px] text-slate-400 flex items-center justify-center gap-1.5 pt-1">
+              <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+              <span>هذا الهاتف مربوط بعضويتك بشكل دائم</span>
+            </div>
+
+            {/* Logout button */}
+            <div className="pt-2">
               <button
                 type="button"
                 onClick={handleSwitchAccount}

@@ -21,6 +21,8 @@ export interface Member {
   code: string; // 6-digit numeric ID, e.g. '102938'
   name: string;
   phone: string;
+  age?: number;
+  residentialArea?: string; // المنطقة السكنية
   photoUrl?: string;
   type: MemberType;
   subscriptionPlan: string;

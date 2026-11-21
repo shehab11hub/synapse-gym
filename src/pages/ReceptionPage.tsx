@@ -566,6 +566,9 @@ export const ReceptionPage: React.FC = () => {
                 hour12: true,
               });
 
+              const matchingMember = members.find((m) => m.id === log.memberId || m.code === log.memberCode);
+              const subInfo = getSubscriptionStatus(matchingMember);
+
               return (
                 <div
                   key={log.id}
@@ -617,6 +620,35 @@ export const ReceptionPage: React.FC = () => {
                         </div>
                       </div>
                     </div>
+
+                    {/* Subscription Status & Expiration Alert */}
+                    {subInfo.status === 'expired' ? (
+                      <div className="mb-3 p-2 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-300 text-[11px] font-bold flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                          <span>⚠️ اشتراك منتهي (انتهت الأيام)</span>
+                        </div>
+                        <span className="text-[10px] text-rose-400 font-mono">
+                          {subInfo.dateFormatted ? `انتهى: ${subInfo.dateFormatted}` : ''}
+                        </span>
+                      </div>
+                    ) : subInfo.status === 'none' ? (
+                      <div className="mb-3 p-2 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[11px] font-bold flex items-center gap-1.5">
+                        <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        <span>⚠️ غير مشترك (تذكرة يومية / يحتاج تجديد)</span>
+                      </div>
+                    ) : (
+                      <div className="mb-3 p-1.5 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between text-[10px] font-bold">
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                          {subInfo.badgeText}
+                        </span>
+                        {matchingMember?.endDate && (
+                          <span className="text-slate-400 font-mono">
+                            حتى: {formatArabicDayMonth(matchingMember.endDate)}
+                          </span>
+                        )}
+                      </div>
+                    )}
 
                     {/* Current Placement Details if assigned */}
                     {isAssigned && (

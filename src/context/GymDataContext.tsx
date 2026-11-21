@@ -52,7 +52,8 @@ interface GymDataContextType {
     durationDays: number,
     fee: number,
     paymentMethod: 'cash' | 'instapay',
-    notes?: string
+    notes?: string,
+    sessionsCount?: number
   ) => { success: boolean; member?: Member };
   wipeAllDataToCleanSlate: () => void;
 
@@ -818,7 +819,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     durationDays: number,
     fee: number,
     paymentMethod: 'cash' | 'instapay',
-    notes?: string
+    notes?: string,
+    sessionsCount?: number
   ): { success: boolean; member?: Member } => {
     const member = members.find((m) => m.id === memberId || m.code === memberId);
     if (!member) return { success: false };
@@ -832,6 +834,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       subscriptionFee: fee,
       totalDays: durationDays,
       remainingDays: durationDays,
+      totalSessions: sessionsCount !== undefined ? sessionsCount : member.totalSessions,
+      remainingSessions: sessionsCount !== undefined ? sessionsCount : member.remainingSessions,
       startDate,
       endDate,
       active: true,
@@ -938,9 +942,26 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       return { success: false, message: 'عضو غير موجود' };
     }
 
-    const hasDays = member.remainingDays > 0;
-    const hasSessions = member.remainingSessions > 0;
-    const isValid = member.active && (hasDays || hasSessions);
+    let isDatePast = false;
+    if (member.endDate) {
+      const end = new Date(member.endDate);
+      if (!isNaN(end.getTime())) {
+        end.setHours(23, 59, 59, 999);
+        isDatePast = end.getTime() < Date.now();
+      }
+    }
+
+    // أهم قاعدة: إذا انتهت مدة الأيام، ينتهي الاشتراك وتسقط أي حصص متبقية
+    const hasExpiredDays =
+      (member.totalDays > 0 && member.remainingDays <= 0) ||
+      (Boolean(member.endDate) && isDatePast);
+
+    let isValid = false;
+    if (hasExpiredDays) {
+      isValid = false;
+    } else if (member.active && (member.remainingDays > 0 || (member.totalDays === 0 && member.remainingSessions > 0))) {
+      isValid = true;
+    }
 
     if (isValid && member.remainingSessions > 0) {
       updateMember(member.id, {

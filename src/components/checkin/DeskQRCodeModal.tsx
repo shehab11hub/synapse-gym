@@ -17,9 +17,11 @@ export const DeskQRCodeModal: React.FC<DeskQRCodeModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      // Dynamic Desk QR code using current origin with SPA /checkin route
+      // Dynamic Desk QR code using current origin with SPA /checkin route with fresh scan token
       const baseUrl = typeof window !== 'undefined' && window.location.origin ? window.location.origin : '';
-      const deskCheckinUrl = `${baseUrl}/checkin?desk=true&gym=${encodeURIComponent(gymName)}`;
+      const randomHex = Math.random().toString(36).substring(2, 7).toUpperCase();
+      const token = `SYN-DESK-${Date.now().toString(36).toUpperCase()}-${randomHex}`;
+      const deskCheckinUrl = `${baseUrl}/checkin?kioskToken=${token}&t=${Date.now()}&gym=${encodeURIComponent(gymName)}`;
       generateQRDataUrl(deskCheckinUrl).then(setQrUrl);
     }
   }, [isOpen]);
