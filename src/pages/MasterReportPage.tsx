@@ -90,6 +90,20 @@ export const MasterReportPage: React.FC = () => {
 
   const { currentUser, users } = useAuth();
 
+  if (currentUser?.role !== 'admin') {
+    return (
+      <div className="p-8 max-w-xl mx-auto my-20 text-center bg-[#0f172a] border border-slate-800 rounded-3xl p-8 shadow-2xl" dir="rtl">
+        <div className="w-16 h-16 rounded-2xl bg-rose-500/10 text-rose-400 mx-auto mb-4 flex items-center justify-center">
+          <AlertCircle className="w-8 h-8" />
+        </div>
+        <h3 className="text-lg font-black text-white mb-2">صفحة مخصصة للمدير العام فقط</h3>
+        <p className="text-xs text-slate-400 leading-relaxed">
+          عفواً، التقرير الشامل وإعدادات الأرشيف والتقفيل السنوي مقتصرة حصرياً على صلاحيات المدير العام (Admin).
+        </p>
+      </div>
+    );
+  }
+
   // Active Month & Year filters (default to current month and all years)
   const [selectedMonth, setSelectedMonth] = useState<string>(currentMonth);
   const [selectedYearFilter, setSelectedYearFilter] = useState<string>('all');
@@ -121,6 +135,7 @@ export const MasterReportPage: React.FC = () => {
   const [actualCountedCashInput, setActualCountedCashInput] = useState<string>('');
   const [shiftNotes, setShiftNotes] = useState('');
   const [isExportingShift, setIsExportingShift] = useState(false);
+  const [isSubmittingShiftClose, setIsSubmittingShiftClose] = useState(false);
 
   // Two dates for Shift Closing (اليوم المقفل + اليوم التالي)
   const [shiftClosingDayDate, setShiftClosingDayDate] = useState(() => {
@@ -393,6 +408,7 @@ export const MasterReportPage: React.FC = () => {
 
   const handleConfirmShiftClose = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingShiftClose) return;
 
     // Check month expiration rule:
     const activeCycle = billingCycles.find((c) => c.isActive);
@@ -406,6 +422,7 @@ export const MasterReportPage: React.FC = () => {
     const actualCashNum = parseFloat(actualCountedCashInput) || 0;
     const diff = actualCashNum - todayExpectedNetCash;
 
+    setIsSubmittingShiftClose(true);
     try {
       const closed = closeDailyShift({
         date: shiftClosingDayDate,
@@ -470,6 +487,8 @@ export const MasterReportPage: React.FC = () => {
       );
     } catch (err: any) {
       alert(err.message || 'حدث خطأ أثناء تقفيل اليومية');
+    } finally {
+      setIsSubmittingShiftClose(false);
     }
   };
 
@@ -1979,10 +1998,11 @@ export const MasterReportPage: React.FC = () => {
                 <button
                   type="submit"
                   form="shift-closing-form"
-                  className="flex-1 sm:flex-none py-2.5 px-5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-amber-500/20 transition flex items-center justify-center gap-2"
+                  disabled={isSubmittingShiftClose}
+                  className="flex-1 sm:flex-none py-2.5 px-5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-amber-500/20 transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>تأكيد إغلاق الوردية وإصدار التقارير</span>
+                  <span>{isSubmittingShiftClose ? 'جارِ إغلاق الوردية وإصدار التقارير...' : 'تأكيد إغلاق الوردية وإصدار التقارير'}</span>
                 </button>
               </div>
             </div>

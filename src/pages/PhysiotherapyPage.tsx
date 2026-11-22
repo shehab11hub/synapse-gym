@@ -52,6 +52,11 @@ export const PhysiotherapyPage: React.FC = () => {
   const [selectedBookingForCheckout, setSelectedBookingForCheckout] = useState<PhysioBooking | null>(null);
   const [selectedBookingForReceipt, setSelectedBookingForReceipt] = useState<PhysioBooking | null>(null);
 
+  // Double-Click Protection loading states
+  const [isSubmittingCheckout, setIsSubmittingCheckout] = useState(false);
+  const [isSubmittingBooking, setIsSubmittingBooking] = useState(false);
+  const [isSubmittingExtraFee, setIsSubmittingExtraFee] = useState(false);
+
   // Manual Extra Fee / Overtime Modal state
   const [isExtraFeeModalOpen, setIsExtraFeeModalOpen] = useState(false);
   const [selectedBookingForExtraFee, setSelectedBookingForExtraFee] = useState<PhysioBooking | null>(null);
@@ -120,35 +125,47 @@ export const PhysiotherapyPage: React.FC = () => {
 
   const handleStartBooking = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingBooking) return;
     if (!form.doctorName.trim() || !form.patientName.trim()) {
       alert('يرجى اختيار أو كتابة بيانات المدرب واللاعب');
       return;
     }
 
-    startPhysioSession({
-      doctorName: form.doctorName.trim(),
-      doctorCode: form.doctorCode || 'DOC-01',
-      coachId: form.selectedCoachId !== 'custom' ? form.selectedCoachId : undefined,
-      coachName: form.doctorName.trim(),
-      patientName: form.patientName.trim(),
-      roomName: form.roomName || 'عيادة التأهيل والمساج 1',
-      hourlyRate: Number(form.hourlyRate) || 180,
-      serviceType: form.serviceType,
-      status: 'active',
-    });
+    const hourlyRate = Number(form.hourlyRate);
+    if (isNaN(hourlyRate) || hourlyRate <= 0) {
+      alert('تنبيه: سعر الجلسة يجب أن يكون رقماً أكبر من الصفر');
+      return;
+    }
 
-    sounds.playSuccessDing();
-    setIsNewModalOpen(false);
-    setForm({
-      selectedCoachId: coaches[0]?.id || 'custom',
-      doctorName: coaches[0]?.name || '',
-      doctorCode: coaches[0]?.id || 'COACH-01',
-      selectedMemberId: 'custom',
-      patientName: '',
-      roomName: 'عيادة التأهيل والمساج 1',
-      hourlyRate: coaches[0]?.ratePerSession || 180,
-      serviceType: 'massage',
-    });
+    setIsSubmittingBooking(true);
+    try {
+      startPhysioSession({
+        doctorName: form.doctorName.trim(),
+        doctorCode: form.doctorCode || 'DOC-01',
+        coachId: form.selectedCoachId !== 'custom' ? form.selectedCoachId : undefined,
+        coachName: form.doctorName.trim(),
+        patientName: form.patientName.trim(),
+        roomName: form.roomName || 'عيادة التأهيل والمساج 1',
+        hourlyRate,
+        serviceType: form.serviceType,
+        status: 'active',
+      });
+
+      sounds.playSuccessDing();
+      setIsNewModalOpen(false);
+      setForm({
+        selectedCoachId: coaches[0]?.id || 'custom',
+        doctorName: coaches[0]?.name || '',
+        doctorCode: coaches[0]?.id || 'COACH-01',
+        selectedMemberId: 'custom',
+        patientName: '',
+        roomName: 'عيادة التأهيل والمساج 1',
+        hourlyRate: coaches[0]?.ratePerSession || 180,
+        serviceType: 'massage',
+      });
+    } finally {
+      setIsSubmittingBooking(false);
+    }
   };
 
   const handleQuickDoctorScan = (doc: typeof members[0]) => {
@@ -189,87 +206,109 @@ export const PhysiotherapyPage: React.FC = () => {
 
   const handleConfirmExtraFee = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedBookingForExtraFee) return;
+    if (!selectedBookingForExtraFee || isSubmittingExtraFee) return;
 
-    addExtraFeeToPhysio(
-      selectedBookingForExtraFee.id,
-      Number(manualExtraAmount) || 0,
-      manualExtraReason
-    );
-    sounds.playCashRegister();
-    setIsExtraFeeModalOpen(false);
-    setSelectedBookingForExtraFee(null);
+    const extraAmt = Number(manualExtraAmount);
+    if (isNaN(extraAmt) || extraAmt <= 0) {
+      alert('تنبيه: المبلغ الإضافي يجب أن يكون أكبر من صفر');
+      return;
+    }
+
+    setIsSubmittingExtraFee(true);
+    try {
+      addExtraFeeToPhysio(
+        selectedBookingForExtraFee.id,
+        extraAmt,
+        manualExtraReason
+      );
+      sounds.playCashRegister();
+      setIsExtraFeeModalOpen(false);
+      setSelectedBookingForExtraFee(null);
+    } finally {
+      setIsSubmittingExtraFee(false);
+    }
   };
 
   const handleConfirmCheckout = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedBookingForCheckout) return;
+    if (!selectedBookingForCheckout || isSubmittingCheckout) return;
 
     if (checkoutMode === 'instapay' && !instapayRef.trim()) {
       alert('يرجى إدخال كود أو رقم تحويل انستاباي للتحقق والتأكيد');
       return;
     }
 
-    // If extra fee was entered in checkout modal, add it first
-    if (checkoutExtraFee > 0) {
-      addExtraFeeToPhysio(
-        selectedBookingForCheckout.id,
-        checkoutExtraFee,
-        'تكلفة وقت إضافي تجاوز الساعة (تم إقرارها عند المحاسبة)'
-      );
+    const extraFeeNum = Number(checkoutExtraFee);
+    if (isNaN(extraFeeNum) || extraFeeNum < 0) {
+      alert('تنبيه: الرسوم الإضافية لا يمكن أن تكون سالبة');
+      return;
     }
 
-    const finalTotalWithExtra = (selectedBookingForCheckout.totalFee || 0) + checkoutExtraFee;
+    setIsSubmittingCheckout(true);
+    try {
+      // If extra fee was entered in checkout modal, add it first
+      if (extraFeeNum > 0) {
+        addExtraFeeToPhysio(
+          selectedBookingForCheckout.id,
+          extraFeeNum,
+          'تكلفة وقت إضافي تجاوز الساعة (تم إقرارها عند المحاسبة)'
+        );
+      }
 
-    if (checkoutMode === 'player_cash') {
-      billPhysioSession(selectedBookingForCheckout.id, {
-        billedTo: 'patient',
-        paymentMethod: 'cash',
-        notes: checkoutNotes || 'سداد نقدي بالاستقبال من اللاعب',
-        totalAmount: finalTotalWithExtra,
-        extraFee: checkoutExtraFee,
-        extraFeeReason: checkoutExtraFee > 0 ? 'تكلفة وقت إضافي تجاوز الساعة' : undefined,
-      });
-    } else if (checkoutMode === 'doctor_cash') {
-      billPhysioSession(selectedBookingForCheckout.id, {
-        billedTo: 'doctor',
-        paymentMethod: 'cash',
-        notes: checkoutNotes || 'سداد نقدي مباشر من الطبيب/الكوتش بالاستقبال',
-        totalAmount: finalTotalWithExtra,
-        extraFee: checkoutExtraFee,
-        extraFeeReason: checkoutExtraFee > 0 ? 'تكلفة وقت إضافي تجاوز الساعة' : undefined,
-      });
-    } else if (checkoutMode === 'instapay') {
-      billPhysioSession(selectedBookingForCheckout.id, {
-        billedTo: 'patient',
-        paymentMethod: 'instapay',
-        instapayRef: instapayRef.trim(),
-        notes: checkoutNotes || `تحويل انستاباي - كود: ${instapayRef.trim()}`,
-        totalAmount: finalTotalWithExtra,
-        extraFee: checkoutExtraFee,
-        extraFeeReason: checkoutExtraFee > 0 ? 'تكلفة وقت إضافي تجاوز الساعة' : undefined,
-      });
-    } else if (checkoutMode === 'coach_debt') {
-      billPhysioSession(selectedBookingForCheckout.id, {
-        billedTo: 'coach',
-        paymentMethod: 'coach_debt',
-        chargedToCoachId: selectedCoachForDebt,
-        notes: checkoutNotes || 'تحميل على حساب الكابتن كمديونية للجيم تسدد بنهاية الشهر',
-        totalAmount: finalTotalWithExtra,
-        extraFee: checkoutExtraFee,
-        extraFeeReason: checkoutExtraFee > 0 ? 'تكلفة وقت إضافي تجاوز الساعة' : undefined,
-      });
+      const finalTotalWithExtra = (selectedBookingForCheckout.totalFee || 0) + extraFeeNum;
+
+      if (checkoutMode === 'player_cash') {
+        billPhysioSession(selectedBookingForCheckout.id, {
+          billedTo: 'patient',
+          paymentMethod: 'cash',
+          notes: checkoutNotes || 'سداد نقدي بالاستقبال من اللاعب',
+          totalAmount: finalTotalWithExtra,
+          extraFee: extraFeeNum,
+          extraFeeReason: extraFeeNum > 0 ? 'تكلفة وقت إضافي تجاوز الساعة' : undefined,
+        });
+      } else if (checkoutMode === 'doctor_cash') {
+        billPhysioSession(selectedBookingForCheckout.id, {
+          billedTo: 'doctor',
+          paymentMethod: 'cash',
+          notes: checkoutNotes || 'سداد نقدي مباشر من الطبيب/الكوتش بالاستقبال',
+          totalAmount: finalTotalWithExtra,
+          extraFee: extraFeeNum,
+          extraFeeReason: extraFeeNum > 0 ? 'تكلفة وقت إضافي تجاوز الساعة' : undefined,
+        });
+      } else if (checkoutMode === 'instapay') {
+        billPhysioSession(selectedBookingForCheckout.id, {
+          billedTo: 'patient',
+          paymentMethod: 'instapay',
+          instapayRef: instapayRef.trim(),
+          notes: checkoutNotes || `تحويل انستاباي - كود: ${instapayRef.trim()}`,
+          totalAmount: finalTotalWithExtra,
+          extraFee: extraFeeNum,
+          extraFeeReason: extraFeeNum > 0 ? 'تكلفة وقت إضافي تجاوز الساعة' : undefined,
+        });
+      } else if (checkoutMode === 'coach_debt') {
+        billPhysioSession(selectedBookingForCheckout.id, {
+          billedTo: 'coach',
+          paymentMethod: 'coach_debt',
+          chargedToCoachId: selectedCoachForDebt,
+          notes: checkoutNotes || 'تحميل على حساب الكابتن كمديونية للجيم تسدد بنهاية الشهر',
+          totalAmount: finalTotalWithExtra,
+          extraFee: extraFeeNum,
+          extraFeeReason: extraFeeNum > 0 ? 'تكلفة وقت إضافي تجاوز الساعة' : undefined,
+        });
+      }
+
+      sounds.playCashRegister();
+      const settledBooking = {
+        ...selectedBookingForCheckout,
+        totalFee: selectedBookingForCheckout.totalFee + extraFeeNum,
+        paid: checkoutMode !== 'coach_debt',
+        paymentMethod: checkoutMode === 'coach_debt' ? ('coach_debt' as const) : checkoutMode === 'instapay' ? ('instapay' as const) : ('cash' as const),
+      };
+      setSelectedBookingForCheckout(null);
+      setSelectedBookingForReceipt(settledBooking);
+    } finally {
+      setIsSubmittingCheckout(false);
     }
-
-    sounds.playCashRegister();
-    const settledBooking = {
-      ...selectedBookingForCheckout,
-      totalFee: selectedBookingForCheckout.totalFee + checkoutExtraFee,
-      paid: checkoutMode !== 'coach_debt',
-      paymentMethod: checkoutMode === 'coach_debt' ? ('coach_debt' as const) : checkoutMode === 'instapay' ? ('instapay' as const) : ('cash' as const),
-    };
-    setSelectedBookingForCheckout(null);
-    setSelectedBookingForReceipt(settledBooking);
   };
 
   const waitingBookings = physioBookings.filter((b) => b.status === 'waiting');
@@ -823,9 +862,10 @@ export const PhysiotherapyPage: React.FC = () => {
               <div className="flex items-center gap-3 pt-2">
                 <button
                   type="submit"
-                  className="flex-1 py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition cursor-pointer shadow-lg shadow-amber-500/20"
+                  disabled={isSubmittingExtraFee}
+                  className="flex-1 py-3 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition cursor-pointer shadow-lg shadow-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  إضافة التكلفة وتحديث الفاتورة
+                  {isSubmittingExtraFee ? 'جارِ إضافة التكلفة...' : 'إضافة التكلفة وتحديث الفاتورة'}
                 </button>
                 <button
                   type="button"
@@ -1062,9 +1102,12 @@ export const PhysiotherapyPage: React.FC = () => {
               <div className="flex-shrink-0 pt-2 border-t border-slate-800 flex items-center gap-3">
                 <button
                   type="submit"
-                  className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 text-slate-950 font-black text-xs shadow-lg transition cursor-pointer"
+                  disabled={isSubmittingCheckout}
+                  className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 text-slate-950 font-black text-xs shadow-lg transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {checkoutMode === 'instapay'
+                  {isSubmittingCheckout
+                    ? 'جارِ إتمام الحساب وإنهاء الجلسة...'
+                    : checkoutMode === 'instapay'
                     ? 'تأكيد الدفع انستاباي وإصدار الفاتورة'
                     : checkoutMode === 'coach_debt'
                     ? 'تحميل المديونية على الكابتن لآخر الشهر'
@@ -1216,9 +1259,10 @@ export const PhysiotherapyPage: React.FC = () => {
               <div className="flex items-center gap-3 pt-3">
                 <button
                   type="submit"
-                  className="flex-1 py-3 px-4 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-black text-xs"
+                  disabled={isSubmittingBooking}
+                  className="flex-1 py-3 px-4 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-black text-xs disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                 >
-                  بدء الجلسة وتشغيل العداد
+                  {isSubmittingBooking ? 'جارِ بدء الجلسة...' : 'بدء الجلسة وتشغيل العداد'}
                 </button>
                 <button
                   type="button"

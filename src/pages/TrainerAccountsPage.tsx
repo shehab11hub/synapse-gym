@@ -140,6 +140,11 @@ export const TrainerAccountsPage: React.FC = () => {
     0
   );
 
+  // Form submission loading states (Double-Click Protection)
+  const [isSubmittingRepay, setIsSubmittingRepay] = useState(false);
+  const [isSubmittingTrx, setIsSubmittingTrx] = useState(false);
+  const [isSubmittingCoach, setIsSubmittingCoach] = useState(false);
+
   // Open Repay Modal
   const openRepayModal = (coach: Coach) => {
     setSelectedCoachForRepay(coach);
@@ -152,21 +157,32 @@ export const TrainerAccountsPage: React.FC = () => {
 
   const handleConfirmRepay = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedCoachForRepay || repayAmount <= 0) return;
+    if (!selectedCoachForRepay || isSubmittingRepay) return;
 
-    const res = repayCoachDebt(
-      selectedCoachForRepay.id,
-      Number(repayAmount),
-      repayMethod,
-      repayNotes,
-      currentUser?.name || 'الاستقبال'
-    );
+    const amount = Number(repayAmount);
+    if (isNaN(amount) || amount <= 0) {
+      alert('تنبيه: يرجى إدخال مبلغ سداد صحيح أكبر من الصفر');
+      return;
+    }
 
-    if (res.success) {
-      sounds.playCashRegister();
-      alert(`✅ تم تسجيل سداد مبلغ ${formatEGP(res.repaidAmount)} بنجاح، وتوريده فورياً إلى درج الخزينة وصفحة المصاريف!`);
-      setIsRepayModalOpen(false);
-      setSelectedCoachForRepay(null);
+    setIsSubmittingRepay(true);
+    try {
+      const res = repayCoachDebt(
+        selectedCoachForRepay.id,
+        amount,
+        repayMethod,
+        repayNotes,
+        currentUser?.name || 'الاستقبال'
+      );
+
+      if (res.success) {
+        sounds.playCashRegister();
+        alert(`✅ تم تسجيل سداد مبلغ ${formatEGP(res.repaidAmount)} بنجاح، وتوريده فورياً إلى درج الخزينة وصفحة المصاريف!`);
+        setIsRepayModalOpen(false);
+        setSelectedCoachForRepay(null);
+      }
+    } finally {
+      setIsSubmittingRepay(false);
     }
   };
 
@@ -201,6 +217,8 @@ export const TrainerAccountsPage: React.FC = () => {
   // Actions
   const handleCreateTransaction = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingTrx) return;
+
     if (!trxForm.coach_id) {
       alert('يرجى اختيار المدرب');
       return;
@@ -209,37 +227,43 @@ export const TrainerAccountsPage: React.FC = () => {
       alert('يرجى إدخال سبب وبيان الحركة اليدوية بوضوح');
       return;
     }
-    if (trxForm.amount <= 0) {
+    const amount = Number(trxForm.amount);
+    if (isNaN(amount) || amount <= 0) {
       alert('يرجى إدخال مبلغ صحيح أكبر من الصفر');
       return;
     }
 
-    const res = addCoachManualMovement({
-      coach_id: trxForm.coach_id,
-      movement_type: trxForm.movement_type,
-      amount: Number(trxForm.amount),
-      reason: trxForm.reason.trim(),
-      payment_method: trxForm.payment_method,
-      authorized_by: currentUser?.name || 'الاستقبال',
-    });
-
-    if (res.success) {
-      sounds.playCashRegister();
-      const msg =
-        trxForm.movement_type === 'payout'
-          ? `✅ تم صرف مبلغ ${formatEGP(trxForm.amount)} وخصمه أوتوماتيكياً من الدرج وقيده في المصاريف تحت بند (مستحقات ومدفوعات كباتن)!`
-          : trxForm.movement_type === 'deposit'
-          ? `✅ تم توريد مبلغ ${formatEGP(trxForm.amount)} وإضافته أوتوماتيكياً للدرج وقيده في الإيرادات بسجل سدادات الكباتن!`
-          : `✅ تم تحميل مبلغ ${formatEGP(trxForm.amount)} كمديونية على الكابتن وقيده في التقرير الشامل!`;
-      alert(msg);
-      setIsAddTransactionModalOpen(false);
-      setTrxForm({
-        coach_id: coaches[0]?.id || '',
-        amount: 500,
-        movement_type: 'payout',
-        reason: '',
-        payment_method: 'cash',
+    setIsSubmittingTrx(true);
+    try {
+      const res = addCoachManualMovement({
+        coach_id: trxForm.coach_id,
+        movement_type: trxForm.movement_type,
+        amount,
+        reason: trxForm.reason.trim(),
+        payment_method: trxForm.payment_method,
+        authorized_by: currentUser?.name || 'الاستقبال',
       });
+
+      if (res.success) {
+        sounds.playCashRegister();
+        const msg =
+          trxForm.movement_type === 'payout'
+            ? `✅ تم صرف مبلغ ${formatEGP(trxForm.amount)} وخصمه أوتوماتيكياً من الدرج وقيده في المصاريف تحت بند (مستحقات ومدفوعات كباتن)!`
+            : trxForm.movement_type === 'deposit'
+            ? `✅ تم توريد مبلغ ${formatEGP(trxForm.amount)} وإضافته أوتوماتيكياً للدرج وقيده في الإيرادات بسجل سدادات الكباتن!`
+            : `✅ تم تحميل مبلغ ${formatEGP(trxForm.amount)} كمديونية على الكابتن وقيده في التقرير الشامل!`;
+        alert(msg);
+        setIsAddTransactionModalOpen(false);
+        setTrxForm({
+          coach_id: coaches[0]?.id || '',
+          amount: 500,
+          movement_type: 'payout',
+          reason: '',
+          payment_method: 'cash',
+        });
+      }
+    } finally {
+      setIsSubmittingTrx(false);
     }
   };
 
@@ -260,29 +284,51 @@ export const TrainerAccountsPage: React.FC = () => {
 
   const handleCreateCoach = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newCoachForm.name) return;
+    if (!newCoachForm.name.trim() || isSubmittingCoach) return;
 
-    addCoach({
-      name: newCoachForm.name,
-      phone: newCoachForm.phone,
-      specialty: newCoachForm.specialty,
-      paymentType: newCoachForm.paymentType,
-      ratePerSession: Number(newCoachForm.ratePerSession),
-      monthlySalary: Number(newCoachForm.monthlySalary),
-      commissionRate: Number(newCoachForm.commissionRate),
-      active: true,
-    });
+    const ratePerSession = Number(newCoachForm.ratePerSession);
+    const monthlySalary = Number(newCoachForm.monthlySalary);
+    const commissionRate = Number(newCoachForm.commissionRate);
 
-    setIsAddCoachModalOpen(false);
-    setNewCoachForm({
-      name: '',
-      phone: '',
-      specialty: 'لياقة بدنية وكمال أجسام',
-      paymentType: 'per_session',
-      ratePerSession: 150,
-      monthlySalary: 6000,
-      commissionRate: 30,
-    });
+    if (isNaN(ratePerSession) || ratePerSession < 0) {
+      alert('تنبيه: أجر الحصة لا يمكن أن يكون سالباً');
+      return;
+    }
+    if (isNaN(monthlySalary) || monthlySalary < 0) {
+      alert('تنبيه: الراتب الشهري لا يمكن أن يكون سالباً');
+      return;
+    }
+    if (isNaN(commissionRate) || commissionRate < 0) {
+      alert('تنبيه: نسبة العمولة لا يمكن أن تكون سالبة');
+      return;
+    }
+
+    setIsSubmittingCoach(true);
+    try {
+      addCoach({
+        name: newCoachForm.name.trim(),
+        phone: newCoachForm.phone.trim(),
+        specialty: newCoachForm.specialty,
+        paymentType: newCoachForm.paymentType,
+        ratePerSession,
+        monthlySalary,
+        commissionRate,
+        active: true,
+      });
+
+      setIsAddCoachModalOpen(false);
+      setNewCoachForm({
+        name: '',
+        phone: '',
+        specialty: 'لياقة بدنية وكمال أجسام',
+        paymentType: 'per_session',
+        ratePerSession: 150,
+        monthlySalary: 6000,
+        commissionRate: 30,
+      });
+    } finally {
+      setIsSubmittingCoach(false);
+    }
   };
 
   // Filtered coaches for Overview Tab
@@ -981,9 +1027,10 @@ export const TrainerAccountsPage: React.FC = () => {
               <div className="flex items-center gap-3 pt-2">
                 <button
                   type="submit"
-                  className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer"
+                  disabled={isSubmittingRepay}
+                  className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  تأكيد استلام وتوريد السداد للدرج
+                  {isSubmittingRepay ? 'جارِ توريد السداد للدرج...' : 'تأكيد استلام وتوريد السداد للدرج'}
                 </button>
                 <button
                   type="button"
@@ -1075,9 +1122,10 @@ export const TrainerAccountsPage: React.FC = () => {
               <div className="flex items-center gap-3 pt-2">
                 <button
                   type="submit"
-                  className="flex-1 py-3 px-4 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-teal-500/20"
+                  disabled={isSubmittingCoach}
+                  className="flex-1 py-3 px-4 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-teal-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  حفظ وتسجيل المدرب
+                  {isSubmittingCoach ? 'جارِ حفظ المدرب...' : 'حفظ وتسجيل المدرب'}
                 </button>
                 <button
                   type="button"
@@ -1257,9 +1305,10 @@ export const TrainerAccountsPage: React.FC = () => {
               <div className="flex items-center gap-3 pt-2">
                 <button
                   type="submit"
-                  className="flex-1 py-3 px-4 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-teal-500/20"
+                  disabled={isSubmittingTrx}
+                  className="flex-1 py-3 px-4 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-teal-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  تأكيد وتسجيل الحركة اليدوية
+                  {isSubmittingTrx ? 'جارِ تسجيل الحركة اليدوية...' : 'تأكيد وتسجيل الحركة اليدوية'}
                 </button>
                 <button
                   type="button"

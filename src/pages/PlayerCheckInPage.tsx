@@ -477,10 +477,10 @@ export const PlayerCheckInPage: React.FC = () => {
                   <div className="p-4 rounded-2xl bg-rose-500/15 border-2 border-rose-500/40 text-rose-300 text-center space-y-2.5 animate-scale-up">
                     <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 font-bold text-xs border border-rose-500/30">
                       <AlertCircle className="w-4 h-4 text-rose-400" />
-                      <span>اشتراكك منتهي الصلاحية</span>
+                      <span>{subInfo.badgeText || 'اشتراكك منتهي الصلاحية'}</span>
                     </div>
                     <div className="text-sm font-black text-white">
-                      ⚠️ انتهى اشتراكك بتاريخ: <span className="text-rose-300">{subInfo.dateFormatted || 'سابقاً'}</span>
+                      ⚠️ {subInfo.fullText || (subInfo.dateFormatted ? `انتهى اشتراكك بتاريخ: ${subInfo.dateFormatted}` : 'انتهى اشتراكك')}
                     </div>
                     <p className="text-xs text-slate-300 leading-relaxed">
                       تم تسجيل وصولك وإشعار الاستقبال. يرجى التوجه لموظف الاستقبال الآن لتجديد باقة الاشتراك أو دفع تذكرة يومية لمتابعة تمرينك.

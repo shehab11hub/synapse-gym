@@ -10,14 +10,12 @@ import {
   CheckCircle2,
   AlertCircle,
   Sparkles,
-  UserPlus,
   Trash2,
   Stethoscope,
   Play,
   Square,
   RotateCcw,
   X,
-  Search,
 } from 'lucide-react';
 import { useGymData } from '../context/GymDataContext';
 import { GymSession, SessionCategory } from '../types';
@@ -32,7 +30,6 @@ export const SessionsPage: React.FC = () => {
     deleteSession,
     startSession,
     endSession,
-    assignPlayerToSession,
     removePlayerFromSession,
     toggleSessionCoachCompletion,
     toggleMemberAsDoctor,
@@ -40,8 +37,6 @@ export const SessionsPage: React.FC = () => {
 
   // Add Session modal state
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [selectedSessionForEnroll, setSelectedSessionForEnroll] = useState<string | null>(null);
-  const [enrollSearchQuery, setEnrollSearchQuery] = useState('');
 
   // New Session form (بدون إلزام بتوقيت محدد، زرار بداية ونهاية عند الطلب)
   const [form, setForm] = useState({
@@ -322,13 +317,6 @@ export const SessionsPage: React.FC = () => {
                     <Users className="w-3.5 h-3.5 text-teal-400" />
                     <span>اللاعبين بالحصة ({totalPlayersCount} لاعب - {enrolledPlayers.length} دائم + {temporaryPlayers.length} مؤقت)</span>
                   </div>
-                  <button
-                    onClick={() => setSelectedSessionForEnroll(session.id)}
-                    className="text-[11px] font-bold text-teal-400 hover:text-teal-300 flex items-center gap-1"
-                  >
-                    <UserPlus className="w-3.5 h-3.5" />
-                    <span>تسكين لاعب (دائم / مؤقت)</span>
-                  </button>
                 </div>
 
                 {totalPlayersCount > 0 ? (
@@ -399,7 +387,7 @@ export const SessionsPage: React.FC = () => {
                   </div>
                 ) : (
                   <div className="p-4 rounded-xl bg-slate-900/30 border border-dashed border-slate-800 text-center text-xs text-slate-500">
-                    لم يتم تسكين لاعبين بعد. اضغط "تسكين لاعب" لإضافته بصفة دائمة أو مؤقتة لحصة اليوم.
+                    لا يوجد لاعبين مسكنين بالحصة حالياً. يتم تسكين المتدربين من شاشة الاستقبال بعد سداد الرسوم أو الخصم من الباقة.
                   </div>
                 )}
               </div>
@@ -603,141 +591,6 @@ export const SessionsPage: React.FC = () => {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
-
-      {/* Enroll Player Modal (التسكين الدائم vs التسكين المؤقت لليوم) */}
-      {selectedSessionForEnroll && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-in fade-in">
-          <div className="bg-[#0f172a] border border-slate-700/80 rounded-3xl max-w-xl w-full max-h-[88vh] flex flex-col shadow-2xl overflow-hidden">
-            {/* Header */}
-            <div className="p-5 border-b border-slate-800 flex items-center justify-between shrink-0 bg-[#0f172a]">
-              <div>
-                <h3 className="text-base sm:text-lg font-black text-white">
-                  تسكين لاعب بالحصة
-                </h3>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  اختر بين <span className="text-teal-300 font-bold">تسكين دائم</span> (أسبوعي) أو <span className="text-amber-300 font-bold">تسكين مؤقت</span> (لحصة اليوم فقط)
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedSessionForEnroll(null);
-                  setEnrollSearchQuery('');
-                }}
-                className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
-                title="إغلاق"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Search Input */}
-            <div className="p-4 border-b border-slate-800/80 bg-slate-950/40 shrink-0">
-              <div className="relative">
-                <input
-                  type="text"
-                  value={enrollSearchQuery}
-                  onChange={(e) => setEnrollSearchQuery(e.target.value)}
-                  placeholder="ابحث عن لاعب بالاسم أو الكود أو رقم الهاتف..."
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-teal-500 transition"
-                />
-                <Search className="w-4 h-4 text-slate-500 absolute left-3 top-3 pointer-events-none" />
-              </div>
-            </div>
-
-            {/* Players List */}
-            <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-2.5 min-h-0">
-              {members
-                .filter((m) => {
-                  if (!enrollSearchQuery.trim()) return true;
-                  const q = enrollSearchQuery.trim().toLowerCase();
-                  return (
-                    m.name.toLowerCase().includes(q) ||
-                    m.code.toLowerCase().includes(q) ||
-                    m.phone.includes(q)
-                  );
-                })
-                .map((m) => {
-                  const targetSession = sessions.find((s) => s.id === selectedSessionForEnroll);
-                  const isPermanent = targetSession?.enrolledPlayerIds.includes(m.id);
-                  const isTemp = (targetSession?.temporaryPlayerIds || []).includes(m.id);
-
-                  return (
-                    <div
-                      key={m.id}
-                      className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 hover:border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs transition"
-                    >
-                      <div>
-                        <div className="font-bold text-white flex items-center gap-1.5">
-                          <span>{m.name}</span>
-                          {m.type === 'doctor' && (
-                            <span className="text-[9px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded font-bold">
-                              طبيب
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[11px] text-slate-400 font-mono mt-0.5">
-                          كود: {m.code} | متبقي: {m.remainingSessions} حصة | {m.subscriptionPlan}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2 shrink-0">
-                        {isPermanent ? (
-                          <span className="text-teal-400 font-bold text-xs bg-teal-500/10 px-3 py-1.5 rounded-xl border border-teal-500/30">
-                            ✓ مسجل دائم
-                          </span>
-                        ) : isTemp ? (
-                          <span className="text-amber-300 font-bold text-xs bg-amber-500/15 px-3 py-1.5 rounded-xl border border-amber-500/30">
-                            ⏱️ مسجل مؤقت لليوم
-                          </span>
-                        ) : (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                assignPlayerToSession(selectedSessionForEnroll, m.id, false);
-                                setSelectedSessionForEnroll(null);
-                                setEnrollSearchQuery('');
-                              }}
-                              className="px-3 py-1.5 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold text-xs transition cursor-pointer shadow-sm"
-                            >
-                              تسكين دائم
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                assignPlayerToSession(selectedSessionForEnroll, m.id, true);
-                                setSelectedSessionForEnroll(null);
-                                setEnrollSearchQuery('');
-                              }}
-                              className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-slate-950 border border-amber-500/40 font-bold text-xs transition cursor-pointer"
-                            >
-                              مؤقت اليوم
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-            </div>
-
-            {/* Footer */}
-            <div className="p-4 border-t border-slate-800 bg-[#0f172a] shrink-0">
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedSessionForEnroll(null);
-                  setEnrollSearchQuery('');
-                }}
-                className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs cursor-pointer transition"
-              >
-                إغلاق
-              </button>
-            </div>
           </div>
         </div>
       )}

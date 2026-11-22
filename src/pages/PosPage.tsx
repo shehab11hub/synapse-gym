@@ -66,6 +66,8 @@ export const PosPage: React.FC = () => {
 
   // Edit Product Modal state
   const [editingProduct, setEditingProduct] = useState<POSProduct | null>(null);
+  const [isProcessingSale, setIsProcessingSale] = useState(false);
+  const [isSavingProduct, setIsSavingProduct] = useState(false);
   const [editProductForm, setEditProductForm] = useState({
     name: '',
     category: 'supplements' as POSProduct['category'],
@@ -105,17 +107,39 @@ export const PosPage: React.FC = () => {
     }
     if (!editingProduct || !editProductForm.name) return;
 
-    updateProduct(editingProduct.id, {
-      name: editProductForm.name,
-      category: editProductForm.category,
-      buyPrice: Number(editProductForm.buyPrice),
-      sellPrice: Number(editProductForm.sellPrice),
-      stock: Number(editProductForm.stock),
-      lowStockThreshold: Number(editProductForm.lowStockThreshold),
-      barcode: editProductForm.barcode,
-    });
+    const buyPrice = Number(editProductForm.buyPrice);
+    const sellPrice = Number(editProductForm.sellPrice);
+    const stock = Number(editProductForm.stock);
+    const lowStock = Number(editProductForm.lowStockThreshold);
 
-    setEditingProduct(null);
+    if (isNaN(buyPrice) || buyPrice < 0) {
+      alert('تنبيه: سعر التكلفة لا يمكن أن يكون سالباً');
+      return;
+    }
+    if (isNaN(sellPrice) || sellPrice <= 0) {
+      alert('تنبيه: سعر البيع يجب أن يكون رقماً موجباً أكبر من صفر');
+      return;
+    }
+    if (isNaN(stock) || stock < 0) {
+      alert('تنبيه: كمية المخزون لا يمكن أن تكون سالبة');
+      return;
+    }
+
+    setIsSavingProduct(true);
+    try {
+      updateProduct(editingProduct.id, {
+        name: editProductForm.name.trim(),
+        category: editProductForm.category,
+        buyPrice,
+        sellPrice,
+        stock: Math.max(0, Math.floor(stock)),
+        lowStockThreshold: Math.max(0, Math.floor(lowStock || 0)),
+        barcode: editProductForm.barcode.trim(),
+      });
+      setEditingProduct(null);
+    } finally {
+      setIsSavingProduct(false);
+    }
   };
 
   const handleQuickRestock = (productId: string, quantityToAdd: number) => {
@@ -198,38 +222,48 @@ export const PosPage: React.FC = () => {
   };
 
   const handleCheckout = () => {
-    if (cart.length === 0) return;
+    if (cart.length === 0 || isProcessingSale) return;
 
-    const items: POSTransactionItem[] = cart.map((item) => ({
-      productId: item.product.id,
-      productName: item.product.name,
-      quantity: item.quantity,
-      unitPrice: item.product.sellPrice,
-      unitCost: item.product.buyPrice,
-      totalPrice: item.product.sellPrice * item.quantity,
-    }));
+    if (cartTotalAmount <= 0) {
+      alert('تنبيه: إجمالي الفاتورة يجب أن يكون أكبر من صفر');
+      return;
+    }
 
-    const tx = processSale({
-      items,
-      totalAmount: cartTotalAmount,
-      totalCost: cartTotalCost,
-      profit: cartProfit,
-      paymentMethod,
-      cashierName: currentUser?.name || 'الكاشير',
-    });
+    setIsProcessingSale(true);
+    try {
+      const items: POSTransactionItem[] = cart.map((item) => ({
+        productId: item.product.id,
+        productName: item.product.name,
+        quantity: Math.max(1, Math.floor(item.quantity)),
+        unitPrice: Math.max(0, item.product.sellPrice),
+        unitCost: Math.max(0, item.product.buyPrice),
+        totalPrice: Math.max(0, item.product.sellPrice * Math.max(1, Math.floor(item.quantity))),
+      }));
 
-    sounds.playCashRegister();
+      const tx = processSale({
+        items,
+        totalAmount: cartTotalAmount,
+        totalCost: cartTotalCost,
+        profit: cartProfit,
+        paymentMethod,
+        cashierName: currentUser?.name || 'الكاشير',
+      });
 
-    setReceiptData({
-      id: tx.id,
-      items: tx.items,
-      total: tx.totalAmount,
-      profit: tx.profit,
-      method: paymentMethod,
-      time: new Date().toLocaleTimeString('ar-EG'),
-    });
+      sounds.playCashRegister();
 
-    setCart([]);
+      setReceiptData({
+        id: tx.id,
+        items: tx.items,
+        total: tx.totalAmount,
+        profit: tx.profit,
+        method: paymentMethod,
+        time: new Date().toLocaleTimeString('ar-EG'),
+      });
+
+      setCart([]);
+    } finally {
+      setIsProcessingSale(false);
+    }
   };
 
   const handleCreateProduct = (e: React.FormEvent) => {
@@ -238,28 +272,51 @@ export const PosPage: React.FC = () => {
       alert('عفواً، إضافة وتعديل منتجات البار مقصور على حساب المدير فقط.');
       return;
     }
-    if (!newProductForm.name) return;
+    if (!newProductForm.name.trim() || isSavingProduct) return;
 
-    addProduct({
-      name: newProductForm.name,
-      category: newProductForm.category,
-      buyPrice: Number(newProductForm.buyPrice),
-      sellPrice: Number(newProductForm.sellPrice),
-      stock: Number(newProductForm.stock),
-      lowStockThreshold: Number(newProductForm.lowStockThreshold),
-      barcode: newProductForm.barcode || `BAR-${Math.floor(1000 + Math.random() * 9000)}`,
-    });
+    const buyPrice = Number(newProductForm.buyPrice);
+    const sellPrice = Number(newProductForm.sellPrice);
+    const stock = Number(newProductForm.stock);
+    const lowStock = Number(newProductForm.lowStockThreshold);
 
-    setIsAddProductModalOpen(false);
-    setNewProductForm({
-      name: '',
-      category: 'supplements',
-      buyPrice: 100,
-      sellPrice: 150,
-      stock: 20,
-      lowStockThreshold: 5,
-      barcode: '',
-    });
+    if (isNaN(buyPrice) || buyPrice < 0) {
+      alert('تنبيه: سعر التكلفة لا يمكن أن يكون سالباً');
+      return;
+    }
+    if (isNaN(sellPrice) || sellPrice <= 0) {
+      alert('تنبيه: سعر البيع يجب أن يكون رقماً موجباً أكبر من صفر');
+      return;
+    }
+    if (isNaN(stock) || stock < 0) {
+      alert('تنبيه: كمية المخزون لا يمكن أن تكون سالبة');
+      return;
+    }
+
+    setIsSavingProduct(true);
+    try {
+      addProduct({
+        name: newProductForm.name.trim(),
+        category: newProductForm.category,
+        buyPrice,
+        sellPrice,
+        stock: Math.max(0, Math.floor(stock)),
+        lowStockThreshold: Math.max(0, Math.floor(lowStock || 0)),
+        barcode: newProductForm.barcode || `BAR-${Math.floor(1000 + Math.random() * 9000)}`,
+      });
+
+      setIsAddProductModalOpen(false);
+      setNewProductForm({
+        name: '',
+        category: 'supplements',
+        buyPrice: 100,
+        sellPrice: 150,
+        stock: 20,
+        lowStockThreshold: 5,
+        barcode: '',
+      });
+    } finally {
+      setIsSavingProduct(false);
+    }
   };
 
   // Low stock & out of stock computation (strictly dynamically from products where stock <= 5)
@@ -769,11 +826,11 @@ export const PosPage: React.FC = () => {
               {/* Complete Sale Button */}
               <button
                 onClick={handleCheckout}
-                disabled={cart.length === 0}
+                disabled={cart.length === 0 || isProcessingSale}
                 className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black text-sm shadow-xl shadow-teal-500/20 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
               >
                 <CheckCircle2 className="w-5 h-5" />
-                <span>إتمام البيع وحفظ الربح الآن</span>
+                <span>{isProcessingSale ? 'جارِ إتمام المعاملة...' : 'إتمام البيع وحفظ الربح الآن'}</span>
               </button>
             </div>
           </div>

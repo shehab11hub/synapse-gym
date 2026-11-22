@@ -179,16 +179,33 @@ export function getSubscriptionStatus(member?: {
     };
   }
 
+  // 1b. Expired subscription (If session-based package has exhausted all sessions)
+  const hasExhaustedSessions = totalSessions > 0 && remainingSessions <= 0;
+  if (hasExhaustedSessions) {
+    return {
+      status: 'expired',
+      isExpired: true,
+      isActive: false,
+      badgeText: 'اشتراك منتهي (نفدت الحصص)',
+      fullText: 'اشتراك منتهي (تم استهلاك جميع الحصص 0 متبقية - يتطلب التجديد أو دفع تمرينة)',
+      color: 'rose',
+      dateFormatted,
+      remainingDays: Math.max(0, remainingDays),
+      remainingSessions: 0,
+    };
+  }
+
   // 2. Active duration subscription
   if (remainingDays > 0 && !isDatePast) {
+    const sessionsSuffix = totalSessions > 0 ? ` - ${remainingSessions} حصة` : '';
     return {
       status: 'active',
       isExpired: false,
       isActive: true,
-      badgeText: `ساري (${remainingDays} يوم)`,
+      badgeText: `ساري (${remainingDays} يوم${sessionsSuffix})`,
       fullText: dateFormatted
-        ? `اشتراك ساري حتى ${dateFormatted} (متبقي ${remainingDays} يوم)`
-        : `اشتراك ساري (متبقي ${remainingDays} يوم)`,
+        ? `اشتراك ساري حتى ${dateFormatted} (متبقي ${remainingDays} يوم${sessionsSuffix})`
+        : `اشتراك ساري (متبقي ${remainingDays} يوم${sessionsSuffix})`,
       color: 'emerald',
       dateFormatted,
       remainingDays,

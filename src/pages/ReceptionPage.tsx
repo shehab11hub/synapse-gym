@@ -85,6 +85,8 @@ export const ReceptionPage: React.FC = () => {
   // Seating & Routing Modal state (3 Distinct Business Pathways)
   const [isSeatingModalOpen, setIsSeatingModalOpen] = useState(false);
   const [selectedLogForSeating, setSelectedLogForSeating] = useState<CheckInLog | null>(null);
+  const [isSubmittingSeating, setIsSubmittingSeating] = useState(false);
+  const [isSubmittingMember, setIsSubmittingMember] = useState(false);
   const [seatingForm, setSeatingForm] = useState<{
     pathway: 'coach_debt' | 'gym_with_coach_share' | 'gym_direct_no_coach';
     sessionId: string;
@@ -256,136 +258,199 @@ export const ReceptionPage: React.FC = () => {
   // Confirm Seating & Routing Action
   const handleConfirmSeating = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedLogForSeating) return;
+    if (!selectedLogForSeating || isSubmittingSeating) return;
 
-    // 1. If subscribing right now from the modal in Pathway 3 (and not already triggered via button)
-    if (
-      seatingForm.pathway === 'gym_direct_no_coach' &&
-      seatingForm.directEntryType === 'new_subscription' &&
-      !seatingForm.isSubAlreadyRenewed
-    ) {
-      renewMemberSubscription(
-        selectedLogForSeating.memberId,
-        seatingForm.subPlanName,
-        Number(seatingForm.subDurationDays) || 30,
-        Number(seatingForm.subFee) || 0,
-        seatingForm.subPaymentMethod,
-        `اشتراك صالة من نافذة التسكين والتوجيه (${seatingForm.subPlanName})`
-      );
-    }
-
-    let targetCoachId = seatingForm.coachId;
-    let targetSessionId = seatingForm.sessionId;
-    let category: SessionCategory = 'group';
-
-    if (seatingForm.pathway === 'gym_direct_no_coach') {
-      targetCoachId = '';
-      targetSessionId = '';
-      category = 'gym';
-    } else {
-      const sess = sessions.find((s) => s.id === seatingForm.sessionId);
-      if (sess && sess.coachIds.length > 0) {
-        targetCoachId = sess.coachIds[0];
-      }
-      if (!targetCoachId && coaches.length > 0) {
-        targetCoachId = coaches[0].id;
-      }
-    }
-
-    const totalPaid = Number(seatingForm.amount) || 0;
-    let coachShare = 0;
-    if (seatingForm.pathway === 'gym_with_coach_share') {
-      if (seatingForm.coachShareType === 'fixed') {
-        coachShare = Math.min(totalPaid, Number(seatingForm.coachShareValue) || 0);
-      } else {
-        const pct = Number(seatingForm.coachShareValue) || 0;
-        coachShare = Math.round((totalPaid * pct) / 100);
-      }
-    }
-    const gymShare = Math.max(0, totalPaid - coachShare);
-
-    // If new subscription was created, renewMemberSubscription already recorded the payment in cashInflows and reports.
-    // For single pass, assignArrivedMember records the fee. For existing subscription, 0 is charged.
-    const paidAmount =
-      seatingForm.pathway === 'coach_debt'
-        ? 0
-        : seatingForm.pathway === 'gym_direct_no_coach'
-        ? (seatingForm.directEntryType === 'single_pass' ? totalPaid : 0)
-        : totalPaid;
-
-    assignArrivedMember(
-      selectedLogForSeating.id,
-      category,
-      targetCoachId,
-      targetSessionId || undefined,
-      seatingForm.notes,
-      {
-        seatingPathway: seatingForm.pathway,
-        paymentMode:
-          seatingForm.pathway === 'coach_debt'
-            ? 'coach_charge'
-            : (seatingForm.paymentMode === 'instapay' ? 'instapay' : 'cash_drawer'),
-        amount: paidAmount,
-        coachShareType: seatingForm.coachShareType,
-        coachShareValue: Number(seatingForm.coachShareValue) || 0,
-        coachShareAmount: coachShare,
-        gymShareAmount: gymShare,
-      }
+    const targetMember = members.find(
+      (m) => m.id === selectedLogForSeating.memberId || m.code === selectedLogForSeating.memberCode
     );
+    const subInfo = getSubscriptionStatus(targetMember);
 
-    setIsSeatingModalOpen(false);
-    setSelectedLogForSeating(null);
+    // 1. منع التسكين المجاني قطعياً في حال انتهاء الاشتراك أو نفاد رصيد الحصص (0 حصة)
+    if (seatingForm.pathway === 'gym_direct_no_coach' && seatingForm.directEntryType === 'existing_sub') {
+      if (!subInfo.isActive || subInfo.isExpired || (targetMember && (targetMember.totalSessions || 0) > 0 && (targetMember.remainingSessions || 0) <= 0)) {
+        alert('⚠️ تنبيه: اشتراك اللاعب منتهي أو نفدت حصصه بالكامل (0 حصة متبقية)! لا يمكن التسكين المجاني كاشتراك قائم. يرجى اختيار تجديد الاشتراك أو تحصيل تذكرة تمرينة يومية.');
+        return;
+      }
+    }
+
+    if (seatingForm.pathway === 'gym_direct_no_coach' && seatingForm.directEntryType === 'single_pass') {
+      const passAmount = Number(seatingForm.amount);
+      if (isNaN(passAmount) || passAmount <= 0) {
+        alert('تنبيه: يرجى تحديد سعر التذكرة اليومية (أكبر من 0)');
+        return;
+      }
+    }
+
+    if (seatingForm.pathway === 'gym_direct_no_coach' && seatingForm.directEntryType === 'new_subscription' && !seatingForm.isSubAlreadyRenewed) {
+      const subFee = Number(seatingForm.subFee);
+      const subDays = Number(seatingForm.subDurationDays);
+      if (isNaN(subFee) || subFee <= 0) {
+        alert('تنبيه: يرجى إدخال قيمة الاشتراك الجديد (أكبر من 0)');
+        return;
+      }
+      if (isNaN(subDays) || subDays <= 0) {
+        alert('تنبيه: مدة الاشتراك يجب أن تكون يوماً واحداً على الأقل');
+        return;
+      }
+    }
+
+    if (seatingForm.pathway === 'gym_with_coach_share') {
+      const sessionPrice = Number(seatingForm.amount);
+      if (isNaN(sessionPrice) || sessionPrice <= 0) {
+        alert('تنبيه: يرجى تحديد المبلغ المدفوع للحصة بالاستقبال (أكبر من 0)، أو اختيار مسار التحميل على الكابتن إذا كان الدفع مؤجلاً.');
+        return;
+      }
+    }
+
+    setIsSubmittingSeating(true);
+    try {
+      // If subscribing right now from the modal in Pathway 3 (and not already triggered via button)
+      if (
+        seatingForm.pathway === 'gym_direct_no_coach' &&
+        seatingForm.directEntryType === 'new_subscription' &&
+        !seatingForm.isSubAlreadyRenewed
+      ) {
+        renewMemberSubscription(
+          selectedLogForSeating.memberId,
+          seatingForm.subPlanName,
+          Number(seatingForm.subDurationDays) || 30,
+          Number(seatingForm.subFee) || 0,
+          seatingForm.subPaymentMethod,
+          `اشتراك صالة من نافذة التسكين والتوجيه (${seatingForm.subPlanName})`
+        );
+      }
+
+      let targetCoachId = seatingForm.coachId;
+      let targetSessionId = seatingForm.sessionId;
+      let category: SessionCategory = 'group';
+
+      if (seatingForm.pathway === 'gym_direct_no_coach') {
+        targetCoachId = '';
+        targetSessionId = '';
+        category = 'gym';
+      } else {
+        const sess = sessions.find((s) => s.id === seatingForm.sessionId);
+        if (sess && sess.coachIds.length > 0) {
+          targetCoachId = sess.coachIds[0];
+        }
+        if (!targetCoachId && coaches.length > 0) {
+          targetCoachId = coaches[0].id;
+        }
+      }
+
+      const totalPaid = Number(seatingForm.amount) || 0;
+      let coachShare = 0;
+      if (seatingForm.pathway === 'gym_with_coach_share') {
+        if (seatingForm.coachShareType === 'fixed') {
+          coachShare = Math.min(totalPaid, Number(seatingForm.coachShareValue) || 0);
+        } else {
+          const pct = Number(seatingForm.coachShareValue) || 0;
+          coachShare = Math.round((totalPaid * pct) / 100);
+        }
+      }
+      const gymShare = Math.max(0, totalPaid - coachShare);
+
+      // If new subscription was created, renewMemberSubscription already recorded the payment in cashInflows and reports.
+      // For single pass, assignArrivedMember records the fee. For existing subscription, 0 is charged.
+      const paidAmount =
+        seatingForm.pathway === 'coach_debt'
+          ? 0
+          : seatingForm.pathway === 'gym_direct_no_coach'
+          ? (seatingForm.directEntryType === 'single_pass' ? totalPaid : 0)
+          : totalPaid;
+
+      assignArrivedMember(
+        selectedLogForSeating.id,
+        category,
+        targetCoachId,
+        targetSessionId || undefined,
+        seatingForm.notes,
+        {
+          seatingPathway: seatingForm.pathway,
+          paymentMode:
+            seatingForm.pathway === 'coach_debt'
+              ? 'coach_charge'
+              : (seatingForm.paymentMode === 'instapay' ? 'instapay' : 'cash_drawer'),
+          amount: paidAmount,
+          coachShareType: seatingForm.coachShareType,
+          coachShareValue: Number(seatingForm.coachShareValue) || 0,
+          coachShareAmount: coachShare,
+          gymShareAmount: gymShare,
+        }
+      );
+
+      setIsSeatingModalOpen(false);
+      setSelectedLogForSeating(null);
+    } finally {
+      setIsSubmittingSeating(false);
+    }
   };
 
   // Add Member
   const handleCreateMember = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMemberForm.name || !newMemberForm.code) return;
+    if (!newMemberForm.name.trim() || !newMemberForm.code.trim() || isSubmittingMember) return;
 
-    const created = addMember({
-      name: newMemberForm.name,
-      phone: newMemberForm.phone,
-      code: newMemberForm.code.toUpperCase(),
-      subscriptionPlan: newMemberForm.subscriptionPlan,
-      subscriptionFee: Number(newMemberForm.subscriptionFee) || 0,
-      paymentMethod: newMemberForm.paymentMethod,
-      collectedByCoachId: newMemberForm.collectedByCoachId || undefined,
-      sessionCategory: newMemberForm.sessionCategory,
-      startDate: new Date().toISOString().slice(0, 10),
-      endDate: new Date(Date.now() + newMemberForm.totalDays * 86400000).toISOString().slice(0, 10),
-      totalDays: Number(newMemberForm.totalDays),
-      remainingDays: Number(newMemberForm.totalDays),
-      totalSessions: newMemberForm.sessionCategory === 'gym' ? 0 : (Number(newMemberForm.totalSessions) || 0),
-      remainingSessions: newMemberForm.sessionCategory === 'gym' ? 0 : (Number(newMemberForm.totalSessions) || 0),
-      type: newMemberForm.type,
-      active: true,
-    });
-
-    if (newMemberForm.assignedSessionId) {
-      assignPlayerToSession(
-        newMemberForm.assignedSessionId,
-        created.id,
-        newMemberForm.isTemporaryEnrollment
-      );
+    const fee = Number(newMemberForm.subscriptionFee);
+    const totalDays = Number(newMemberForm.totalDays);
+    if (isNaN(fee) || fee < 0) {
+      alert('تنبيه: قيمة الاشتراك لا يمكن أن تكون سالبة');
+      return;
+    }
+    if (isNaN(totalDays) || totalDays <= 0) {
+      alert('تنبيه: مدة الاشتراك يجب أن تكون يوماً واحداً على الأقل');
+      return;
     }
 
-    setIsAddMemberModalOpen(false);
-    setSelectedMember(created);
-    setNewMemberForm({
-      name: '',
-      phone: '',
-      code: generateUniqueMemberCode(members),
-      subscriptionPlan: 'اشتراك شهري لياقة عامة',
-      subscriptionFee: 500,
-      paymentMethod: 'coach_collected',
-      collectedByCoachId: '',
-      sessionCategory: 'gym',
-      assignedSessionId: '',
-      isTemporaryEnrollment: false,
-      totalDays: 30,
-      totalSessions: 12,
-      type: 'member',
-    });
+    setIsSubmittingMember(true);
+    try {
+      const created = addMember({
+        name: newMemberForm.name.trim(),
+        phone: newMemberForm.phone.trim(),
+        code: newMemberForm.code.trim().toUpperCase(),
+        subscriptionPlan: newMemberForm.subscriptionPlan,
+        subscriptionFee: fee || 0,
+        paymentMethod: newMemberForm.paymentMethod,
+        collectedByCoachId: newMemberForm.collectedByCoachId || undefined,
+        sessionCategory: newMemberForm.sessionCategory,
+        startDate: new Date().toISOString().slice(0, 10),
+        endDate: new Date(Date.now() + totalDays * 86400000).toISOString().slice(0, 10),
+        totalDays,
+        remainingDays: totalDays,
+        totalSessions: newMemberForm.sessionCategory === 'gym' ? 0 : (Number(newMemberForm.totalSessions) || 0),
+        remainingSessions: newMemberForm.sessionCategory === 'gym' ? 0 : (Number(newMemberForm.totalSessions) || 0),
+        type: newMemberForm.type,
+        active: true,
+      });
+
+      if (newMemberForm.assignedSessionId) {
+        assignPlayerToSession(
+          newMemberForm.assignedSessionId,
+          created.id,
+          newMemberForm.isTemporaryEnrollment
+        );
+      }
+
+      setIsAddMemberModalOpen(false);
+      setSelectedMember(created);
+      setNewMemberForm({
+        name: '',
+        phone: '',
+        code: generateUniqueMemberCode(members),
+        subscriptionPlan: 'اشتراك شهري لياقة عامة',
+        subscriptionFee: 500,
+        paymentMethod: 'coach_collected',
+        collectedByCoachId: '',
+        sessionCategory: 'gym',
+        assignedSessionId: '',
+        isTemporaryEnrollment: false,
+        totalDays: 30,
+        totalSessions: 12,
+        type: 'member',
+      });
+    } finally {
+      setIsSubmittingMember(false);
+    }
   };
 
   const minutesLeft = Math.floor(qrSecondsLeft / 60);
@@ -2010,10 +2075,11 @@ export const ReceptionPage: React.FC = () => {
               <div className="flex items-center gap-3 pt-4 mt-3 border-t border-slate-800 shrink-0">
                 <button
                   type="submit"
-                  className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black text-xs shadow-lg shadow-teal-500/20 transition cursor-pointer flex items-center justify-center gap-2"
+                  disabled={isSubmittingSeating}
+                  className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black text-xs shadow-lg shadow-teal-500/20 transition cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>تأكيد التسكين والتوجيه فوراً</span>
+                  <span>{isSubmittingSeating ? 'جارِ تأكيد التسكين والتوجيه...' : 'تأكيد التسكين والتوجيه فوراً'}</span>
                 </button>
                 <button
                   type="button"
@@ -2305,9 +2371,10 @@ export const ReceptionPage: React.FC = () => {
               <div className="flex items-center gap-3 pt-3">
                 <button
                   type="submit"
-                  className="flex-1 py-3 px-4 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-teal-500/20"
+                  disabled={isSubmittingMember}
+                  className="flex-1 py-3 px-4 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-teal-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  حفظ وتسجيل الاشتراك
+                  {isSubmittingMember ? 'جارِ حفظ وتسجيل الاشتراك...' : 'حفظ وتسجيل الاشتراك'}
                 </button>
                 <button
                   type="button"

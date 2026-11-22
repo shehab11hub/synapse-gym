@@ -109,6 +109,13 @@ export const ExpensesPage: React.FC = () => {
     notes: '',
   });
 
+  // Form submission loading states (Double-Click Protection)
+  const [isSubmittingExpense, setIsSubmittingExpense] = useState(false);
+  const [isSubmittingInflow, setIsSubmittingInflow] = useState(false);
+  const [isSubmittingMovement, setIsSubmittingMovement] = useState(false);
+  const [isSubmittingRenewal, setIsSubmittingRenewal] = useState(false);
+  const [isSubmittingNewMember, setIsSubmittingNewMember] = useState(false);
+
   // New Expense form
   const [expenseForm, setExpenseForm] = useState({
     title: '',
@@ -129,50 +136,72 @@ export const ExpensesPage: React.FC = () => {
 
   const handleCreateExpense = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!expenseForm.title || expenseForm.amount <= 0) return;
+    if (!expenseForm.title.trim() || isSubmittingExpense) return;
 
-    addExpense({
-      title: expenseForm.title,
-      category: expenseForm.category,
-      amount: Number(expenseForm.amount),
-      notes: expenseForm.notes,
-      paymentMethod: expenseForm.paymentMethod,
-      recordedBy: currentUser?.name || 'الاستقبال',
-    });
+    const amount = Number(expenseForm.amount);
+    if (isNaN(amount) || amount <= 0) {
+      alert('تنبيه: يرجى إدخال مبلغ مصروف صحيح أكبر من الصفر');
+      return;
+    }
 
-    sounds.playCashRegister();
-    setIsAddExpenseModalOpen(false);
-    setExpenseForm({
-      title: '',
-      category: 'maintenance',
-      amount: 100,
-      notes: '',
-      paymentMethod: 'cash',
-    });
+    setIsSubmittingExpense(true);
+    try {
+      addExpense({
+        title: expenseForm.title.trim(),
+        category: expenseForm.category,
+        amount,
+        notes: expenseForm.notes.trim(),
+        paymentMethod: expenseForm.paymentMethod,
+        recordedBy: currentUser?.name || 'الاستقبال',
+      });
+
+      sounds.playCashRegister();
+      setIsAddExpenseModalOpen(false);
+      setExpenseForm({
+        title: '',
+        category: 'maintenance',
+        amount: 100,
+        notes: '',
+        paymentMethod: 'cash',
+      });
+    } finally {
+      setIsSubmittingExpense(false);
+    }
   };
 
   const handleCreateCashDeposit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inflowForm.title || inflowForm.amount <= 0) return;
+    if (!inflowForm.title.trim() || isSubmittingInflow) return;
 
-    addCashInflow({
-      title: inflowForm.title,
-      type: 'manual_deposit',
-      amount: Number(inflowForm.amount),
-      memberName: inflowForm.memberName || 'إيداع بالخزينة',
-      paymentMethod: inflowForm.paymentMethod,
-      recordedBy: currentUser?.name || 'الاستقبال',
-    });
+    const amount = Number(inflowForm.amount);
+    if (isNaN(amount) || amount <= 0) {
+      alert('تنبيه: يرجى إدخال مبلغ إيداع صحيح أكبر من الصفر');
+      return;
+    }
 
-    sounds.playSuccessDing();
-    setIsCashDepositModalOpen(false);
-    setInflowForm({
-      title: '',
-      type: 'manual_deposit',
-      amount: 500,
-      memberName: '',
-      paymentMethod: 'cash',
-    });
+    setIsSubmittingInflow(true);
+    try {
+      addCashInflow({
+        title: inflowForm.title.trim(),
+        type: 'manual_deposit',
+        amount,
+        memberName: inflowForm.memberName.trim() || 'إيداع بالخزينة',
+        paymentMethod: inflowForm.paymentMethod,
+        recordedBy: currentUser?.name || 'الاستقبال',
+      });
+
+      sounds.playSuccessDing();
+      setIsCashDepositModalOpen(false);
+      setInflowForm({
+        title: '',
+        type: 'manual_deposit',
+        amount: 500,
+        memberName: '',
+        paymentMethod: 'cash',
+      });
+    } finally {
+      setIsSubmittingInflow(false);
+    }
   };
 
   const handleSelectMemberForRenewal = (m: Member) => {
@@ -189,118 +218,156 @@ export const ExpensesPage: React.FC = () => {
 
   const handleConfirmRenewal = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedMemberForRenewal) return;
+    if (!selectedMemberForRenewal || isSubmittingRenewal) return;
 
-    const res = renewMemberSubscription(
-      selectedMemberForRenewal.id,
-      renewalForm.planName,
-      Number(renewalForm.durationDays) || 30,
-      Number(renewalForm.fee) || 0,
-      renewalForm.paymentMethod,
-      renewalForm.notes || 'تجديد اشتراك من صفحة إدارة الدرج',
-      Number(renewalForm.sessionsCount) || undefined
-    );
+    const fee = Number(renewalForm.fee);
+    const durationDays = Number(renewalForm.durationDays);
+    if (isNaN(fee) || fee < 0) {
+      alert('تنبيه: قيمة الاشتراك لا يمكن أن تكون سالبة');
+      return;
+    }
+    if (isNaN(durationDays) || durationDays <= 0) {
+      alert('تنبيه: مدة الاشتراك يجب أن تكون يوماً واحداً على الأقل');
+      return;
+    }
 
-    if (res.success && res.member) {
-      setIsSubscriptionModalOpen(false);
-      setSelectedMemberForRenewal(null);
-      setMemberSearchQuery('');
+    setIsSubmittingRenewal(true);
+    try {
+      const res = renewMemberSubscription(
+        selectedMemberForRenewal.id,
+        renewalForm.planName,
+        durationDays || 30,
+        fee || 0,
+        renewalForm.paymentMethod,
+        renewalForm.notes || 'تجديد اشتراك من صفحة إدارة الدرج',
+        Number(renewalForm.sessionsCount) || undefined
+      );
 
-      // Generate Personalized Member QR code
-      const baseUrl = typeof window !== 'undefined' && window.location.origin ? window.location.origin : '';
-      const bindUrl = `${baseUrl}/checkin?code=${res.member.code}&bind=true&t=${Date.now()}`;
-      const qrData = await generateQRDataUrl(bindUrl);
-      setQrModalMember(res.member);
-      setQrModalUrl(qrData);
-      sounds.playSuccessDing();
+      if (res.success && res.member) {
+        setIsSubscriptionModalOpen(false);
+        setSelectedMemberForRenewal(null);
+        setMemberSearchQuery('');
+
+        // Generate Personalized Member QR code
+        const baseUrl = typeof window !== 'undefined' && window.location.origin ? window.location.origin : '';
+        const bindUrl = `${baseUrl}/checkin?code=${res.member.code}&bind=true&t=${Date.now()}`;
+        const qrData = await generateQRDataUrl(bindUrl);
+        setQrModalMember(res.member);
+        setQrModalUrl(qrData);
+        sounds.playSuccessDing();
+      }
+    } finally {
+      setIsSubmittingRenewal(false);
     }
   };
 
   const handleConfirmNewMember = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMemberForm.name.trim() || !newMemberForm.phone.trim()) {
+    if (!newMemberForm.name.trim() || !newMemberForm.phone.trim() || isSubmittingNewMember) {
       alert('يرجى إدخال اسم اللاعب ورقم الهاتف بالكامل');
       return;
     }
 
-    const durationDays = Number(newMemberForm.totalDays) || 30;
-    const fee = Number(newMemberForm.fee) || 0;
-    const startDate = new Date().toISOString().split('T')[0];
-    const endDate = new Date(Date.now() + durationDays * 86400000).toISOString().split('T')[0];
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const durationDays = Number(newMemberForm.totalDays);
+    const fee = Number(newMemberForm.fee);
+    if (isNaN(fee) || fee < 0) {
+      alert('تنبيه: قيمة الاشتراك لا يمكن أن تكون سالبة');
+      return;
+    }
+    if (isNaN(durationDays) || durationDays <= 0) {
+      alert('تنبيه: مدة الاشتراك يجب أن تكون يوماً واحداً على الأقل');
+      return;
+    }
 
-    const created = addMember({
-      code,
-      name: newMemberForm.name.trim(),
-      phone: newMemberForm.phone.trim(),
-      age: Number(newMemberForm.age) || undefined,
-      residentialArea: newMemberForm.residentialArea.trim() || undefined,
-      type: 'member',
-      subscriptionPlan: newMemberForm.subscriptionPlan,
-      subscriptionFee: fee,
-      paymentMethod: newMemberForm.paymentMethod,
-      paymentStatus: 'paid',
-      sessionCategory: newMemberForm.sessionCategory,
-      startDate,
-      endDate,
-      totalDays: durationDays,
-      remainingDays: durationDays,
-      totalSessions: newMemberForm.sessionCategory === 'gym' ? 0 : (Number(newMemberForm.totalSessions) || 0),
-      remainingSessions: newMemberForm.sessionCategory === 'gym' ? 0 : (Number(newMemberForm.totalSessions) || 0),
-      active: true,
-      notes: newMemberForm.notes || 'تسجيل اشتراك جديد من صفحة إدارة الدرج',
-    });
+    setIsSubmittingNewMember(true);
+    try {
+      const startDate = new Date().toISOString().split('T')[0];
+      const endDate = new Date(Date.now() + durationDays * 86400000).toISOString().split('T')[0];
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
 
-    setIsSubscriptionModalOpen(false);
-    setNewMemberForm({
-      name: '',
-      phone: '',
-      age: 22,
-      residentialArea: '',
-      sessionCategory: 'gym',
-      subscriptionPlan: 'اشتراك شهري صالة الجيم (30 يوم)',
-      totalDays: 30,
-      totalSessions: 0,
-      fee: 500,
-      paymentMethod: 'cash',
-      notes: '',
-    });
+      const created = addMember({
+        code,
+        name: newMemberForm.name.trim(),
+        phone: newMemberForm.phone.trim(),
+        age: Number(newMemberForm.age) || undefined,
+        residentialArea: newMemberForm.residentialArea.trim() || undefined,
+        type: 'member',
+        subscriptionPlan: newMemberForm.subscriptionPlan,
+        subscriptionFee: fee,
+        paymentMethod: newMemberForm.paymentMethod,
+        paymentStatus: 'paid',
+        sessionCategory: newMemberForm.sessionCategory,
+        startDate,
+        endDate,
+        totalDays: durationDays,
+        remainingDays: durationDays,
+        totalSessions: newMemberForm.sessionCategory === 'gym' ? 0 : (Number(newMemberForm.totalSessions) || 0),
+        remainingSessions: newMemberForm.sessionCategory === 'gym' ? 0 : (Number(newMemberForm.totalSessions) || 0),
+        active: true,
+        notes: newMemberForm.notes || 'تسجيل اشتراك جديد من صفحة إدارة الدرج',
+      });
 
-    // Generate Personalized Member QR code
-    const baseUrl = typeof window !== 'undefined' && window.location.origin ? window.location.origin : '';
-    const bindUrl = `${baseUrl}/checkin?code=${created.code}&bind=true&t=${Date.now()}`;
-    const qrData = await generateQRDataUrl(bindUrl);
-    setQrModalMember(created);
-    setQrModalUrl(qrData);
-    sounds.playSuccessDing();
+      setIsSubscriptionModalOpen(false);
+      setNewMemberForm({
+        name: '',
+        phone: '',
+        age: 22,
+        residentialArea: '',
+        sessionCategory: 'gym',
+        subscriptionPlan: 'اشتراك شهري صالة الجيم (30 يوم)',
+        totalDays: 30,
+        totalSessions: 0,
+        fee: 500,
+        paymentMethod: 'cash',
+        notes: '',
+      });
+
+      // Generate Personalized Member QR code
+      const baseUrl = typeof window !== 'undefined' && window.location.origin ? window.location.origin : '';
+      const bindUrl = `${baseUrl}/checkin?code=${created.code}&bind=true&t=${Date.now()}`;
+      const qrData = await generateQRDataUrl(bindUrl);
+      setQrModalMember(created);
+      setQrModalUrl(qrData);
+      sounds.playSuccessDing();
+    } finally {
+      setIsSubmittingNewMember(false);
+    }
   };
 
   const handleManualMovementSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingMovement) return;
+
     if (!manualMovementForm.title.trim()) {
       alert('يرجى إدخال سبب أو بيان تسوية العهدة بوضوح لضمان دقة التقارير المالية واليومية.');
       return;
     }
-    if (manualMovementForm.amount <= 0) {
+    const amount = Number(manualMovementForm.amount);
+    if (isNaN(amount) || amount <= 0) {
       alert('يرجى إدخال مبلغ صحيح أكبر من الصفر');
       return;
     }
 
-    addManualCashMovement(
-      manualMovementForm.type,
-      Number(manualMovementForm.amount),
-      manualMovementForm.title.trim(),
-      manualMovementForm.notes
-    );
+    setIsSubmittingMovement(true);
+    try {
+      addManualCashMovement(
+        manualMovementForm.type,
+        amount,
+        manualMovementForm.title.trim(),
+        manualMovementForm.notes
+      );
 
-    sounds.playCashRegister();
-    setIsManualMovementModalOpen(false);
-    setManualMovementForm({
-      type: 'deposit',
-      title: '',
-      amount: 200,
-      notes: '',
-    });
+      sounds.playCashRegister();
+      setIsManualMovementModalOpen(false);
+      setManualMovementForm({
+        type: 'deposit',
+        title: '',
+        amount: 200,
+        notes: '',
+      });
+    } finally {
+      setIsSubmittingMovement(false);
+    }
   };
 
   const getCategoryIcon = (cat: ExpenseCategory) => {
@@ -859,9 +926,10 @@ export const ExpensesPage: React.FC = () => {
               <div className="flex items-center gap-3 pt-3">
                 <button
                   type="submit"
-                  className="flex-1 py-3 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs shadow-lg shadow-rose-600/20"
+                  disabled={isSubmittingExpense}
+                  className="flex-1 py-3 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs shadow-lg shadow-rose-600/20 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                 >
-                  حفظ وخصم من الدرج
+                  {isSubmittingExpense ? 'جارِ الخصم والتسجيل...' : 'حفظ وخصم من الدرج'}
                 </button>
                 <button
                   type="button"
@@ -938,9 +1006,10 @@ export const ExpensesPage: React.FC = () => {
               <div className="flex items-center gap-3 pt-3">
                 <button
                   type="submit"
-                  className="flex-1 py-3 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs shadow-lg shadow-emerald-500/20 cursor-pointer"
+                  disabled={isSubmittingInflow}
+                  className="flex-1 py-3 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs shadow-lg shadow-emerald-500/20 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  إيداع وإضافة لرصيد الدرج
+                  {isSubmittingInflow ? 'جارِ الإيداع...' : 'إيداع وإضافة لرصيد الدرج'}
                 </button>
                 <button
                   type="button"
@@ -1162,10 +1231,11 @@ export const ExpensesPage: React.FC = () => {
 
                     <button
                       type="submit"
-                      className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer flex items-center justify-center gap-2"
+                      disabled={isSubmittingRenewal}
+                      className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <QrCode className="w-4 h-4" />
-                      <span>تأكيد تجديد الاشتراك وتوليد QR كود للعميل</span>
+                      <span>{isSubmittingRenewal ? 'جارِ تجديد الاشتراك...' : 'تأكيد تجديد الاشتراك وتوليد QR كود للعميل'}</span>
                     </button>
                   </form>
                 ) : (
@@ -1327,10 +1397,11 @@ export const ExpensesPage: React.FC = () => {
 
                 <button
                   type="submit"
-                  className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer flex items-center justify-center gap-2 mt-2"
+                  disabled={isSubmittingNewMember}
+                  className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer flex items-center justify-center gap-2 mt-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <UserPlus className="w-4 h-4" />
-                  <span>تسجيل العضو الجديد وتوليد QR كود الربط الخاص به</span>
+                  <span>{isSubmittingNewMember ? 'جارِ تسجيل العضو وتوليد QR...' : 'تسجيل العضو الجديد وتوليد QR كود الربط الخاص به'}</span>
                 </button>
               </form>
             )}
@@ -1477,9 +1548,10 @@ export const ExpensesPage: React.FC = () => {
               <div className="flex items-center gap-3 pt-3">
                 <button
                   type="submit"
-                  className="flex-1 py-3 px-4 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-cyan-500/20"
+                  disabled={isSubmittingMovement}
+                  className="flex-1 py-3 px-4 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black text-xs cursor-pointer shadow-lg shadow-cyan-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  تأكيد وتسجيل الحركة
+                  {isSubmittingMovement ? 'جارِ تسجيل الحركة...' : 'تأكيد وتسجيل الحركة'}
                 </button>
                 <button
                   type="button"

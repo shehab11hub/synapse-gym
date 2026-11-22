@@ -608,6 +608,16 @@ export const supabaseService = {
     }
   },
 
+  async deleteTrainerTransaction(transactionId: string): Promise<boolean> {
+    if (!isSupabaseConfigured || !supabase) return false;
+    try {
+      const { error } = await supabase.from('trainer_transactions').delete().eq('transaction_id', transactionId);
+      return !error;
+    } catch {
+      return false;
+    }
+  },
+
   async clearSettledTrainerTransactions(): Promise<boolean> {
     if (!isSupabaseConfigured || !supabase) return false;
     try {
@@ -706,6 +716,16 @@ export const supabaseService = {
         payment_method: i.paymentMethod,
         recorded_by: i.recordedBy,
       });
+      return !error;
+    } catch {
+      return false;
+    }
+  },
+
+  async deleteCashInflow(id: string): Promise<boolean> {
+    if (!isSupabaseConfigured || !supabase) return false;
+    try {
+      const { error } = await supabase.from('cash_inflows').delete().eq('id', id);
       return !error;
     } catch {
       return false;

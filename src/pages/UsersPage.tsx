@@ -10,6 +10,7 @@ import {
   Trash2,
   Sparkles,
   ShieldAlert,
+  AlertCircle,
   Eye,
   Check,
 } from 'lucide-react';
@@ -18,6 +19,20 @@ import { UserRole } from '../types';
 
 export const UsersPage: React.FC = () => {
   const { users, addUser, deleteUser, updateUserStatus, currentUser } = useAuth();
+
+  if (currentUser?.role !== 'admin') {
+    return (
+      <div className="p-8 max-w-xl mx-auto my-20 text-center bg-[#0f172a] border border-slate-800 rounded-3xl p-8 shadow-2xl" dir="rtl">
+        <div className="w-16 h-16 rounded-2xl bg-rose-500/10 text-rose-400 mx-auto mb-4 flex items-center justify-center">
+          <AlertCircle className="w-8 h-8" />
+        </div>
+        <h3 className="text-lg font-black text-white mb-2">صفحة مخصصة للمدير العام فقط</h3>
+        <p className="text-xs text-slate-400 leading-relaxed">
+          عفواً، شاشة إدارة المستخدمين والصلاحيات مقتصرة حصرياً على صلاحيات المدير العام (Admin).
+        </p>
+      </div>
+    );
+  }
 
   const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
   const [form, setForm] = useState({

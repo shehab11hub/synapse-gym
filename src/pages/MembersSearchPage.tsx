@@ -164,111 +164,151 @@ export const MembersSearchPage: React.FC = () => {
     }
   };
 
+  // Submission loading states (Double-Click Protection)
+  const [isSubmittingRenewal, setIsSubmittingRenewal] = useState(false);
+  const [isSubmittingNewMember, setIsSubmittingNewMember] = useState(false);
+  const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
+
   // Submit Renewal
   const handleRenewalSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!renewalMember) return;
+    if (!renewalMember || isSubmittingRenewal) return;
 
-    const res = renewMemberSubscription(
-      renewalMember.id,
-      renewalForm.planName,
-      Number(renewalForm.durationDays) || 30,
-      Number(renewalForm.fee) || 0,
-      renewalForm.paymentMethod,
-      renewalForm.notes || 'تجديد اشتراك من دليل الأعضاء',
-      Number(renewalForm.sessionsCount) || undefined
-    );
+    const fee = Number(renewalForm.fee);
+    const durationDays = Number(renewalForm.durationDays);
+    if (isNaN(fee) || fee < 0) {
+      alert('تنبيه: قيمة الاشتراك لا يمكن أن تكون سالبة');
+      return;
+    }
+    if (isNaN(durationDays) || durationDays <= 0) {
+      alert('تنبيه: مدة الاشتراك يجب أن تكون يوماً واحداً على الأقل');
+      return;
+    }
 
-    if (res.success && res.member) {
-      const updated = res.member;
-      setRenewalMember(null);
-      // Generate QR for renewed member
-      const baseUrl = typeof window !== 'undefined' && window.location.origin ? window.location.origin : '';
-      const bindUrl = `${baseUrl}/checkin?code=${updated.code}&bind=true&t=${Date.now()}`;
-      const qrData = await generateQRDataUrl(bindUrl);
-      setQrModalMember(updated);
-      setQrModalUrl(qrData);
-      sounds.playSuccessDing();
+    setIsSubmittingRenewal(true);
+    try {
+      const res = renewMemberSubscription(
+        renewalMember.id,
+        renewalForm.planName,
+        durationDays || 30,
+        fee || 0,
+        renewalForm.paymentMethod,
+        renewalForm.notes || 'تجديد اشتراك من دليل الأعضاء',
+        Number(renewalForm.sessionsCount) || undefined
+      );
+
+      if (res.success && res.member) {
+        const updated = res.member;
+        setRenewalMember(null);
+        // Generate QR for renewed member
+        const baseUrl = typeof window !== 'undefined' && window.location.origin ? window.location.origin : '';
+        const bindUrl = `${baseUrl}/checkin?code=${updated.code}&bind=true&t=${Date.now()}`;
+        const qrData = await generateQRDataUrl(bindUrl);
+        setQrModalMember(updated);
+        setQrModalUrl(qrData);
+        sounds.playSuccessDing();
+      }
+    } finally {
+      setIsSubmittingRenewal(false);
     }
   };
 
   // Submit Edit Member
   const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingMember) return;
+    if (!editingMember || isSubmittingEdit) return;
 
-    updateMember(editingMember.id, {
-      name: editForm.name.trim(),
-      phone: editForm.phone.trim(),
-      age: Number(editForm.age) || undefined,
-      residentialArea: editForm.residentialArea.trim() || undefined,
-      notes: editForm.notes.trim() || undefined,
-    });
+    setIsSubmittingEdit(true);
+    try {
+      updateMember(editingMember.id, {
+        name: editForm.name.trim(),
+        phone: editForm.phone.trim(),
+        age: Number(editForm.age) || undefined,
+        residentialArea: editForm.residentialArea.trim() || undefined,
+        notes: editForm.notes.trim() || undefined,
+      });
 
-    setEditingMember(null);
-    sounds.playSuccessDing();
-    setActionNotice('تم تحديث بيانات العضو بنجاح');
-    setTimeout(() => setActionNotice(null), 3000);
+      setEditingMember(null);
+      sounds.playSuccessDing();
+      setActionNotice('تم تحديث بيانات العضو بنجاح');
+      setTimeout(() => setActionNotice(null), 3000);
+    } finally {
+      setIsSubmittingEdit(false);
+    }
   };
 
   // Submit New Member
   const handleNewMemberSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMemberForm.name.trim() || !newMemberForm.phone.trim()) {
+    if (!newMemberForm.name.trim() || !newMemberForm.phone.trim() || isSubmittingNewMember) {
       alert('يرجى إدخال اسم العضو ورقم الهاتف');
       return;
     }
 
-    const durationDays = Number(newMemberForm.totalDays) || 30;
-    const fee = Number(newMemberForm.fee) || 0;
-    const startDate = new Date().toISOString().split('T')[0];
-    const endDate = new Date(Date.now() + durationDays * 86400000).toISOString().split('T')[0];
-    const code = generateUniqueMemberCode(members);
+    const durationDays = Number(newMemberForm.totalDays);
+    const fee = Number(newMemberForm.fee);
+    if (isNaN(fee) || fee < 0) {
+      alert('تنبيه: قيمة الاشتراك لا يمكن أن تكون سالبة');
+      return;
+    }
+    if (isNaN(durationDays) || durationDays <= 0) {
+      alert('تنبيه: مدة الاشتراك يجب أن تكون يوماً واحداً على الأقل');
+      return;
+    }
 
-    const created = addMember({
-      code,
-      name: newMemberForm.name.trim(),
-      phone: newMemberForm.phone.trim(),
-      age: Number(newMemberForm.age) || undefined,
-      residentialArea: newMemberForm.residentialArea.trim() || undefined,
-      type: 'member',
-      subscriptionPlan: newMemberForm.subscriptionPlan,
-      subscriptionFee: fee,
-      paymentMethod: newMemberForm.paymentMethod,
-      paymentStatus: 'paid',
-      sessionCategory: newMemberForm.sessionCategory,
-      startDate,
-      endDate,
-      totalDays: durationDays,
-      remainingDays: durationDays,
-      totalSessions: newMemberForm.sessionCategory === 'gym' ? 0 : (Number(newMemberForm.totalSessions) || 0),
-      remainingSessions: newMemberForm.sessionCategory === 'gym' ? 0 : (Number(newMemberForm.totalSessions) || 0),
-      active: true,
-      notes: newMemberForm.notes || 'تسجيل عضو جديد من دليل وبحث الأعضاء',
-    });
+    setIsSubmittingNewMember(true);
+    try {
+      const startDate = new Date().toISOString().split('T')[0];
+      const endDate = new Date(Date.now() + durationDays * 86400000).toISOString().split('T')[0];
+      const code = generateUniqueMemberCode(members);
 
-    setIsNewMemberModalOpen(false);
-    setNewMemberForm({
-      name: '',
-      phone: '',
-      age: 22,
-      residentialArea: '',
-      sessionCategory: 'gym',
-      subscriptionPlan: 'اشتراك شهري صالة الجيم (30 يوم)',
-      totalDays: 30,
-      totalSessions: 0,
-      fee: 500,
-      paymentMethod: 'cash',
-      notes: '',
-    });
+      const created = addMember({
+        code,
+        name: newMemberForm.name.trim(),
+        phone: newMemberForm.phone.trim(),
+        age: Number(newMemberForm.age) || undefined,
+        residentialArea: newMemberForm.residentialArea.trim() || undefined,
+        type: 'member',
+        subscriptionPlan: newMemberForm.subscriptionPlan,
+        subscriptionFee: fee,
+        paymentMethod: newMemberForm.paymentMethod,
+        paymentStatus: 'paid',
+        sessionCategory: newMemberForm.sessionCategory,
+        startDate,
+        endDate,
+        totalDays: durationDays,
+        remainingDays: durationDays,
+        totalSessions: newMemberForm.sessionCategory === 'gym' ? 0 : (Number(newMemberForm.totalSessions) || 0),
+        remainingSessions: newMemberForm.sessionCategory === 'gym' ? 0 : (Number(newMemberForm.totalSessions) || 0),
+        active: true,
+        notes: newMemberForm.notes || 'تسجيل عضو جديد من دليل وبحث الأعضاء',
+      });
 
-    // Generate personalized QR code immediately
-    const baseUrl = typeof window !== 'undefined' && window.location.origin ? window.location.origin : '';
-    const bindUrl = `${baseUrl}/checkin?code=${created.code}&bind=true&t=${Date.now()}`;
-    const qrData = await generateQRDataUrl(bindUrl);
-    setQrModalMember(created);
-    setQrModalUrl(qrData);
-    sounds.playSuccessDing();
+      setIsNewMemberModalOpen(false);
+      setNewMemberForm({
+        name: '',
+        phone: '',
+        age: 22,
+        residentialArea: '',
+        sessionCategory: 'gym',
+        subscriptionPlan: 'اشتراك شهري صالة الجيم (30 يوم)',
+        totalDays: 30,
+        totalSessions: 0,
+        fee: 500,
+        paymentMethod: 'cash',
+        notes: '',
+      });
+
+      // Generate Personalized Member QR code
+      const baseUrl = typeof window !== 'undefined' && window.location.origin ? window.location.origin : '';
+      const bindUrl = `${baseUrl}/checkin?code=${created.code}&bind=true&t=${Date.now()}`;
+      const qrData = await generateQRDataUrl(bindUrl);
+      setQrModalMember(created);
+      setQrModalUrl(qrData);
+      sounds.playSuccessDing();
+    } finally {
+      setIsSubmittingNewMember(false);
+    }
   };
 
   return (
@@ -758,10 +798,11 @@ export const MembersSearchPage: React.FC = () => {
 
               <button
                 type="submit"
-                className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black text-sm shadow-xl shadow-teal-500/20 transition flex items-center justify-center gap-2 cursor-pointer"
+                disabled={isSubmittingRenewal}
+                className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black text-sm shadow-xl shadow-teal-500/20 transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <CheckCircle className="w-4 h-4" />
-                <span>تأكيد التجديد وتوريد النقدية للدرج وعرض الـ QR</span>
+                <span>{isSubmittingRenewal ? 'جارِ تأكيد التجديد وتوريد النقدية...' : 'تأكيد التجديد وتوريد النقدية للدرج وعرض الـ QR'}</span>
               </button>
             </form>
           </div>
@@ -860,9 +901,10 @@ export const MembersSearchPage: React.FC = () => {
 
               <button
                 type="submit"
-                className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-400 hover:to-cyan-400 text-slate-950 font-black text-xs shadow-lg shadow-teal-500/20 transition cursor-pointer"
+                disabled={isSubmittingEdit}
+                className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-400 hover:to-cyan-400 text-slate-950 font-black text-xs shadow-lg shadow-teal-500/20 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                حفظ التعديلات
+                {isSubmittingEdit ? 'جارِ حفظ التعديلات...' : 'حفظ التعديلات'}
               </button>
             </form>
           </div>
@@ -1039,10 +1081,11 @@ export const MembersSearchPage: React.FC = () => {
 
               <button
                 type="submit"
-                className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black text-sm shadow-xl shadow-teal-500/20 transition flex items-center justify-center gap-2 cursor-pointer"
+                disabled={isSubmittingNewMember}
+                className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black text-sm shadow-xl shadow-teal-500/20 transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <CheckCircle className="w-4 h-4" />
-                <span>حفظ العضوية وتوليد كود الـ QR الخاص باللاعب</span>
+                <span>{isSubmittingNewMember ? 'جارِ حفظ العضوية وتوليد كود الـ QR...' : 'حفظ العضوية وتوليد كود الـ QR الخاص باللاعب'}</span>
               </button>
             </form>
           </div>

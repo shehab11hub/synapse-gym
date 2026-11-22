@@ -32,6 +32,7 @@ import {
 import { sounds } from '../utils/sound';
 import { supabaseService } from '../services/supabaseService';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
+import { getSubscriptionStatus } from '../utils/formatters';
 
 export const generateUniqueMemberCode = (existingMembers: Member[]): string => {
   const existingCodes = new Set(existingMembers.map((m) => m.code?.toUpperCase()));
@@ -151,6 +152,7 @@ interface GymDataContextType {
   addExpense: (expense: Omit<ExpenseItem, 'id' | 'date'>) => ExpenseItem;
   deleteExpense: (id: string) => void;
   addCashInflow: (inflow: Omit<CashInflowItem, 'id' | 'date'>) => CashInflowItem;
+  deleteCashInflow: (id: string) => void;
   addManualCashMovement: (type: 'deposit' | 'withdrawal', amount: number, title: string, notes?: string) => void;
   getDrawerStats: () => {
     totalCashIn: number;
@@ -1018,37 +1020,9 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       return { success: false, message: 'عضو غير موجود' };
     }
 
-    let remainingDays = member.remainingDays ?? 0;
-    let isDatePast = false;
-    if (member.endDate) {
-      const today = new Date();
-      const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-      const [y, m, d] = member.endDate.slice(0, 10).split('-').map(Number);
-      let endMidnight = 0;
-      if (y && m && d) {
-        endMidnight = new Date(y, m - 1, d).getTime();
-      } else {
-        const parsed = new Date(member.endDate);
-        endMidnight = isNaN(parsed.getTime()) ? 0 : new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate()).getTime();
-      }
-      if (endMidnight > 0) {
-        const diffDays = Math.ceil((endMidnight - todayMidnight) / 86400000);
-        remainingDays = Math.max(0, diffDays);
-        isDatePast = diffDays <= 0;
-      }
-    }
-
-    // أهم قاعدة: إذا انتهت مدة الأيام، ينتهي الاشتراك وتسقط أي حصص متبقية
-    const hasExpiredDays =
-      (member.totalDays > 0 && remainingDays <= 0) ||
-      (Boolean(member.endDate) && isDatePast);
-
-    let isValid = false;
-    if (hasExpiredDays) {
-      isValid = false;
-    } else if (member.active && (remainingDays > 0 || (member.totalDays === 0 && member.remainingSessions > 0))) {
-      isValid = true;
-    }
+    // التحقق الدقيق من صلاحية اشتراك اللاعب وحصصه
+    const subStatus = getSubscriptionStatus(member);
+    const isValid = subStatus.isActive && Boolean(member.active);
 
     if (isValid && member.remainingSessions > 0) {
       updateMember(member.id, {
@@ -1315,6 +1289,141 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
 
     updateMember(memberId, { assignedSessionId: undefined });
+
+    // تراجع نظيف وفوري عن حركة الدرج، استحقاقات الكابتن، والتقرير الشامل
+    const member = members.find((m) => m.id === memberId);
+    const memberName = member?.name;
+
+    const matchedLog = checkInLogs.find(
+      (l) =>
+        (l.memberId === memberId || (memberName && l.memberName === memberName)) &&
+        l.assignedSessionId === sessionId &&
+        l.seatingStatus === 'assigned' &&
+        isAfterLastClosing(l.timestamp)
+    );
+
+    if (matchedLog) {
+      const chargedAmount = matchedLog.chargedAmount || 0;
+      const coachShare = matchedLog.coachShareAmount || 0;
+      const coachId = matchedLog.assignedCoachId;
+
+      // 1. التراجع عن حركة الإيراد بالدرج إن وُجدت
+      if (chargedAmount > 0) {
+        setCashInflows((prev) => {
+          const inflowToRemove = prev.find(
+            (inf) =>
+              (inf.id.startsWith('inf-seat-') || inf.type === 'subscription') &&
+              (inf.memberName === memberName || (memberName && inf.title.includes(memberName))) &&
+              isAfterLastClosing(inf.date)
+          );
+          if (inflowToRemove) {
+            if (isSupabaseConfigured) {
+              supabaseService.deleteCashInflow(inflowToRemove.id).catch(() => {});
+            }
+            return prev.filter((inf) => inf.id !== inflowToRemove.id);
+          }
+          return prev;
+        });
+      }
+
+      // 2. التراجع عن رصيد واستحقاقات الكابتن المسجلة
+      if (coachId && coachShare > 0) {
+        setCoaches((prev) =>
+          prev.map((c) => {
+            if (c.id === coachId) {
+              const updatedCoach = {
+                ...c,
+                currentBalance: Math.max(0, (c.currentBalance || 0) - coachShare),
+              };
+              if (isSupabaseConfigured) {
+                supabaseService.upsertCoach(updatedCoach).catch(() => {});
+              }
+              return updatedCoach;
+            }
+            return c;
+          })
+        );
+
+        setTrainerTransactions((prev) => {
+          const trxToRemove = prev.find(
+            (t) =>
+              t.coach_id === coachId &&
+              t.payer_name === memberName &&
+              t.coach_share === coachShare &&
+              isAfterLastClosing(t.created_at)
+          );
+          if (trxToRemove) {
+            if (isSupabaseConfigured) {
+              supabaseService.deleteTrainerTransaction(trxToRemove.transaction_id).catch(() => {});
+            }
+            return prev.filter((t) => t.transaction_id !== trxToRemove.transaction_id);
+          }
+          return prev;
+        });
+      }
+
+      // 3. التراجع عن قيد التقرير الشامل
+      if (memberName) {
+        setMasterReportEntries((prev) => {
+          const entryToRemove = prev.find(
+            (e) =>
+              e.playerName === memberName &&
+              (e.coachId === coachId || !coachId) &&
+              isAfterLastClosing(e.date)
+          );
+          if (entryToRemove) {
+            if (isSupabaseConfigured) {
+              supabaseService.deleteMasterReportEntry(entryToRemove.id).catch(() => {});
+            }
+            return prev.filter((e) => e.id !== entryToRemove.id);
+          }
+          return prev;
+        });
+      }
+
+      // 4. إعادة حالة سجل الحضور إلى غير مسكن
+      setCheckInLogs((prev) =>
+        prev.map((l) =>
+          l.id === matchedLog.id
+            ? {
+                ...l,
+                seatingStatus: 'unassigned' as const,
+                assignedCategory: undefined,
+                assignedCoachId: undefined,
+                assignedCoachName: undefined,
+                assignedSessionId: undefined,
+                assignedSessionTitle: undefined,
+                paymentMode: undefined,
+                seatingPathway: undefined,
+                coachShareType: undefined,
+                coachShareValue: undefined,
+                coachShareAmount: undefined,
+                gymShareAmount: undefined,
+                chargedAmount: undefined,
+              }
+            : l
+        )
+      );
+
+      if (isSupabaseConfigured) {
+        supabaseService.insertCheckInLog({
+          ...matchedLog,
+          seatingStatus: 'unassigned',
+          assignedCategory: undefined,
+          assignedCoachId: undefined,
+          assignedCoachName: undefined,
+          assignedSessionId: undefined,
+          assignedSessionTitle: undefined,
+          paymentMode: undefined,
+          seatingPathway: undefined,
+          coachShareType: undefined,
+          coachShareValue: undefined,
+          coachShareAmount: undefined,
+          gymShareAmount: undefined,
+          chargedAmount: undefined,
+        }).catch(() => {});
+      }
+    }
   };
 
   const toggleSessionCoachCompletion = (sessionId: string, coachId: string) => {
@@ -2065,6 +2174,9 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         recordedBy: saleData.cashierName,
       };
       setCashInflows((prev) => [inflow, ...prev]);
+      if (isSupabaseConfigured) {
+        supabaseService.insertCashInflow(inflow).catch(() => {});
+      }
     }
 
     return newTx;
@@ -2085,9 +2197,45 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const deleteExpense = (id: string) => {
+    const target = expenses.find((e) => e.id === id);
     setExpenses((prev) => prev.filter((e) => e.id !== id));
     if (isSupabaseConfigured) {
       supabaseService.deleteExpense(id).catch(() => {});
+    }
+
+    // تراجع نظيف عن رصيد الكابتن إذا كان المصروف سلفة أو دفعة نقدية مسجلة له
+    if (target && (target.category === 'trainer_payout' || (target.title && target.title.includes('كابتن')))) {
+      const matchedCoach = coaches.find(
+        (c) =>
+          target.title.includes(c.name) ||
+          (target.notes && target.notes.includes(c.name)) ||
+          target.relatedEntityId === c.id
+      );
+      if (matchedCoach) {
+        setCoaches((prev) =>
+          prev.map((c) => {
+            if (c.id === matchedCoach.id) {
+              const updated = {
+                ...c,
+                currentBalance: (c.currentBalance || 0) + target.amount,
+                totalPaidToday: Math.max(0, (c.totalPaidToday || 0) - target.amount),
+              };
+              if (isSupabaseConfigured) {
+                supabaseService.upsertCoach(updated).catch(() => {});
+              }
+              return updated;
+            }
+            return c;
+          })
+        );
+      }
+    }
+  };
+
+  const deleteCashInflow = (id: string) => {
+    setCashInflows((prev) => prev.filter((inf) => inf.id !== id));
+    if (isSupabaseConfigured) {
+      supabaseService.deleteCashInflow(id).catch(() => {});
     }
   };
 
@@ -3694,6 +3842,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         addExpense,
         deleteExpense,
         addCashInflow,
+        deleteCashInflow,
         addManualCashMovement,
         getDrawerStats,
         getTodayStats,
