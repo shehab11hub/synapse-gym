@@ -83,6 +83,8 @@ export const supabaseService = {
         code: m.code,
         name: m.name,
         phone: m.phone,
+        age: m.age ? Number(m.age) : undefined,
+        residentialArea: m.residential_area || undefined,
         photoUrl: m.photo_url,
         type: m.type,
         subscriptionPlan: m.subscription_plan,
@@ -116,6 +118,8 @@ export const supabaseService = {
         code: member.code,
         name: member.name,
         phone: member.phone,
+        age: member.age ?? null,
+        residential_area: member.residentialArea ?? null,
         photo_url: member.photoUrl,
         type: member.type,
         subscription_plan: member.subscriptionPlan,
@@ -341,6 +345,16 @@ export const supabaseService = {
         paid: booking.paid,
         notes: booking.notes,
       });
+      return !error;
+    } catch {
+      return false;
+    }
+  },
+
+  async clearCompletedPhysioBookings(): Promise<boolean> {
+    if (!isSupabaseConfigured || !supabase) return false;
+    try {
+      const { error } = await supabase.from('physio_bookings').delete().eq('status', 'completed');
       return !error;
     } catch {
       return false;
@@ -801,6 +815,9 @@ export const supabaseService = {
       return (data || []).map((c: any) => ({
         id: c.id,
         date: c.date,
+        closingDayDate: c.closing_day_date || undefined,
+        nextDayDate: c.next_day_date || undefined,
+        shiftDateLabel: c.shift_date_label || undefined,
         closedAt: c.closed_at,
         closedBy: c.closed_by,
         totalDirectCash: Number(c.total_direct_cash || 0),
@@ -812,6 +829,7 @@ export const supabaseService = {
         actualCountedCash: Number(c.actual_counted_cash || 0),
         difference: Number(c.difference || 0),
         totalCoachDebtsLoadedToday: Number(c.total_coach_debts_loaded_today || 0),
+        totalCoachEarningsToday: Number(c.total_coach_earnings_today || 0),
         notes: c.notes,
       }));
     } catch {
@@ -825,6 +843,9 @@ export const supabaseService = {
       const { error } = await supabase.from('daily_shift_closings').upsert({
         id: c.id,
         date: c.date,
+        closing_day_date: c.closingDayDate || null,
+        next_day_date: c.nextDayDate || null,
+        shift_date_label: c.shiftDateLabel || null,
         closed_at: c.closedAt,
         closed_by: c.closedBy,
         total_direct_cash: c.totalDirectCash,
@@ -836,6 +857,7 @@ export const supabaseService = {
         actual_counted_cash: c.actualCountedCash ?? 0,
         difference: c.difference ?? 0,
         total_coach_debts_loaded_today: c.totalCoachDebtsLoadedToday,
+        total_coach_earnings_today: c.totalCoachEarningsToday ?? 0,
         notes: c.notes,
       });
       return !error;

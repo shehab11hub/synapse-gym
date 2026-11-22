@@ -24,7 +24,7 @@ import {
   Download,
   Filter,
 } from 'lucide-react';
-import { useGymData } from '../context/GymDataContext';
+import { useGymData, generateUniqueMemberCode } from '../context/GymDataContext';
 import { Member, SessionCategory } from '../types';
 import { formatEGP, formatDateAr, getSubscriptionStatus } from '../utils/formatters';
 import { generateQRDataUrl } from '../utils/qrGenerator';
@@ -223,7 +223,7 @@ export const MembersSearchPage: React.FC = () => {
     const fee = Number(newMemberForm.fee) || 0;
     const startDate = new Date().toISOString().split('T')[0];
     const endDate = new Date(Date.now() + durationDays * 86400000).toISOString().split('T')[0];
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const code = generateUniqueMemberCode(members);
 
     const created = addMember({
       code,

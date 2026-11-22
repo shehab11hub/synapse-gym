@@ -76,6 +76,8 @@ CREATE TABLE IF NOT EXISTS public.members (
   code VARCHAR(10) UNIQUE NOT NULL, -- 6-digit numeric ID (e.g. 102938)
   name TEXT NOT NULL,
   phone TEXT NOT NULL,
+  age INT,
+  residential_area TEXT,
   photo_url TEXT,
   type TEXT NOT NULL DEFAULT 'member' CHECK (type IN ('member', 'doctor')),
   subscription_plan TEXT NOT NULL,
@@ -311,6 +313,9 @@ CREATE TABLE IF NOT EXISTS public.monthly_billing_cycles (
 CREATE TABLE IF NOT EXISTS public.daily_shift_closings (
   id TEXT PRIMARY KEY,
   date DATE NOT NULL,
+  closing_day_date DATE,
+  next_day_date DATE,
+  shift_date_label TEXT,
   closed_at TIMESTAMPTZ DEFAULT NOW(),
   closed_by TEXT NOT NULL,
   total_direct_cash NUMERIC(12, 2) DEFAULT 0.00,
@@ -322,6 +327,7 @@ CREATE TABLE IF NOT EXISTS public.daily_shift_closings (
   actual_counted_cash NUMERIC(12, 2) DEFAULT 0.00,
   difference NUMERIC(12, 2) DEFAULT 0.00,
   total_coach_debts_loaded_today NUMERIC(12, 2) DEFAULT 0.00,
+  total_coach_earnings_today NUMERIC(12, 2) DEFAULT 0.00,
   notes TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -443,3 +449,24 @@ VALUES
   ('prod-protein-bar', 'بروتين بار شوفان وفول سوداني', 'snacks', 25.00, 45.00, 24, 6, '62210004'),
   ('prod-creatine-mon', 'كرياتين مونوهيدرات 300 جم', 'supplements', 350.00, 500.00, 8, 3, '62210005')
 ON CONFLICT (id) DO NOTHING;
+
+-- ==============================================================================
+-- 7. SUPABASE REALTIME CONFIGURATION (Multi-Device Live Sync)
+-- ==============================================================================
+DO $$ BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE 
+    public.check_in_logs,
+    public.members,
+    public.gym_sessions,
+    public.physio_bookings,
+    public.expenses,
+    public.cash_inflows,
+    public.pos_products,
+    public.daily_shift_closings,
+    public.trainer_transactions,
+    public.master_report_entries;
+EXCEPTION
+  WHEN duplicate_object THEN null;
+  WHEN undefined_object THEN null;
+END $$;
+

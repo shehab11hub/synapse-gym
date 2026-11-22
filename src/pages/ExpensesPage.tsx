@@ -30,6 +30,7 @@ import {
   Clock,
   ShieldCheck,
   AlertCircle,
+  History,
 } from 'lucide-react';
 import { useGymData } from '../context/GymDataContext';
 import { useAuth } from '../context/AuthContext';
@@ -50,6 +51,8 @@ export const ExpensesPage: React.FC = () => {
     addCashInflow,
     addManualCashMovement,
     getDrawerStats,
+    isAfterLastClosing,
+    lastClosingTime,
   } = useGymData();
   const { currentUser } = useAuth();
 
@@ -96,6 +99,7 @@ export const ExpensesPage: React.FC = () => {
   // Search & Filters
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'all' | 'expenses' | 'inflow' | 'coaches' | 'utilities'>('all');
+  const [shiftScope, setShiftScope] = useState<'current_shift' | 'all_month'>('current_shift');
 
   // Manual Movement Form
   const [manualMovementForm, setManualMovementForm] = useState({
@@ -342,10 +346,16 @@ export const ExpensesPage: React.FC = () => {
     | { kind: 'out'; data: ExpenseItem }
     | { kind: 'in'; data: CashInflowItem };
 
-  const ledgerItems: LedgerItem[] = [
+  const allLedgerItems: LedgerItem[] = [
     ...expenses.map((e) => ({ kind: 'out' as const, data: e })),
     ...cashInflows.map((i) => ({ kind: 'in' as const, data: i })),
   ].sort((a, b) => new Date(b.data.date).getTime() - new Date(a.data.date).getTime());
+
+  // تصفية حركات الوردية الحالية تلقائياً لتبدأ نظيفة ومصفرة بعد كل تقفيل يومية
+  const ledgerItems: LedgerItem[] =
+    shiftScope === 'current_shift'
+      ? allLedgerItems.filter((item) => isAfterLastClosing(item.data.date))
+      : allLedgerItems;
 
   // Filter items
   const filteredLedger = ledgerItems.filter((item) => {
@@ -577,12 +587,40 @@ export const ExpensesPage: React.FC = () => {
 
       {/* Complete Ledger Table */}
       <div className="bg-[#0f172a]/90 border border-slate-800 rounded-3xl p-6 shadow-xl">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
           <div className="flex items-center gap-2">
             <h3 className="text-base font-black text-white">حركات الخزينة والمصروفات</h3>
             <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-mono">
               {filteredLedger.length} بند
             </span>
+          </div>
+
+          {/* Shift Scope Switcher: Active Shift vs Full Month */}
+          <div className="flex items-center gap-1.5 p-1 bg-slate-900 border border-slate-800 rounded-2xl">
+            <button
+              type="button"
+              onClick={() => setShiftScope('current_shift')}
+              className={`px-3 py-1.5 rounded-xl font-bold text-xs transition flex items-center gap-1.5 cursor-pointer ${
+                shiftScope === 'current_shift'
+                  ? 'bg-emerald-500 text-slate-950 shadow-md font-black'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>الوردية الحالية (النشطة)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShiftScope('all_month')}
+              className={`px-3 py-1.5 rounded-xl font-bold text-xs transition flex items-center gap-1.5 cursor-pointer ${
+                shiftScope === 'all_month'
+                  ? 'bg-teal-500 text-slate-950 shadow-md font-black'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <History className="w-3.5 h-3.5" />
+              <span>أرشيف الشهر بالكامل</span>
+            </button>
           </div>
         </div>
 
@@ -714,8 +752,17 @@ export const ExpensesPage: React.FC = () => {
             </table>
           </div>
         ) : (
-          <div className="p-8 text-center text-xs text-slate-500">
-            لا توجد بنود تطابق البحث في الدفتر.
+          <div className="p-8 text-center text-xs text-slate-400 space-y-2">
+            <div className="text-sm font-bold text-slate-300">
+              {shiftScope === 'current_shift'
+                ? 'لا توجد حركات مسجلة في الوردية الحالية حتى الآن.'
+                : 'لا توجد بنود تطابق البحث في الدفتر.'}
+            </div>
+            {shiftScope === 'current_shift' && (
+              <p className="text-[11px] text-slate-500 max-w-md mx-auto">
+                بدأت الوردية نظيفة ومصفرة بعد آخر تقفيل يومية. يمكنك الضغط على "أرشيف الشهر بالكامل" بالأعلى لمراجعة المصروفات والورديات السابقة.
+              </p>
+            )}
           </div>
         )}
       </div>

@@ -32,7 +32,7 @@ import {
   Smartphone,
   Trash2,
 } from 'lucide-react';
-import { useGymData } from '../context/GymDataContext';
+import { useGymData, generateUniqueMemberCode } from '../context/GymDataContext';
 import { Member, SessionCategory, Coach, CheckInLog } from '../types';
 import { DeskQRCodeModal } from '../components/checkin/DeskQRCodeModal';
 import { CheckInModal } from '../components/checkin/CheckInModal';
@@ -140,7 +140,7 @@ export const ReceptionPage: React.FC = () => {
   const [newMemberForm, setNewMemberForm] = useState({
     name: '',
     phone: '',
-    code: Math.floor(100000 + Math.random() * 900000).toString(),
+    code: generateUniqueMemberCode(members),
     subscriptionPlan: 'اشتراك شهري لياقة عامة',
     subscriptionFee: 500,
     paymentMethod: 'coach_collected' as 'cash' | 'coach_collected' | 'instapay',
@@ -203,10 +203,15 @@ export const ReceptionPage: React.FC = () => {
     }
   };
 
-  // Quick Simulation: Simulate scanning the live rotating Desk QR by a random member
+  // Quick Simulation: Simulate scanning the live rotating Desk QR by a random real registered member
   const handleSimulateDeskQRScan = () => {
-    if (members.length === 0) return;
-    const randomMember = members[Math.floor(Math.random() * members.length)];
+    const validMembers = members.filter((m) => m.type === 'member');
+    const pool = validMembers.length > 0 ? validMembers : members;
+    if (pool.length === 0) {
+      alert('لا يوجد أعضاء مسجلين في دليل الأعضاء بـ Supabase حتى الآن. يرجى تسجيل عضو أولاً لتجربة المحاكاة.');
+      return;
+    }
+    const randomMember = pool[Math.floor(Math.random() * pool.length)];
     handleTriggerCheckIn(randomMember, 'qr');
   };
 
@@ -369,7 +374,7 @@ export const ReceptionPage: React.FC = () => {
     setNewMemberForm({
       name: '',
       phone: '',
-      code: Math.floor(100000 + Math.random() * 900000).toString(),
+      code: generateUniqueMemberCode(members),
       subscriptionPlan: 'اشتراك شهري لياقة عامة',
       subscriptionFee: 500,
       paymentMethod: 'coach_collected',
@@ -583,6 +588,8 @@ export const ReceptionPage: React.FC = () => {
               });
 
               const matchingMember = members.find((m) => m.id === log.memberId || m.code === log.memberCode);
+              const displayName = matchingMember?.name || log.memberName;
+              const displayCode = matchingMember?.code || log.memberCode;
               const subInfo = getSubscriptionStatus(matchingMember);
 
               return (
@@ -618,12 +625,12 @@ export const ReceptionPage: React.FC = () => {
                     {/* Member Details */}
                     <div className="flex items-center gap-3 mb-3">
                       <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-teal-500 to-cyan-500 flex items-center justify-center text-slate-950 font-black text-sm">
-                        {log.memberName.charAt(0)}
+                        {displayName.charAt(0)}
                       </div>
                       <div>
-                        <div className="text-sm font-black text-white">{log.memberName}</div>
+                        <div className="text-sm font-black text-white">{displayName}</div>
                         <div className="text-xs text-slate-400 font-mono flex items-center gap-2">
-                          <span>{log.memberCode}</span>
+                          <span>{displayCode}</span>
                           {log.method === 'qr' ? (
                             <span className="text-[10px] text-teal-400 bg-teal-500/10 px-1.5 py-0.2 rounded">
                               كيو آر كود
@@ -1024,15 +1031,19 @@ export const ReceptionPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60">
-                {checkInLogs.map((log) => (
-                  <tr key={log.id} className="hover:bg-slate-800/30 transition">
-                    <td className="py-3 px-4 font-bold text-white flex items-center gap-2">
-                      <div className="w-7 h-7 rounded-lg bg-teal-500/10 text-teal-400 flex items-center justify-center text-xs font-bold">
-                        {log.memberName.charAt(0)}
-                      </div>
-                      <span>{log.memberName}</span>
-                    </td>
-                    <td className="py-3 px-4 font-mono text-slate-300">{log.memberCode}</td>
+                {checkInLogs.map((log) => {
+                  const mMember = members.find((m) => m.id === log.memberId || m.code === log.memberCode);
+                  const dispName = mMember?.name || log.memberName;
+                  const dispCode = mMember?.code || log.memberCode;
+                  return (
+                    <tr key={log.id} className="hover:bg-slate-800/30 transition">
+                      <td className="py-3 px-4 font-bold text-white flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-lg bg-teal-500/10 text-teal-400 flex items-center justify-center text-xs font-bold">
+                          {dispName.charAt(0)}
+                        </div>
+                        <span>{dispName}</span>
+                      </td>
+                      <td className="py-3 px-4 font-mono text-slate-300">{dispCode}</td>
                     <td className="py-3 px-4">
                       {log.method === 'qr' ? (
                         <span className="px-2 py-0.5 rounded-md bg-teal-500/15 text-teal-300 border border-teal-500/30 font-medium">
@@ -1155,8 +1166,9 @@ export const ReceptionPage: React.FC = () => {
                       </div>
                     </td>
                   </tr>
-                ))}
-              </tbody>
+                );
+              })}
+            </tbody>
             </table>
           </div>
         ) : (

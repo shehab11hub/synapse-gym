@@ -20,7 +20,7 @@ import {
   X,
   Phone,
 } from 'lucide-react';
-import { useGymData } from '../context/GymDataContext';
+import { useGymData, generateUniqueMemberCode } from '../context/GymDataContext';
 import { useAuth } from '../context/AuthContext';
 import { Member, SessionCategory } from '../types';
 import { formatDateAr, formatArabicDayMonth, getSubscriptionStatus } from '../utils/formatters';
@@ -180,8 +180,12 @@ export const PlayerCheckInPage: React.FC = () => {
           if (parsed && (parsed.name || parsed.code)) {
             // Check if latest version exists in members context
             const liveMember =
-              members.find((m) => m.id === savedMemberId || m.code === parsed.code) ||
-              (parsed.code ? findMemberByCode(parsed.code) : undefined);
+              members.find(
+                (m) =>
+                  m.id === savedMemberId ||
+                  m.code === parsed.code ||
+                  (parsed.phone && m.phone === parsed.phone)
+              ) || (parsed.code ? findMemberByCode(parsed.code) : undefined);
 
             const target: Member = liveMember || {
               id: savedMemberId,
@@ -199,6 +203,10 @@ export const PlayerCheckInPage: React.FC = () => {
               remainingSessions: parsed.remainingSessions !== undefined ? parsed.remainingSessions : 0,
               active: parsed.active !== undefined ? parsed.active : false,
             };
+
+            if (liveMember) {
+              localStorage.setItem(STORAGE_PLAYER_IDENTITY, JSON.stringify(liveMember));
+            }
 
             autoCheckInAttempted.current = true;
 
@@ -271,6 +279,31 @@ export const PlayerCheckInPage: React.FC = () => {
     executeAutoDetection();
   }, [members, findMemberByCode]);
 
+  // مزامنة فورية لبيانات اللاعب المعروضة على هاتفه مع أي تعديل يجريه موظف الاستقبال
+  useEffect(() => {
+    if (checkedMember) {
+      const live = members.find(
+        (m) =>
+          m.id === checkedMember.id ||
+          (checkedMember.phone && m.phone === checkedMember.phone) ||
+          m.code === checkedMember.code
+      );
+      if (live) {
+        if (
+          live.name !== checkedMember.name ||
+          live.phone !== checkedMember.phone ||
+          live.remainingDays !== checkedMember.remainingDays ||
+          live.remainingSessions !== checkedMember.remainingSessions ||
+          live.endDate !== checkedMember.endDate ||
+          live.subscriptionPlan !== checkedMember.subscriptionPlan
+        ) {
+          setCheckedMember(live);
+          localStorage.setItem(STORAGE_PLAYER_IDENTITY, JSON.stringify(live));
+        }
+      }
+    }
+  }, [members, checkedMember]);
+
   // Handle phone-only checkin & 1-time device linking
   const handlePhoneSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -316,7 +349,7 @@ export const PlayerCheckInPage: React.FC = () => {
       }
     } else {
       // New visitor/player -> Create membership record with this phone and check in!
-      const generatedCode = Math.floor(100000 + Math.random() * 900000).toString();
+      const generatedCode = generateUniqueMemberCode(members);
       const created = addMember({
         code: generatedCode,
         name: `متدرب جديد (${cleanPhone})`,
@@ -487,7 +520,7 @@ export const PlayerCheckInPage: React.FC = () => {
                           <span>الأيام المتبقية</span>
                         </div>
                         <div className="text-2xl font-black font-mono text-emerald-300">
-                          {checkedMember.remainingDays} يوم
+                          {subInfo.remainingDays ?? checkedMember.remainingDays} يوم
                         </div>
                         <div className="text-[10px] text-slate-500 mt-0.5">
                           من أصل {checkedMember.totalDays} يوم
@@ -655,7 +688,7 @@ export const PlayerCheckInPage: React.FC = () => {
                           <span>الأيام المتبقية</span>
                         </div>
                         <div className="text-2xl font-black font-mono text-emerald-300">
-                          {checkedMember.remainingDays} يوم
+                          {subInfo.remainingDays ?? checkedMember.remainingDays} يوم
                         </div>
                         <div className="text-[10px] text-slate-500 mt-0.5">
                           من أصل {checkedMember.totalDays} يوم

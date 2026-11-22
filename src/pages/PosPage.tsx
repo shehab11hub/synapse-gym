@@ -262,13 +262,17 @@ export const PosPage: React.FC = () => {
     });
   };
 
-  // Low stock & out of stock computation
+  // Low stock & out of stock computation (strictly dynamically from products where stock <= 5)
   const lowStockProducts = useMemo(
     () => products.filter((p) => p.stock > 0 && p.stock <= (p.lowStockThreshold ?? 5)),
     [products]
   );
   const outOfStockProducts = useMemo(
     () => products.filter((p) => p.stock === 0),
+    [products]
+  );
+  const criticalLowStockCount = useMemo(
+    () => products.filter((p) => p.stock <= (p.lowStockThreshold ?? 5)).length,
     [products]
   );
 
@@ -312,7 +316,7 @@ export const PosPage: React.FC = () => {
   return (
     <div className="p-8 space-y-8 max-w-7xl mx-auto">
       {/* Top Real-time Sales & Profit Stat Banners */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         {/* Today's Total Sales */}
         <div className="p-6 rounded-3xl bg-gradient-to-br from-[#0c2621] to-[#071714] border border-teal-500/30 shadow-xl relative overflow-hidden">
           <div className="flex items-center justify-between mb-3">
@@ -362,6 +366,26 @@ export const PosPage: React.FC = () => {
           </div>
           <p className="text-[11px] text-slate-400 mt-2">
             مكملات غذائية، مشروبات طاقة، ملابس
+          </p>
+        </div>
+
+        {/* Critical Low Stock Counter (<= 5) */}
+        <div className={`p-6 rounded-3xl border shadow-xl relative overflow-hidden ${
+          criticalLowStockCount > 0
+            ? 'bg-gradient-to-br from-amber-950/40 via-[#1e1710] to-[#120e0a] border-amber-500/40'
+            : 'bg-gradient-to-br from-[#0c2621] to-[#071714] border-emerald-500/30'
+        }`}>
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-bold text-slate-300">المنتجات المهددة بالنفاذ (≤ 5)</span>
+            <div className={`p-2 rounded-xl ${criticalLowStockCount > 0 ? 'bg-amber-500/20 text-amber-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+          </div>
+          <div className={`text-3xl font-black ${criticalLowStockCount > 0 ? 'text-amber-400' : 'text-emerald-400 font-mono'}`}>
+            {criticalLowStockCount} صنف
+          </div>
+          <p className="text-[11px] text-slate-400 mt-2">
+            {criticalLowStockCount > 0 ? 'أصناف كميتها 5 قطع أو أقل' : 'المخزون آمن ومكتمل (0 نواقص)'}
           </p>
         </div>
       </div>

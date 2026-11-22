@@ -104,7 +104,7 @@ export function getSubscriptionStatus(member?: {
     };
   }
 
-  const remainingDays = member.remainingDays ?? 0;
+  let remainingDays = member.remainingDays ?? 0;
   const remainingSessions = member.remainingSessions ?? 0;
   const totalDays = member.totalDays ?? 0;
   const totalSessions = member.totalSessions ?? 0;
@@ -114,6 +114,9 @@ export function getSubscriptionStatus(member?: {
     const end = new Date(member.endDate);
     if (!isNaN(end.getTime())) {
       end.setHours(23, 59, 59, 999);
+      const diffMs = end.getTime() - Date.now();
+      const daysLeft = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+      remainingDays = Math.max(0, daysLeft);
       isDatePast = end.getTime() < Date.now();
     }
   }

@@ -31,7 +31,16 @@ import {
 } from '../utils/excelExport';
 import { sounds } from '../utils/sound';
 import { supabaseService } from '../services/supabaseService';
-import { isSupabaseConfigured } from '../lib/supabase';
+import { isSupabaseConfigured, supabase } from '../lib/supabase';
+
+export const generateUniqueMemberCode = (existingMembers: Member[]): string => {
+  const existingCodes = new Set(existingMembers.map((m) => m.code?.toUpperCase()));
+  let code = '';
+  do {
+    code = Math.floor(100000 + Math.random() * 900000).toString();
+  } while (existingCodes.has(code));
+  return code;
+};
 
 interface GymDataContextType {
   // Members
@@ -257,6 +266,8 @@ interface GymDataContextType {
   closeDailyShift: (closingData: Omit<DailyShiftClosing, 'id' | 'closedAt'>) => DailyShiftClosing;
   getTodayShiftStatus: () => { isClosedToday: boolean; lastClosing?: DailyShiftClosing };
   exportDailyShiftXLSX: (closingId?: string) => Promise<void>;
+  isAfterLastClosing: (dateStr?: string) => boolean;
+  lastClosingTime: string | null;
 }
 
 // Production Clean Slate & Cache Busting
@@ -462,33 +473,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, [members]);
 
-  useEffect(() => {
-    const fetchRemoteMembers = async () => {
-      try {
-        const res = await fetch('/api/members');
-        if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data.members) && data.members.length > 0) {
-            setMembers((prev) => {
-              const map = new Map<string, Member>();
-              data.members.forEach((m: Member) => {
-                if (m && m.id) map.set(m.id, m);
-              });
-              prev.forEach((m) => {
-                if (m && m.id) map.set(m.id, m);
-              });
-              return Array.from(map.values());
-            });
-          }
-        }
-      } catch {
-        // ignore
-      }
-    };
-    fetchRemoteMembers();
-  }, []);
-
-  // INITIAL SUPABASE FULL DATA SYNC (When online & configured)
+  // INITIAL SUPABASE FULL DATA SYNC & REALTIME LIVE ENGINE (When online & configured)
   useEffect(() => {
     if (!isSupabaseConfigured) return;
 
@@ -528,27 +513,81 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           supabaseService.fetchYearlyArchives(),
         ]);
 
-        if (remoteMembers && remoteMembers.length > 0) setMembers(remoteMembers);
-        if (remoteCoaches && remoteCoaches.length > 0) setCoaches(remoteCoaches);
-        if (remoteSessions && remoteSessions.length > 0) setSessions(remoteSessions);
-        if (remotePhysio && remotePhysio.length > 0) setPhysioBookings(remotePhysio);
-        if (remoteProducts && remoteProducts.length > 0) setProducts(remoteProducts);
-        if (remotePosTx && remotePosTx.length > 0) setTransactions(remotePosTx);
-        if (remoteCheckIns && remoteCheckIns.length > 0) setCheckInLogs(remoteCheckIns);
-        if (remoteTrainerTx && remoteTrainerTx.length > 0) setTrainerTransactions(remoteTrainerTx);
-        if (remoteExpenses && remoteExpenses.length > 0) setExpenses(remoteExpenses);
-        if (remoteInflows && remoteInflows.length > 0) setCashInflows(remoteInflows);
-        if (remoteMasterEntries && remoteMasterEntries.length > 0) setMasterReportEntries(remoteMasterEntries);
-        if (remoteBillingCycles && remoteBillingCycles.length > 0) setBillingCycles(remoteBillingCycles);
-        if (remoteDailyClosings && remoteDailyClosings.length > 0) setDailyShiftClosings(remoteDailyClosings);
-        if (remoteMonthlyArchives && remoteMonthlyArchives.length > 0) setMonthlyArchives(remoteMonthlyArchives);
-        if (remoteYearlyArchives && remoteYearlyArchives.length > 0) setYearlyArchives(remoteYearlyArchives);
+        if (remoteMembers !== null) setMembers(remoteMembers);
+        if (remoteCoaches !== null) setCoaches(remoteCoaches);
+        if (remoteSessions !== null) setSessions(remoteSessions);
+        if (remotePhysio !== null) setPhysioBookings(remotePhysio);
+        if (remoteProducts !== null) setProducts(remoteProducts);
+        if (remotePosTx !== null) setTransactions(remotePosTx);
+        if (remoteCheckIns !== null) setCheckInLogs(remoteCheckIns);
+        if (remoteTrainerTx !== null) setTrainerTransactions(remoteTrainerTx);
+        if (remoteExpenses !== null) setExpenses(remoteExpenses);
+        if (remoteInflows !== null) setCashInflows(remoteInflows);
+        if (remoteMasterEntries !== null) setMasterReportEntries(remoteMasterEntries);
+        if (remoteBillingCycles !== null) setBillingCycles(remoteBillingCycles);
+        if (remoteDailyClosings !== null) setDailyShiftClosings(remoteDailyClosings);
+        if (remoteMonthlyArchives !== null) setMonthlyArchives(remoteMonthlyArchives);
+        if (remoteYearlyArchives !== null) setYearlyArchives(remoteYearlyArchives);
       } catch (err) {
         console.warn('Initial Supabase sync skipped or failed (using local cache):', err);
       }
     };
 
     syncFromSupabase();
+
+    // REALTIME CROSS-DEVICE SYNCHRONIZATION VIA SUPABASE
+    let channel: any;
+    if (supabase) {
+      channel = supabase
+        .channel('gym-cross-device-sync')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'check_in_logs' }, async () => {
+          const fresh = await supabaseService.fetchCheckInLogs();
+          if (fresh !== null) setCheckInLogs(fresh);
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'members' }, async () => {
+          const fresh = await supabaseService.fetchMembers();
+          if (fresh !== null) setMembers(fresh);
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'gym_sessions' }, async () => {
+          const fresh = await supabaseService.fetchSessions();
+          if (fresh !== null) setSessions(fresh);
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'physio_bookings' }, async () => {
+          const fresh = await supabaseService.fetchPhysioBookings();
+          if (fresh !== null) setPhysioBookings(fresh);
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, async () => {
+          const fresh = await supabaseService.fetchExpenses();
+          if (fresh !== null) setExpenses(fresh);
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'cash_inflows' }, async () => {
+          const fresh = await supabaseService.fetchCashInflows();
+          if (fresh !== null) setCashInflows(fresh);
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'pos_products' }, async () => {
+          const fresh = await supabaseService.fetchProducts();
+          if (fresh !== null) setProducts(fresh);
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_shift_closings' }, async () => {
+          const fresh = await supabaseService.fetchDailyShiftClosings();
+          if (fresh !== null) setDailyShiftClosings(fresh);
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'trainer_transactions' }, async () => {
+          const fresh = await supabaseService.fetchTrainerTransactions();
+          if (fresh !== null) setTrainerTransactions(fresh);
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'master_report_entries' }, async () => {
+          const fresh = await supabaseService.fetchMasterReportEntries();
+          if (fresh !== null) setMasterReportEntries(fresh);
+        })
+        .subscribe();
+    }
+
+    return () => {
+      if (channel && supabase) {
+        supabase.removeChannel(channel);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -679,9 +718,15 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   // Members logic
   const addMember = (memberData: Omit<Member, 'id'>) => {
+    const finalCode =
+      memberData.code && !members.some((m) => m.code.toUpperCase() === memberData.code.trim().toUpperCase())
+        ? memberData.code.trim().toUpperCase()
+        : generateUniqueMemberCode(members);
+
     const newMember: Member = {
       ...memberData,
-      id: `mem-${Date.now()}`,
+      code: finalCode,
+      id: `mem-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     };
     setMembers((prev) => [newMember, ...prev]);
 
@@ -787,14 +832,43 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const updateMember = (id: string, updates: Partial<Member>) => {
+    let updatedTarget: Member | undefined;
     setMembers((prev) => {
       const updated = prev.map((m) => (m.id === id ? { ...m, ...updates } : m));
-      const target = updated.find((m) => m.id === id);
-      if (target && isSupabaseConfigured) {
-        supabaseService.upsertMember(target).catch(() => {});
+      updatedTarget = updated.find((m) => m.id === id);
+      if (updatedTarget && isSupabaseConfigured) {
+        supabaseService.upsertMember(updatedTarget).catch(() => {});
       }
       return updated;
     });
+
+    if (updatedTarget) {
+      const target = updatedTarget;
+      // مزامنة فورية مع طابور تسجيلات وحضور الاستقبال
+      setCheckInLogs((prevLogs) => {
+        const nextLogs = prevLogs.map((log) => {
+          if (log.memberId === id || log.memberCode === target.code) {
+            return {
+              ...log,
+              memberName: target.name,
+              memberCode: target.code,
+            };
+          }
+          return log;
+        });
+        localStorage.setItem('synapse_checkin_logs', JSON.stringify(nextLogs));
+        return nextLogs;
+      });
+
+      // مزامنة فورية مع جلسات التأهيل والمساج النشطة
+      setPhysioBookings((prevBookings) =>
+        prevBookings.map((b) =>
+          b.patientCode === target.code
+            ? { ...b, patientName: target.name }
+            : b
+        )
+      );
+    }
   };
 
   const toggleMemberAsDoctor = (id: string) => {
@@ -922,7 +996,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (!member && fallbackMember && (fallbackMember.name || fallbackMember.code)) {
       member = {
         id: memberId || `mem-${Date.now()}`,
-        code: fallbackMember.code || Math.floor(100000 + Math.random() * 900000).toString(),
+        code: fallbackMember.code || generateUniqueMemberCode(members),
         name: fallbackMember.name || 'متدرب جديد',
         phone: fallbackMember.phone || '',
         type: fallbackMember.type || 'member',
@@ -1193,8 +1267,9 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const assignPlayerToSession = (sessionId: string, memberId: string, isTemporary = false) => {
-    setSessions((prev) =>
-      prev.map((s) => {
+    let updatedTarget: GymSession | undefined;
+    setSessions((prev) => {
+      const updated = prev.map((s) => {
         if (s.id === sessionId) {
           if (isTemporary) {
             const temp = s.temporaryPlayerIds || [];
@@ -1214,16 +1289,24 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           }
         }
         return s;
-      })
-    );
+      });
+      updatedTarget = updated.find((s) => s.id === sessionId);
+      return updated;
+    });
+
+    if (updatedTarget && isSupabaseConfigured) {
+      supabaseService.upsertSession(updatedTarget).catch(() => {});
+    }
+
     if (!isTemporary) {
       updateMember(memberId, { assignedSessionId: sessionId });
     }
   };
 
   const removePlayerFromSession = (sessionId: string, memberId: string) => {
-    setSessions((prev) =>
-      prev.map((s) => {
+    let updatedTarget: GymSession | undefined;
+    setSessions((prev) => {
+      const updated = prev.map((s) => {
         if (s.id === sessionId) {
           return {
             ...s,
@@ -1232,8 +1315,15 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           };
         }
         return s;
-      })
-    );
+      });
+      updatedTarget = updated.find((s) => s.id === sessionId);
+      return updated;
+    });
+
+    if (updatedTarget && isSupabaseConfigured) {
+      supabaseService.upsertSession(updatedTarget).catch(() => {});
+    }
+
     updateMember(memberId, { assignedSessionId: undefined });
   };
 
@@ -1664,22 +1754,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         );
       }
 
-      // إشعار مديونية بالدرج ليظهر في صفحة مصاريف وإدارة الدرج
-      const inflowRecord: CashInflowItem = {
-        id: `inf-cch-${Date.now()}-${coachId}`,
-        type: 'coach_settlement',
-        title: `تحميل على كابتن ${coachName} مبلغ ${finalFee} ج.م (جلسة: ${serviceLabel} - متدرب: ${booking.patientName})`,
-        amount: finalFee,
-        date: new Date().toISOString(),
-        memberName: coachName,
-        paymentMethod: 'cash',
-        recordedBy: 'السيستم (جلسة مساج/تأهيل)',
-      };
-      setCashInflows((prev) => [inflowRecord, ...prev]);
-
       if (isSupabaseConfigured) {
         supabaseService.upsertTrainerTransaction(coachDebtTrx).catch(() => {});
-        supabaseService.insertCashInflow(inflowRecord).catch(() => {});
         if (targetCoach) {
           supabaseService.upsertCoach({
             ...targetCoach,
@@ -2078,18 +2154,17 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
+  const lastClosing = dailyShiftClosings.length > 0 ? dailyShiftClosings[0] : null;
+  const lastClosingTime = lastClosing ? lastClosing.closedAt : null;
+
+  const isAfterLastClosing = (dateStr?: string) => {
+    if (!dateStr) return false;
+    if (!lastClosingTime) return true;
+    return new Date(dateStr).getTime() > new Date(lastClosingTime).getTime();
+  };
+
   // Calculate Net Cash Drawer ("صافي النقدية في الدرج بالجنيه - كل جنيه محسوب")
   const getDrawerStats = () => {
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const todayClosings = dailyShiftClosings.filter((c) => c.date === todayStr);
-    const lastClosingTime = todayClosings.length > 0 ? todayClosings[0].closedAt : null;
-
-    const isAfterLastClosing = (dateStr?: string) => {
-      if (!dateStr || !dateStr.startsWith(todayStr)) return false;
-      if (!lastClosingTime) return true;
-      return new Date(dateStr).getTime() > new Date(lastClosingTime).getTime();
-    };
-
     // Only Cash items affect the physical cash drawer
     const totalCashIn = cashInflows
       .filter((inf) => inf.paymentMethod === 'cash')
@@ -2101,7 +2176,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     const netCashInDrawer = totalCashIn - totalCashOut;
 
-    // Today's active movements (reset after daily shift closing)
+    // Active shift movements (resets immediately after daily shift closing)
     const todayCashIn = cashInflows
       .filter((inf) => inf.paymentMethod === 'cash' && isAfterLastClosing(inf.date))
       .reduce((acc, inf) => acc + inf.amount, 0);
@@ -2469,12 +2544,12 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const updated = prev.map((t) => {
         if (
           t.coach_id === coachId &&
-          t.collected_by === 'coach' &&
           t.status === 'pending' &&
           remaining > 0
         ) {
-          if (remaining >= t.gym_share) {
-            remaining -= t.gym_share;
+          const share = (t.gym_share !== undefined && t.gym_share > 0) ? t.gym_share : t.amount;
+          if (remaining >= share) {
+            remaining -= share;
             return {
               ...t,
               status: 'settled' as const,
@@ -2482,7 +2557,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
               settled_by: authorizedBy,
             };
           } else {
-            const left = t.gym_share - remaining;
+            const left = share - remaining;
             remaining = 0;
             return {
               ...t,
@@ -2494,6 +2569,40 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       });
       return [repaymentTrx, ...updated];
     });
+
+    // Also update any matching master report entries
+    let repRemaining = amount;
+    setMasterReportEntries((prev) =>
+      prev.map((entry) => {
+        if (
+          entry.coachId === coachId &&
+          entry.paymentStatus === 'pending_on_coach' &&
+          repRemaining > 0
+        ) {
+          if (repRemaining >= entry.amount) {
+            repRemaining -= entry.amount;
+            return {
+              ...entry,
+              paymentStatus: 'paid' as const,
+              notes: entry.notes ? `${entry.notes} (تم السداد)` : 'تم السداد',
+            };
+          }
+        }
+        return entry;
+      })
+    );
+
+    // Update coach balance
+    setCoaches((prev) =>
+      prev.map((c) =>
+        c.id === coachId
+          ? {
+              ...c,
+              currentBalance: (c.currentBalance || 0) + amount,
+            }
+          : c
+      )
+    );
 
     // Automatically record into Cash Inflow / Cash Drawer
     const inflowItem: CashInflowItem = {
@@ -2741,17 +2850,10 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       .reduce((sum, t) => sum + t.amount, 0);
 
     // 4. Remaining current month pending debt
-    const currentMonthPending = allCoachTrx
-      .filter(
-        (t) =>
-          t.collected_by === 'coach' &&
-          t.status === 'pending' &&
-          (isAll || t.month === targetMonth || (!t.month && targetMonth === currentMonth))
-      )
-      .reduce((sum, t) => sum + t.gym_share, 0);
+    const currentMonthPending = Math.max(0, currentMonthCharges - currentMonthRepaid);
 
-    // Total outstanding debt = previous carried debt + current month pending
-    const remainingTotalDebt = previousCarriedDebt + currentMonthPending;
+    // Total outstanding debt = (previous carried debt + current month charges) - current month repaid
+    const remainingTotalDebt = Math.max(0, (previousCarriedDebt + currentMonthCharges) - currentMonthRepaid);
 
     return {
       currentMonthCharges,
@@ -3462,22 +3564,28 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setCheckInLogs([]);
     localStorage.setItem('synapse_checkin_logs', JSON.stringify([]));
 
-    // 2. إعادة ضبط كافة الحصص لوضع الاستعداد (idle) وإفراغ التسكين المؤقت لليوم
-    setSessions((prev) =>
-      prev.map((s) => ({
-        ...s,
-        status: 'idle',
-        startedAt: undefined,
-        endedAt: undefined,
-        completedTodayByCoach: {},
-        temporaryPlayerIds: [],
-      }))
-    );
+    // 2. إعادة ضبط كافة الحصص لوضع الاستعداد (idle) وإفراغ التسكين المؤقت لليوم ومزامنتها في Supabase
+    const resetSessions = sessions.map((s) => ({
+      ...s,
+      status: 'idle' as const,
+      startedAt: undefined,
+      endedAt: undefined,
+      completedTodayByCoach: {},
+      temporaryPlayerIds: [],
+    }));
+    setSessions(resetSessions);
+
+    // 3. تصفير ومسح جدول جلسات العلاج الطبيعي والمساج المنتهية والمحاسب عليها بعد ترحيلها
+    setPhysioBookings((prev) => prev.filter((b) => b.status !== 'completed'));
 
     if (isSupabaseConfigured) {
       supabaseService.insertDailyShiftClosing(newClosing).catch(() => {});
       supabaseService.clearAllCheckInLogs().catch(() => {});
       supabaseService.clearCheckInLogsForDate(newClosing.date).catch(() => {});
+      supabaseService.clearCompletedPhysioBookings().catch(() => {});
+      resetSessions.forEach((s) => {
+        supabaseService.upsertSession(s).catch(() => {});
+      });
     }
 
     return newClosing;
@@ -3629,6 +3737,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         closeDailyShift,
         getTodayShiftStatus,
         exportDailyShiftXLSX,
+        isAfterLastClosing,
+        lastClosingTime,
       }}
     >
       {children}
