@@ -245,8 +245,8 @@ export const ExpensesPage: React.FC = () => {
       endDate,
       totalDays: durationDays,
       remainingDays: durationDays,
-      totalSessions: Number(newMemberForm.totalSessions) || 0,
-      remainingSessions: Number(newMemberForm.totalSessions) || 0,
+      totalSessions: newMemberForm.sessionCategory === 'gym' ? 0 : (Number(newMemberForm.totalSessions) || 0),
+      remainingSessions: newMemberForm.sessionCategory === 'gym' ? 0 : (Number(newMemberForm.totalSessions) || 0),
       active: true,
       notes: newMemberForm.notes || 'تسجيل اشتراك جديد من صفحة إدارة الدرج',
     });
@@ -472,7 +472,7 @@ export const ExpensesPage: React.FC = () => {
         </div>
 
         {/* Daily Breakdown Sub-Row */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 pt-4 border-t border-emerald-500/10 text-[11px]">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-4 pt-4 border-t border-emerald-500/10 text-[11px]">
           <div className="text-slate-300">
             <span className="text-slate-500">إجمالي مقبوضات الكاش: </span>
             <span className="font-bold text-emerald-400">{formatEGP(drawer.totalCashIn)}</span>
@@ -488,6 +488,10 @@ export const ExpensesPage: React.FC = () => {
           <div className="text-slate-300">
             <span className="text-slate-500">منصرف كاش اليوم: </span>
             <span className="font-bold text-amber-300">{formatEGP(drawer.todayCashOut)}</span>
+          </div>
+          <div className="text-slate-300">
+            <span className="text-slate-500">مستحقات كباتن (لهم): </span>
+            <span className="font-bold text-cyan-300">{formatEGP(drawer.totalCoachDues)}</span>
           </div>
         </div>
       </div>
@@ -1269,17 +1273,19 @@ export const ExpensesPage: React.FC = () => {
                     />
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-1">عدد الحصص</label>
-                    <input
-                      type="number"
-                      min="0"
-                      value={newMemberForm.totalSessions}
-                      onChange={(e) => setNewMemberForm({ ...newMemberForm, totalSessions: Number(e.target.value) })}
-                      placeholder="0 للحر"
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono font-bold focus:outline-none focus:border-emerald-500"
-                    />
-                  </div>
+                  {newMemberForm.sessionCategory !== 'gym' && (
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 mb-1">عدد الحصص المتاحة</label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={newMemberForm.totalSessions}
+                        onChange={(e) => setNewMemberForm({ ...newMemberForm, totalSessions: Number(e.target.value) })}
+                        placeholder="عدد الحصص"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono font-bold focus:outline-none focus:border-emerald-500"
+                      />
+                    </div>
+                  )}
 
                   <div>
                     <label className="block text-xs font-bold text-slate-300 mb-1">المبلغ (EGP) *</label>

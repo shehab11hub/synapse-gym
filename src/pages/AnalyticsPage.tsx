@@ -38,7 +38,16 @@ const ARABIC_MONTH_LABELS = [
 
 export const AnalyticsPage: React.FC = () => {
   const { currentUser } = useAuth();
-  const { expenses, cashInflows, transactions, physioBookings, yearlyArchives, monthlyArchives } = useGymData();
+  const {
+    expenses,
+    cashInflows,
+    transactions,
+    physioBookings,
+    yearlyArchives,
+    monthlyArchives,
+    isAfterLastClosing,
+    lastClosingTime,
+  } = useGymData();
 
   if (currentUser?.role !== 'admin') {
     return (
@@ -103,7 +112,14 @@ export const AnalyticsPage: React.FC = () => {
     let matchDate: (dateStr?: string) => boolean;
 
     if (periodMode === 'day') {
-      matchDate = (dateStr?: string) => !!dateStr && dateStr.startsWith(selectedDate);
+      if (selectedDate === todayIso) {
+        // الوردية النشطة لليوم الحالي: فقط الحركات بعد وقت آخر تقفيل يومية
+        matchDate = (dateStr?: string) =>
+          !!dateStr && dateStr.startsWith(selectedDate) && isAfterLastClosing(dateStr);
+      } else {
+        // أيام سابقة محددة في الأرشيف
+        matchDate = (dateStr?: string) => !!dateStr && dateStr.startsWith(selectedDate);
+      }
     } else if (periodMode === 'month') {
       matchDate = (dateStr?: string) => !!dateStr && dateStr.startsWith(selectedMonth);
     } else {
@@ -151,6 +167,9 @@ export const AnalyticsPage: React.FC = () => {
     selectedDate,
     selectedMonth,
     selectedYear,
+    todayIso,
+    isAfterLastClosing,
+    lastClosingTime,
   ]);
 
   // Check if current periodMode === 'year' matches an archived year

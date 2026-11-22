@@ -508,7 +508,7 @@ export const PlayerCheckInPage: React.FC = () => {
               }
 
               const hasDuration = subInfo.status === 'active';
-              const hasSessions = (checkedMember.remainingSessions || 0) > 0;
+              const hasSessions = (checkedMember.remainingSessions || 0) > 0 && checkedMember.sessionCategory !== 'gym';
 
               return (
                 <>
@@ -676,7 +676,7 @@ export const PlayerCheckInPage: React.FC = () => {
               }
 
               const hasDuration = subInfo.status === 'active';
-              const hasSessions = (checkedMember.remainingSessions || 0) > 0;
+              const hasSessions = (checkedMember.remainingSessions || 0) > 0 && checkedMember.sessionCategory !== 'gym';
 
               return (
                 <>

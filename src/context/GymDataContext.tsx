@@ -161,6 +161,7 @@ interface GymDataContextType {
     todayNetInDrawer: number;
     totalInstapayIn: number;
     totalPendingOnCoaches: number;
+    totalCoachDues: number;
   };
 
   // General Stats
@@ -1017,24 +1018,35 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       return { success: false, message: 'عضو غير موجود' };
     }
 
+    let remainingDays = member.remainingDays ?? 0;
     let isDatePast = false;
     if (member.endDate) {
-      const end = new Date(member.endDate);
-      if (!isNaN(end.getTime())) {
-        end.setHours(23, 59, 59, 999);
-        isDatePast = end.getTime() < Date.now();
+      const today = new Date();
+      const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+      const [y, m, d] = member.endDate.slice(0, 10).split('-').map(Number);
+      let endMidnight = 0;
+      if (y && m && d) {
+        endMidnight = new Date(y, m - 1, d).getTime();
+      } else {
+        const parsed = new Date(member.endDate);
+        endMidnight = isNaN(parsed.getTime()) ? 0 : new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate()).getTime();
+      }
+      if (endMidnight > 0) {
+        const diffDays = Math.ceil((endMidnight - todayMidnight) / 86400000);
+        remainingDays = Math.max(0, diffDays);
+        isDatePast = diffDays <= 0;
       }
     }
 
     // أهم قاعدة: إذا انتهت مدة الأيام، ينتهي الاشتراك وتسقط أي حصص متبقية
     const hasExpiredDays =
-      (member.totalDays > 0 && member.remainingDays <= 0) ||
+      (member.totalDays > 0 && remainingDays <= 0) ||
       (Boolean(member.endDate) && isDatePast);
 
     let isValid = false;
     if (hasExpiredDays) {
       isValid = false;
-    } else if (member.active && (member.remainingDays > 0 || (member.totalDays === 0 && member.remainingSessions > 0))) {
+    } else if (member.active && (remainingDays > 0 || (member.totalDays === 0 && member.remainingSessions > 0))) {
       isValid = true;
     }
 
@@ -1139,21 +1151,12 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const session = sessions.find((s) => s.id === id);
     if (!session) return;
 
-    // 1. حساب عدد الحضور الفعلي للحصة (المسكنين دائماً + المسكنين مؤقتاً لليوم)
-    const totalAttendees = Math.max(
-      1,
-      session.enrolledPlayerIds.length + (session.temporaryPlayerIds?.length || 0)
+    // 1. حساب عدد الحضور الذين تم تسكينهم صراحة كـ "تحميل مديونية على الكابتن" فقط
+    // (المتدربون المسددون بالاستقبال أو أصحاب الاشتراكات السارية لا يتم تحميل قيمتهم كمديونية على الكابتن نهائياً)
+    const coachDebtAttendees = checkInLogs.filter(
+      (l) => l.assignedSessionId === session.id && l.seatingPathway === 'coach_debt'
     );
-
-    // استثناء المتدربين الذين سددوا تذكرتهم بالاستقبال لحساب الجيم (لعدم تكرار تحميل قيمتهم على الكابتن)
-    const receptionPaidPlayerIds = checkInLogs
-      .filter((l) => l.assignedSessionId === session.id && l.seatingPathway === 'gym_with_coach_share')
-      .map((l) => l.memberId);
-
-    const coachDebtAttendeesCount = Math.max(
-      0,
-      totalAttendees - receptionPaidPlayerIds.length
-    );
+    const coachDebtAttendeesCount = coachDebtAttendees.length;
     const sessionTotalRev = coachDebtAttendeesCount * session.price;
 
     const compMap: { [coachId: string]: boolean } = {};
@@ -1166,7 +1169,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     assignedCoaches.forEach((coach) => {
       compMap[coach.id] = true;
 
-      // أجر المدرب للحصة إذا كان تعاقده بنظام الحصة (Per Session)
+      // أجر المدرب للحصة إذا كان تعاقده بنظام الحصة (Per Session) - يُضاف لمستحقات الكابتن (له فلوس)
       if (coach.paymentType === 'per_session') {
         const rate = coach.ratePerSession || 150;
         setCoaches((prevCoaches) =>
@@ -1181,7 +1184,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         );
       }
 
-      // ⚠️ المكان الحصري لتحميل الفلوس على الكابتن: عند بدء الحصة وإنهاؤها رسمياً فقط!
+      // تحميل المديونية على الكابتن فقط في حال وجود متدربين تم تحصيل قيمتهم بيده خارجياً (seatingPathway === 'coach_debt')
+      // ولا يتم إدراج نقدية بالدرج إطلاقاً إلا عند سداد الكابتن الفعلي لاحقاً منعاً للازدواج الحسابي
       if (sessionTotalRev > 0) {
         const newTrx: TrainerTransaction = {
           transaction_id: `TRX-SESS-${Date.now()}-${coach.id}`,
@@ -1198,24 +1202,11 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           month: currentMonth,
           type: 'session_charge',
           payment_method: 'coach_collected',
-          notes: `تحميل قيمة الحصة بعد اكتمالها وإنهاؤها (${coachDebtAttendeesCount} متدربين × ${session.price} ج.م)`,
+          notes: `تحميل قيمة الحصة بعد اكتمالها (${coachDebtAttendeesCount} متدربين تم تحصيلهم بيد الكابتن × ${session.price} ج.م)`,
         };
         setTrainerTransactions((prev) => [newTrx, ...prev]);
 
-        // إدراج إشعار مديونية بالدرج
-        const inflowRecord: CashInflowItem = {
-          id: `inf-cch-${Date.now()}-${coach.id}`,
-          type: 'coach_settlement',
-          title: `تحميل على كابتن ${coach.name} مبلغ ${coachShareAmount} ج.م (حصة: ${session.title}) بعد إنهائها`,
-          amount: coachShareAmount,
-          date: new Date().toISOString(),
-          memberName: coach.name,
-          paymentMethod: 'cash',
-          recordedBy: 'السيستم (إنهاء الحصة)',
-        };
-        setCashInflows((prev) => [inflowRecord, ...prev]);
-
-        // إدراج قيد بالتقرير الشامل
+        // إدراج قيد بالتقرير الشامل كمديونية معلقة على الكابتن
         const repEntry: MasterReportEntry = {
           id: `rep-sess-${Date.now()}-${coach.id}`,
           month: currentMonth,
@@ -1229,14 +1220,13 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           sessionTitle: session.title,
           paymentMethod: 'coach_collected',
           paymentStatus: 'pending_on_coach',
-          notes: `تحميل بعد إنهاء الحصة (${coachDebtAttendeesCount} لاعب)`,
+          notes: `تحميل مديونية على الكابتن (${coachDebtAttendeesCount} لاعب)`,
           sourceType: 'session',
         };
         setMasterReportEntries((prev) => [repEntry, ...prev]);
 
         if (isSupabaseConfigured) {
           supabaseService.upsertTrainerTransaction(newTrx).catch(() => {});
-          supabaseService.insertCashInflow(inflowRecord).catch(() => {});
           supabaseService.upsertMasterReportEntry(repEntry).catch(() => {});
         }
       }
@@ -2195,11 +2185,16 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       .filter((inf) => inf.paymentMethod === 'instapay')
       .reduce((acc, inf) => acc + inf.amount, 0);
 
-    // Total Pending Receivables on Coaches (فلوس عند الكباتن مستحقة للجيم)
+    // Total Pending Receivables on Coaches (فلوس عند الكباتن مستحقة للجيم - تحصيل يدوي خارجي)
     const pendingTrx = trainerTransactions.filter((t) => t.status === 'pending');
     const totalPendingOnCoaches = pendingTrx
       .filter((t) => t.collected_by === 'coach')
       .reduce((acc, t) => acc + t.gym_share, 0);
+
+    // Total Coach Dues on Gym (مستحقات وأرباح الكباتن التزام على الجيم - تحصيل استقبل الجيم)
+    const totalCoachDues = pendingTrx
+      .filter((t) => t.collected_by === 'gym' && t.coach_share > 0)
+      .reduce((acc, t) => acc + t.coach_share, 0);
 
     return {
       totalCashIn,
@@ -2210,6 +2205,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       todayNetInDrawer,
       totalInstapayIn,
       totalPendingOnCoaches,
+      totalCoachDues,
     };
   };
 
@@ -2217,8 +2213,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const getTodayStats = () => {
     const todayStr = new Date().toISOString().slice(0, 10);
 
-    const checkInsToday = checkInLogs.filter((c) =>
-      c.timestamp.startsWith(todayStr)
+    const checkInsToday = checkInLogs.filter(
+      (c) => c.timestamp.startsWith(todayStr) && isAfterLastClosing(c.timestamp)
     ).length;
 
     const todayTxs = transactions.filter((t) =>

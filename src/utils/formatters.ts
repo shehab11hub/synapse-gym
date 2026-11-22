@@ -80,6 +80,34 @@ export interface SubscriptionStatusInfo {
 }
 
 /**
+ * Calculate dynamic remaining days strictly based on difference between
+ * end_date midnight and today's midnight on device local time.
+ * Math.max(0, Math.ceil((endDateMidnight - todayMidnight) / 86400000))
+ */
+export function calculateRemainingDays(endDate?: string): number {
+  if (!endDate) return 0;
+  try {
+    const today = new Date();
+    const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+
+    const [y, m, d] = endDate.slice(0, 10).split('-').map(Number);
+    let endMidnight: number;
+    if (y && m && d) {
+      endMidnight = new Date(y, m - 1, d).getTime();
+    } else {
+      const parsed = new Date(endDate);
+      if (isNaN(parsed.getTime())) return 0;
+      endMidnight = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate()).getTime();
+    }
+
+    const diffDays = Math.ceil((endMidnight - todayMidnight) / 86400000);
+    return Math.max(0, diffDays);
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Comprehensive evaluator for member subscription state:
  * Clearly indicates if subscription is active until [Day X Month Y],
  * expired on [Day X Month Y], or player has no subscription.
@@ -104,20 +132,30 @@ export function getSubscriptionStatus(member?: {
     };
   }
 
-  let remainingDays = member.remainingDays ?? 0;
   const remainingSessions = member.remainingSessions ?? 0;
   const totalDays = member.totalDays ?? 0;
   const totalSessions = member.totalSessions ?? 0;
 
+  let remainingDays = member.remainingDays ?? 0;
   let isDatePast = false;
+
   if (member.endDate) {
-    const end = new Date(member.endDate);
-    if (!isNaN(end.getTime())) {
-      end.setHours(23, 59, 59, 999);
-      const diffMs = end.getTime() - Date.now();
-      const daysLeft = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
-      remainingDays = Math.max(0, daysLeft);
-      isDatePast = end.getTime() < Date.now();
+    const today = new Date();
+    const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+
+    const [y, m, d] = member.endDate.slice(0, 10).split('-').map(Number);
+    let endMidnight: number;
+    if (y && m && d) {
+      endMidnight = new Date(y, m - 1, d).getTime();
+    } else {
+      const parsed = new Date(member.endDate);
+      endMidnight = isNaN(parsed.getTime()) ? 0 : new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate()).getTime();
+    }
+
+    if (endMidnight > 0) {
+      const diffDays = Math.ceil((endMidnight - todayMidnight) / 86400000);
+      remainingDays = Math.max(0, diffDays);
+      isDatePast = diffDays <= 0;
     }
   }
 

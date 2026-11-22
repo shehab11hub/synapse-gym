@@ -241,8 +241,8 @@ export const MembersSearchPage: React.FC = () => {
       endDate,
       totalDays: durationDays,
       remainingDays: durationDays,
-      totalSessions: Number(newMemberForm.totalSessions) || 0,
-      remainingSessions: Number(newMemberForm.totalSessions) || 0,
+      totalSessions: newMemberForm.sessionCategory === 'gym' ? 0 : (Number(newMemberForm.totalSessions) || 0),
+      remainingSessions: newMemberForm.sessionCategory === 'gym' ? 0 : (Number(newMemberForm.totalSessions) || 0),
       active: true,
       notes: newMemberForm.notes || 'تسجيل عضو جديد من دليل وبحث الأعضاء',
     });
@@ -551,13 +551,15 @@ export const MembersSearchPage: React.FC = () => {
                       <div>
                         <span className="text-[10px] text-slate-400 block">الأيام المتبقية:</span>
                         <span className={`font-mono font-black text-sm ${isActive ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {member.remainingDays !== undefined ? `${member.remainingDays} يوم` : '-'}
+                          {subStatus.remainingDays !== undefined ? `${subStatus.remainingDays} يوم` : '-'}
                         </span>
                       </div>
                       <div>
                         <span className="text-[10px] text-slate-400 block">الحصص المتبقية:</span>
-                        <span className="font-mono font-black text-sm text-teal-400">
-                          {member.remainingSessions !== undefined ? `${member.remainingSessions} حصة` : '-'}
+                        <span className="font-mono font-black text-xs text-teal-400">
+                          {member.sessionCategory === 'gym' || !member.totalSessions
+                            ? 'اشتراك مفتوح'
+                            : `${member.remainingSessions ?? 0} حصة`}
                         </span>
                       </div>
                     </div>
@@ -978,7 +980,7 @@ export const MembersSearchPage: React.FC = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className={`grid gap-3 ${newMemberForm.sessionCategory !== 'gym' ? 'grid-cols-2' : 'grid-cols-1'}`}>
                 <div>
                   <label className="block text-xs font-bold text-slate-300 mb-1">
                     المدة بالأيام:
@@ -991,18 +993,20 @@ export const MembersSearchPage: React.FC = () => {
                     className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs font-mono text-white focus:outline-none focus:border-teal-400"
                   />
                 </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">
-                    عدد الحصص (إن وجد):
-                  </label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={newMemberForm.totalSessions}
-                    onChange={(e) => setNewMemberForm({ ...newMemberForm, totalSessions: Number(e.target.value) })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs font-mono text-white focus:outline-none focus:border-teal-400"
-                  />
-                </div>
+                {newMemberForm.sessionCategory !== 'gym' && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1">
+                      عدد الحصص المتاحة للباقة:
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={newMemberForm.totalSessions}
+                      onChange={(e) => setNewMemberForm({ ...newMemberForm, totalSessions: Number(e.target.value) })}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs font-mono text-white focus:outline-none focus:border-teal-400"
+                    />
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-3">

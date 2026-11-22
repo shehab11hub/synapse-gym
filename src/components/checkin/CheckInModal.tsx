@@ -182,10 +182,10 @@ export const CheckInModal: React.FC<CheckInModalProps> = ({
                 </div>
                 <div
                   className={`text-3xl font-black ${
-                    member.remainingDays <= 5 ? 'text-amber-400' : 'text-emerald-400'
+                    (subInfo.remainingDays ?? member.remainingDays) <= 5 ? 'text-amber-400' : 'text-emerald-400'
                   }`}
                 >
-                  {member.remainingDays}
+                  {subInfo.remainingDays ?? member.remainingDays}
                 </div>
                 <div className="text-[11px] text-slate-500 mt-1">
                   من إجمالي {member.totalDays} يوم
@@ -201,17 +201,25 @@ export const CheckInModal: React.FC<CheckInModalProps> = ({
               <div className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 text-center">
                 <div className="flex items-center justify-center gap-1.5 text-xs text-slate-400 mb-1">
                   <Award className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>الحصص المتبقية</span>
+                  <span>{member.sessionCategory === 'gym' || !member.totalSessions ? 'نظام الحصص' : 'الحصص المتبقية'}</span>
                 </div>
                 <div
-                  className={`text-3xl font-black ${
-                    member.remainingSessions <= 2 ? 'text-amber-400' : 'text-cyan-400'
+                  className={`font-black ${
+                    member.sessionCategory === 'gym' || !member.totalSessions
+                      ? 'text-xl text-teal-400'
+                      : member.remainingSessions <= 2
+                      ? 'text-3xl text-amber-400'
+                      : 'text-3xl text-cyan-400'
                   }`}
                 >
-                  {member.remainingSessions}
+                  {member.sessionCategory === 'gym' || !member.totalSessions
+                    ? 'اشتراك مفتوح'
+                    : member.remainingSessions}
                 </div>
                 <div className="text-[11px] text-slate-500 mt-1">
-                  من إجمالي {member.totalSessions} حصة
+                  {member.sessionCategory === 'gym' || !member.totalSessions
+                    ? 'دخول حر طوال مدة الاشتراك'
+                    : `من إجمالي ${member.totalSessions} حصة`}
                 </div>
                 <div className="text-[10px] text-emerald-400 mt-1">
                   تم خصم حصة اليوم

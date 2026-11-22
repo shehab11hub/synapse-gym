@@ -523,9 +523,15 @@ export const supabaseService = {
   async clearAllCheckInLogs(): Promise<boolean> {
     if (!isSupabaseConfigured || !supabase) return false;
     try {
-      const { error } = await supabase.from('check_in_logs').delete().neq('id', '');
-      return !error;
-    } catch {
+      const { error } = await supabase.from('check_in_logs').delete().not('id', 'is', null);
+      if (error) {
+        console.error('Supabase clearAllCheckInLogs error:', error);
+        const fallback = await supabase.from('check_in_logs').delete().neq('id', '');
+        return !fallback.error;
+      }
+      return true;
+    } catch (e) {
+      console.error('Supabase clearAllCheckInLogs exception:', e);
       return false;
     }
   },

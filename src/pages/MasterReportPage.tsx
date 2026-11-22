@@ -115,7 +115,7 @@ export const MasterReportPage: React.FC = () => {
   // Shift Closing Modals & States (تقفيل اليومية والدرج وتاريخين)
   const [isShiftAuthModalOpen, setIsShiftAuthModalOpen] = useState(false);
   const [isShiftClosingModalOpen, setIsShiftClosingModalOpen] = useState(false);
-  const [shiftAuthUsername, setShiftAuthUsername] = useState(currentUser?.username || '');
+  const [shiftAuthUsername, setShiftAuthUsername] = useState('');
   const [shiftAuthPassword, setShiftAuthPassword] = useState('');
   const [shiftAuthError, setShiftAuthError] = useState('');
   const [actualCountedCashInput, setActualCountedCashInput] = useState<string>('');
@@ -722,6 +722,7 @@ export const MasterReportPage: React.FC = () => {
                   return;
                 }
                 setShiftAuthError('');
+                setShiftAuthUsername('');
                 setShiftAuthPassword('');
                 setIsShiftAuthModalOpen(true);
               }}
@@ -1690,13 +1691,15 @@ export const MasterReportPage: React.FC = () => {
               </div>
             )}
 
-            <form onSubmit={handleShiftAuthSubmit} className="space-y-4 mt-5">
+            <form onSubmit={handleShiftAuthSubmit} autoComplete="off" className="space-y-4 mt-5">
               <div>
                 <label className="block text-xs font-bold text-slate-300 mb-1.5">اسم المستخدم (المسؤول)</label>
                 <div className="relative">
                   <input
                     type="text"
                     required
+                    name="closing_admin_id"
+                    autoComplete="new-password"
                     value={shiftAuthUsername}
                     onChange={(e) => setShiftAuthUsername(e.target.value)}
                     placeholder="اسم المستخدم"
@@ -1713,6 +1716,8 @@ export const MasterReportPage: React.FC = () => {
                     type="password"
                     required
                     autoFocus
+                    name="closing_admin_pass"
+                    autoComplete="new-password"
                     value={shiftAuthPassword}
                     onChange={(e) => setShiftAuthPassword(e.target.value)}
                     placeholder="••••••••"

@@ -355,8 +355,8 @@ export const ReceptionPage: React.FC = () => {
       endDate: new Date(Date.now() + newMemberForm.totalDays * 86400000).toISOString().slice(0, 10),
       totalDays: Number(newMemberForm.totalDays),
       remainingDays: Number(newMemberForm.totalDays),
-      totalSessions: Number(newMemberForm.totalSessions),
-      remainingSessions: Number(newMemberForm.totalSessions),
+      totalSessions: newMemberForm.sessionCategory === 'gym' ? 0 : (Number(newMemberForm.totalSessions) || 0),
+      remainingSessions: newMemberForm.sessionCategory === 'gym' ? 0 : (Number(newMemberForm.totalSessions) || 0),
       type: newMemberForm.type,
       active: true,
     });
@@ -934,7 +934,7 @@ export const ReceptionPage: React.FC = () => {
                     <span>الأيام المتبقية</span>
                   </div>
                   <div className="text-2xl font-black text-teal-400">
-                    {selectedMember.remainingDays} يوم
+                    {getSubscriptionStatus(selectedMember).remainingDays ?? selectedMember.remainingDays} يوم
                   </div>
                   <div className="text-[10px] text-slate-500 mt-1">
                     من أصل {selectedMember.totalDays} يوم
@@ -944,13 +944,17 @@ export const ReceptionPage: React.FC = () => {
                 <div className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 text-center">
                   <div className="text-xs text-slate-400 mb-1 flex items-center justify-center gap-1">
                     <Clock className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>الحصص المتبقية</span>
+                    <span>{selectedMember.sessionCategory === 'gym' || !selectedMember.totalSessions ? 'نظام الحصص' : 'الحصص المتبقية'}</span>
                   </div>
-                  <div className="text-2xl font-black text-cyan-400">
-                    {selectedMember.remainingSessions} حصة
+                  <div className="text-xl font-black text-cyan-400">
+                    {selectedMember.sessionCategory === 'gym' || !selectedMember.totalSessions
+                      ? 'اشتراك مفتوح'
+                      : `${selectedMember.remainingSessions ?? 0} حصة`}
                   </div>
                   <div className="text-[10px] text-slate-500 mt-1">
-                    من أصل {selectedMember.totalSessions} حصة
+                    {selectedMember.sessionCategory === 'gym' || !selectedMember.totalSessions
+                      ? 'حضور يومي بدون تقييد بالحصص'
+                      : `من أصل ${selectedMember.totalSessions} حصة`}
                   </div>
                 </div>
 
@@ -2274,7 +2278,7 @@ export const ReceptionPage: React.FC = () => {
                 )}
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className={`grid gap-3 ${newMemberForm.sessionCategory !== 'gym' ? 'grid-cols-2' : 'grid-cols-1'}`}>
                 <div>
                   <label className="block text-xs font-bold text-slate-300 mb-1">عدد الأيام</label>
                   <input
@@ -2284,15 +2288,18 @@ export const ReceptionPage: React.FC = () => {
                     className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-teal-500"
                   />
                 </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">عدد الحصص</label>
-                  <input
-                    type="number"
-                    value={newMemberForm.totalSessions}
-                    onChange={(e) => setNewMemberForm({ ...newMemberForm, totalSessions: Number(e.target.value) })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-teal-500"
-                  />
-                </div>
+                {newMemberForm.sessionCategory !== 'gym' && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1">عدد الحصص المتاحة</label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={newMemberForm.totalSessions}
+                      onChange={(e) => setNewMemberForm({ ...newMemberForm, totalSessions: Number(e.target.value) })}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-teal-500"
+                    />
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center gap-3 pt-3">
