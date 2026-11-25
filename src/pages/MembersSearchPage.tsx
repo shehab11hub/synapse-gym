@@ -187,7 +187,7 @@ export const MembersSearchPage: React.FC = () => {
 
     setIsSubmittingRenewal(true);
     try {
-      const res = renewMemberSubscription(
+      const res = await renewMemberSubscription(
         renewalMember.id,
         renewalForm.planName,
         durationDays || 30,

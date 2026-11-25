@@ -47,6 +47,7 @@ export type CoachContractType = 'monthly' | 'percentage' | 'per_session' | 'dail
 
 export interface Coach {
   id: string;
+  code?: string; // كود الكابتن المكون من 5 أرقام للدخول إلى حسابه
   name: string;
   phone: string;
   specialty: string;
@@ -78,7 +79,10 @@ export interface GymSession {
   hall: string; // القاعة
   coachIds: string[]; // 1 or 2 coaches
   sessionCategory?: SessionCategory; // نوع السيشن: برايفت، جروب، مساج، إلخ
-  price: number; // سعر تذكرة العميل / المتدرب للحصة (Client Ticket Price)
+  price: number; // سعر تذكرة العميل / المتدرب للحصة (الشريحة الأولى افتراضياً)
+  tier1Price?: number; // من 0 إلى 90 دقيقة (حتى ساعة ونصف)
+  tier2Price?: number; // من 91 إلى 120 دقيقة (من ساعة ونصف إلى ساعتين)
+  tier3Price?: number; // من 121 إلى 180 دقيقة (من ساعتين إلى 3 ساعات)
   startTime?: string; // e.g. "17:00"
   endTime?: string; // e.g. "18:30"
   status?: 'idle' | 'in-progress' | 'completed'; // زرار بداية ونهاية الحصة
@@ -148,7 +152,10 @@ export interface POSTransaction {
   totalAmount: number;
   totalCost: number;
   profit: number;
-  paymentMethod: 'cash' | 'card' | 'instapay';
+  paymentMethod: 'cash' | 'card' | 'instapay' | 'coach_debt';
+  coachId?: string;
+  coachName?: string;
+  notes?: string;
   timestamp: string;
   cashierName: string;
 }
@@ -175,6 +182,13 @@ export interface CheckInLog {
   coachShareAmount?: number;
   gymShareAmount?: number;
   chargedAmount?: number;
+  sessionStartedAt?: string; // توقيت دخول اللاعب الفعلي للحصة (بداية العداد الفردي)
+  checkOutTime?: string; // توقيت تسجيل خروج اللاعب
+  durationMinutes?: number; // إجمالي مدة التواجد بالدقائق
+  pricingTier?: 'tier1' | 'tier2' | 'tier3'; // الشريحة الزمنية المستحقة
+  extraFeePaid?: number; // فرق السعر الإضافي المحصل عند الخروج
+  extraPaymentMethod?: 'cash' | 'instapay' | 'card' | 'coach_debt' | 'package_deduction';
+  checkOutStatus?: 'active' | 'checked_out' | 'pending_settlement';
 }
 
 export interface SettlementLog {
@@ -203,7 +217,7 @@ export interface TrainerTransaction {
   status: TransactionStatus; // 'pending' | 'settled'
   created_at: string;
   month?: string; // e.g. "أكتوبر 2026"
-  type?: 'session_charge' | 'subscription_charge' | 'physio_charge' | 'coach_repayment' | 'salary_payout' | 'general';
+  type?: 'session_charge' | 'subscription_charge' | 'physio_charge' | 'pos_charge' | 'coach_repayment' | 'salary_payout' | 'general';
   payment_method?: 'cash' | 'card' | 'instapay' | 'coach_collected';
   settled_at?: string;
   settled_by?: string;
@@ -256,10 +270,15 @@ export interface MasterReportEntry {
   coachName: string; // اسم الكابتن المسند
   sessionCategory: SessionCategory; // 'private' | 'group' | 'physio' | 'massage' | 'gym'
   sessionTitle?: string;
-  paymentMethod: 'cash' | 'instapay' | 'card' | 'coach_collected'; // طريقة الدفع
+  paymentMethod: 'cash' | 'instapay' | 'card' | 'coach_collected' | 'coach_debt'; // طريقة الدفع
   paymentStatus: 'paid' | 'pending_on_coach' | 'unpaid'; // حالة السداد
   notes?: string;
-  sourceType: 'subscription' | 'session' | 'physio' | 'manual';
+  sourceType: 'subscription' | 'session' | 'physio' | 'pos' | 'manual';
+  entryTime?: string;
+  checkOutTime?: string;
+  durationMinutes?: number;
+  pricingTier?: string;
+  extraFeePaid?: number;
 }
 
 export interface MonthlyBillingCycle {

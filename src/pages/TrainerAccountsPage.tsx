@@ -155,7 +155,7 @@ export const TrainerAccountsPage: React.FC = () => {
     setIsRepayModalOpen(true);
   };
 
-  const handleConfirmRepay = (e: React.FormEvent) => {
+  const handleConfirmRepay = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedCoachForRepay || isSubmittingRepay) return;
 
@@ -167,7 +167,7 @@ export const TrainerAccountsPage: React.FC = () => {
 
     setIsSubmittingRepay(true);
     try {
-      const res = repayCoachDebt(
+      const res = await repayCoachDebt(
         selectedCoachForRepay.id,
         amount,
         repayMethod,
@@ -181,6 +181,8 @@ export const TrainerAccountsPage: React.FC = () => {
         setIsRepayModalOpen(false);
         setSelectedCoachForRepay(null);
       }
+    } catch (err: any) {
+      alert(err?.message || 'تعذر الاتصال بقاعدة البيانات');
     } finally {
       setIsSubmittingRepay(false);
     }
@@ -215,7 +217,7 @@ export const TrainerAccountsPage: React.FC = () => {
   };
 
   // Actions
-  const handleCreateTransaction = (e: React.FormEvent) => {
+  const handleCreateTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmittingTrx) return;
 
@@ -235,7 +237,7 @@ export const TrainerAccountsPage: React.FC = () => {
 
     setIsSubmittingTrx(true);
     try {
-      const res = addCoachManualMovement({
+      const res = await addCoachManualMovement({
         coach_id: trxForm.coach_id,
         movement_type: trxForm.movement_type,
         amount,
@@ -262,12 +264,14 @@ export const TrainerAccountsPage: React.FC = () => {
           payment_method: 'cash',
         });
       }
+    } catch (err: any) {
+      alert(err?.message || 'تعذر الاتصال بقاعدة البيانات');
     } finally {
       setIsSubmittingTrx(false);
     }
   };
 
-  const handlePayMonthlySalary = (coach: Coach) => {
+  const handlePayMonthlySalary = async (coach: Coach) => {
     if (!coach.monthlySalary) return;
     if (coach.monthlySalaryPaidThisMonth) {
       if (!confirm(`تم صرف راتب هذا الشهر للمدرب ${coach.name} مسبقاً. هل ترغب في صرف راتب إضافي؟`)) {
@@ -275,10 +279,14 @@ export const TrainerAccountsPage: React.FC = () => {
       }
     }
 
-    const res = payMonthlySalary(coach.id, currentUser?.name || 'المدير العام');
-    if (res.success) {
-      sounds.playCashRegister();
-      alert(`تم صرف الراتب الشهري بقيمة ${formatEGP(res.salaryAmount)} للمدرب ${coach.name} وتسجيله تلقائياً في صفحة المصاريف والدرج.`);
+    try {
+      const res = await payMonthlySalary(coach.id, currentUser?.name || 'المدير العام');
+      if (res.success) {
+        sounds.playCashRegister();
+        alert(`تم صرف الراتب الشهري بقيمة ${formatEGP(res.salaryAmount)} للمدرب ${coach.name} وتسجيله تلقائياً في صفحة المصاريف والدرج.`);
+      }
+    } catch (err: any) {
+      alert(err?.message || 'تعذر الاتصال بقاعدة البيانات');
     }
   };
 
@@ -598,7 +606,14 @@ export const TrainerAccountsPage: React.FC = () => {
                           {coach.name.charAt(0)}
                         </div>
                         <div>
-                          <h3 className="text-base font-black text-white">{coach.name}</h3>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h3 className="text-base font-black text-white">{coach.name}</h3>
+                            {coach.code && (
+                              <span className="px-2 py-0.5 rounded-md bg-teal-500/15 border border-teal-500/30 text-teal-300 font-mono text-[10px] font-black tracking-wider">
+                                كود: {coach.code}
+                              </span>
+                            )}
+                          </div>
                           <div className="text-xs text-slate-400">{coach.specialty}</div>
                           <div className="text-[10px] text-slate-500 font-mono">{coach.phone}</div>
                         </div>

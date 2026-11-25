@@ -1,4 +1,7 @@
 import ExcelJS from 'exceljs';
+import { supabaseService } from '../services/supabaseService';
+import { isSupabaseConfigured } from '../lib/supabase';
+import { withDbTimeout, NetworkDbError, NETWORK_ERROR_MESSAGE } from './network';
 import {
   MasterReportEntry,
   ExpenseItem,
@@ -59,6 +62,7 @@ const getExpenseCategoryLabel = (category: string): string => {
 const getPaymentMethodLabel = (method?: string): string => {
   switch (method) {
     case 'coach_collected':
+    case 'coach_debt':
       return 'تحميل على الكابتن';
     case 'instapay':
       return 'إنستاباي (InstaPay)';
@@ -197,15 +201,51 @@ export interface MasterReportExportPayload {
   netPeriodCash: number;
 }
 
-export const exportMasterReportToXLSX = async (data: MasterReportExportPayload) => {
+export const exportMasterReportToXLSX = async (inputData: MasterReportExportPayload) => {
+  // Direct-from-DB Query at export time (12s timeout + online check)
+  let data = inputData;
+  if (isSupabaseConfigured) {
+    const [freshEntries, freshExpenses, freshInflows, freshPos, freshCoaches] =
+      await withDbTimeout(
+        Promise.all([
+          supabaseService.fetchMasterReportEntries(),
+          supabaseService.fetchExpenses(),
+          supabaseService.fetchCashInflows(),
+          supabaseService.fetchPOSTransactions(),
+          supabaseService.fetchCoaches(),
+        ]),
+        12000
+      );
+
+    if (freshEntries === null || freshExpenses === null || freshInflows === null) {
+      throw new NetworkDbError(NETWORK_ERROR_MESSAGE);
+    }
+
+    const monthFilter = inputData.selectedMonth;
+    const filteredEntries =
+      monthFilter && monthFilter !== 'all'
+        ? freshEntries.filter((e) => e.month === monthFilter)
+        : freshEntries;
+
+    data = {
+      ...inputData,
+      entries: filteredEntries,
+      expenses: freshExpenses,
+      cashInflows: freshInflows,
+      repayments: freshInflows.filter((i) => i.type === 'coach_settlement'),
+      posTransactions: freshPos ?? inputData.posTransactions,
+      coaches: freshCoaches ?? inputData.coaches,
+    };
+  }
+
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Synapse Gym SaaS Pro';
   workbook.lastModifiedBy = 'Synapse Management';
   workbook.created = new Date();
   workbook.modified = new Date();
 
-  const directEntries = data.entries.filter((e) => e.paymentMethod !== 'coach_collected');
-  const coachEntries = data.entries.filter((e) => e.paymentMethod === 'coach_collected');
+  const directEntries = data.entries.filter((e) => e.paymentMethod !== 'coach_collected' && e.paymentMethod !== 'coach_debt');
+  const coachEntries = data.entries.filter((e) => e.paymentMethod === 'coach_collected' || e.paymentMethod === 'coach_debt');
 
   // ─────────────────────────────────────────────────────────────
   // TAB 1: الملخص المالي والدرج
@@ -247,6 +287,7 @@ export const exportMasterReportToXLSX = async (data: MasterReportExportPayload) 
   const posTotal = data.posTransactions.reduce((s, t) => s + t.totalAmount, 0);
   const posCash = data.posTransactions.filter((t) => t.paymentMethod === 'cash').reduce((s, t) => s + t.totalAmount, 0);
   const posInstapay = data.posTransactions.filter((t) => t.paymentMethod === 'instapay').reduce((s, t) => s + t.totalAmount, 0);
+  const posCoachDebt = data.posTransactions.filter((t) => t.paymentMethod === 'coach_debt').reduce((s, t) => s + t.totalAmount, 0);
   const repCash = data.repayments.filter((r) => r.paymentMethod === 'cash').reduce((s, r) => s + r.amount, 0);
   const repInstapay = data.repayments.filter((r) => r.paymentMethod === 'instapay').reduce((s, r) => s + r.amount, 0);
 
@@ -268,6 +309,7 @@ export const exportMasterReportToXLSX = async (data: MasterReportExportPayload) 
     { label: 'اشتراكات مباشرة - بطاقة / فيزا', value: directCard, method: 'فيزا / بطاقة', status: 'وارد رقمي', notes: 'مدفوعات بطاقات بنكية' },
     { label: 'مبيعات البار والمتجر - كاش', value: posCash, method: 'كاش', status: 'وارد بالدرج', notes: 'نقدية مبيعات POS المتجر' },
     { label: 'مبيعات البار والمتجر - إنستاباي', value: posInstapay, method: 'إنستاباي', status: 'وارد رقمي', notes: 'مبيعات POS عبر إنستاباي' },
+    { label: 'مبيعات البار والمتجر - تحميل على الكباتن', value: posCoachDebt, method: 'تحميل على الكابتن', status: 'مديونية معلقة على الكباتن', notes: 'مشتريات بار ومشروبات محملة على حساب الكباتن لحين السداد' },
     { label: 'إجمالي مبيعات البار والمتجر', value: posTotal, method: 'متنوع', status: 'إجمالي POS', notes: `${data.posTransactions.length} فاتورة بيع` },
     { label: 'سدادات الكباتن - كاش بالخزينة', value: repCash, method: 'كاش', status: 'توريد بالدرج', notes: 'مبالغ سددها المدربون نقداً من مديونياتهم' },
     { label: 'سدادات الكباتن - إنستاباي', value: repInstapay, method: 'إنستاباي', status: 'توريد رقمي', notes: 'سداد مديونيات عبر إنستاباي' },
@@ -490,6 +532,9 @@ export const exportMasterReportToXLSX = async (data: MasterReportExportPayload) 
     catEntries.forEach((entry, idx) => {
       const dStr = entry.date ? new Date(entry.date).toLocaleDateString('ar-EG') : '';
       const statusLabel = entry.paymentStatus === 'paid' ? 'مسدد' : entry.paymentStatus === 'pending_on_coach' ? 'تحميل قائم' : 'غير مسدد';
+      const durationInfo = entry.durationMinutes
+        ? ` | دخول: ${entry.entryTime ? new Date(entry.entryTime).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : '-'} | خروج: ${entry.checkOutTime ? new Date(entry.checkOutTime).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : '-'} | المدة: ${entry.durationMinutes} د (${entry.pricingTier || ''})${entry.extraFeePaid ? ` | فرق: ${entry.extraFeePaid} ج.م` : ''}`
+        : '';
       const row = directSheet.addRow([
         idx + 1,
         entry.playerCode || '-',
@@ -500,7 +545,7 @@ export const exportMasterReportToXLSX = async (data: MasterReportExportPayload) 
         entry.coachName || 'الخزينة العامة',
         dStr,
         statusLabel,
-        entry.notes || '-',
+        `${entry.notes || '-'}${durationInfo}`,
       ]);
       row.height = 22;
       [1, 2, 4, 7, 8].forEach((n) => { row.getCell(n).alignment = { vertical: 'middle', horizontal: 'center' }; });
@@ -744,14 +789,56 @@ export const exportMasterReportToXLSX = async (data: MasterReportExportPayload) 
 // ============================================================================
 export const exportDailyShiftToXLSX = async (
   closing: DailyShiftClosing,
-  todayEntries: MasterReportEntry[],
-  todayExpenses: ExpenseItem[],
-  todayInflows: CashInflowItem[],
-  todayTransactions?: POSTransaction[],
-  todayTrainerTransactions?: TrainerTransaction[],
-  todayCheckInLogs?: CheckInLog[],
-  allCoaches?: Coach[]
+  initialEntries: MasterReportEntry[],
+  initialExpenses: ExpenseItem[],
+  initialInflows: CashInflowItem[],
+  initialTransactions?: POSTransaction[],
+  initialTrainerTransactions?: TrainerTransaction[],
+  initialCheckInLogs?: CheckInLog[],
+  initialCoaches?: Coach[]
 ) => {
+  let todayEntries = initialEntries;
+  let todayExpenses = initialExpenses;
+  let todayInflows = initialInflows;
+  let todayTransactions = initialTransactions;
+  let todayTrainerTransactions = initialTrainerTransactions;
+  let todayCheckInLogs = initialCheckInLogs;
+  let allCoaches = initialCoaches;
+
+  // Direct-from-DB Query at export time (12s timeout)
+  if (isSupabaseConfigured) {
+    const [freshEntries, freshExpenses, freshInflows, freshPos, freshTrx, freshLogs, freshCoaches] =
+      await withDbTimeout(
+        Promise.all([
+          supabaseService.fetchMasterReportEntries(),
+          supabaseService.fetchExpenses(),
+          supabaseService.fetchCashInflows(),
+          supabaseService.fetchPOSTransactions(),
+          supabaseService.fetchTrainerTransactions(),
+          supabaseService.fetchCheckInLogs(),
+          supabaseService.fetchCoaches(),
+        ]),
+        12000
+      );
+
+    if (freshEntries === null || freshExpenses === null || freshInflows === null) {
+      throw new NetworkDbError(NETWORK_ERROR_MESSAGE);
+    }
+
+    const d1 = closing.closingDayDate || closing.date;
+    const d2 = closing.nextDayDate || '';
+    const matchDate = (iso?: string) =>
+      Boolean(iso && (iso.startsWith(d1) || (d2 && iso.startsWith(d2))));
+
+    todayEntries = freshEntries.filter((e) => matchDate(e.date));
+    todayExpenses = freshExpenses.filter((e) => matchDate(e.date));
+    todayInflows = freshInflows.filter((i) => matchDate(i.date));
+    if (freshPos) todayTransactions = freshPos.filter((t) => matchDate(t.timestamp));
+    if (freshTrx) todayTrainerTransactions = freshTrx.filter((t) => matchDate(t.created_at));
+    if (freshLogs && freshLogs.length > 0) todayCheckInLogs = freshLogs;
+    if (freshCoaches) allCoaches = freshCoaches;
+  }
+
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Synapse Gym SaaS Pro';
   workbook.created = new Date();
@@ -1175,7 +1262,7 @@ export const exportDailyShiftToXLSX = async (
 
   todayEntries.forEach((e, idx) => {
     totalPlayerFees += e.amount;
-    const isDebt = e.paymentMethod === 'coach_collected';
+    const isDebt = e.paymentMethod === 'coach_collected' || e.paymentMethod === 'coach_debt';
 
     // Look up coach share from matching trainer transactions
     const matchingTx = (todayTrainerTransactions || []).find(

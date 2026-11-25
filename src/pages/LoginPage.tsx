@@ -6,9 +6,11 @@ import {
   ArrowRight,
   Dumbbell,
   ShieldCheck,
+  KeyRound,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { sounds } from '../utils/sound';
+import { CoachPortalPage } from './CoachPortalPage';
 
 export const LoginPage: React.FC = () => {
   const { login } = useAuth();
@@ -16,6 +18,17 @@ export const LoginPage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [showCoachPortal, setShowCoachPortal] = useState(() => {
+    try {
+      return Boolean(sessionStorage.getItem('synapse_coach_portal_id'));
+    } catch {
+      return false;
+    }
+  });
+
+  if (showCoachPortal) {
+    return <CoachPortalPage onBackToStaffLogin={() => setShowCoachPortal(false)} />;
+  }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -136,8 +149,20 @@ export const LoginPage: React.FC = () => {
             </button>
           </form>
 
+          {/* Coach Portal Button */}
+          <div className="mt-5 pt-5 border-t border-slate-800/80">
+            <button
+              type="button"
+              onClick={() => setShowCoachPortal(true)}
+              className="w-full py-3 px-4 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 font-black text-xs transition flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <KeyRound className="w-4 h-4 text-amber-400" />
+              <span>دخول الكباتن والمدربين (كشف الحساب بالكود الخماسي)</span>
+            </button>
+          </div>
+
           {/* Footer note */}
-          <div className="mt-8 pt-5 border-t border-slate-800/80 text-center text-xs text-slate-500">
+          <div className="mt-6 pt-4 border-t border-slate-800/60 text-center text-xs text-slate-500">
             <p>منظومة Synapse Gym SaaS - الإصدار الإنتاجي للتشغيل الفعلي v2.4</p>
           </div>
         </div>

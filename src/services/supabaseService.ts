@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { withDbTimeout } from '../utils/network';
 import {
   User,
   Member,
@@ -17,6 +18,10 @@ import {
   MonthlyArchive,
   YearlyArchive,
 } from '../types';
+
+async function execWithTimeout<T>(op: PromiseLike<T>): Promise<T> {
+  return withDbTimeout(op);
+}
 
 export const supabaseService = {
   // ─── USERS ────────────────────────────────────────────────────
@@ -113,7 +118,7 @@ export const supabaseService = {
   async upsertMember(member: Member): Promise<boolean> {
     if (!isSupabaseConfigured || !supabase) return false;
     try {
-      const { error } = await supabase.from('members').upsert({
+      const { error } = await execWithTimeout(supabase.from('members').upsert({
         id: member.id,
         code: member.code,
         name: member.name,
@@ -139,7 +144,7 @@ export const supabaseService = {
         assigned_trainer_id: member.assignedTrainerId,
         notes: member.notes,
         updated_at: new Date().toISOString(),
-      });
+      }));
       return !error;
     } catch (e) {
       console.error('Supabase upsertMember exception:', e);
@@ -165,6 +170,7 @@ export const supabaseService = {
       if (error) return null;
       return (data || []).map((c: any) => ({
         id: c.id,
+        code: c.code || undefined,
         name: c.name,
         phone: c.phone,
         specialty: c.specialty,
@@ -186,7 +192,7 @@ export const supabaseService = {
   async upsertCoach(coach: Coach): Promise<boolean> {
     if (!isSupabaseConfigured || !supabase) return false;
     try {
-      const { error } = await supabase.from('coaches').upsert({
+      const payload: Record<string, any> = {
         id: coach.id,
         name: coach.name,
         phone: coach.phone,
@@ -201,7 +207,16 @@ export const supabaseService = {
         last_salary_payment_date: coach.lastSalaryPaymentDate,
         active: coach.active,
         updated_at: new Date().toISOString(),
+      };
+      const { error } = await supabase.from('coaches').upsert({
+        ...payload,
+        ...(coach.code ? { code: coach.code } : {}),
       });
+      if (error && coach.code) {
+        // Fallback if 'code' column hasn't been added to Supabase yet
+        const retry = await supabase.from('coaches').upsert(payload);
+        return !retry.error;
+      }
       return !error;
     } catch {
       return false;
@@ -222,6 +237,9 @@ export const supabaseService = {
         coachIds: s.coach_ids || [],
         sessionCategory: s.session_category,
         price: Number(s.price || 0),
+        tier1Price: s.tier1_price !== undefined && s.tier1_price !== null ? Number(s.tier1_price) : Number(s.price || 0),
+        tier2Price: s.tier2_price !== undefined && s.tier2_price !== null ? Number(s.tier2_price) : undefined,
+        tier3Price: s.tier3_price !== undefined && s.tier3_price !== null ? Number(s.tier3_price) : undefined,
         startTime: s.start_time,
         endTime: s.end_time,
         status: s.status || 'idle',
@@ -241,7 +259,7 @@ export const supabaseService = {
   async upsertSession(session: GymSession): Promise<boolean> {
     if (!isSupabaseConfigured || !supabase) return false;
     try {
-      const { error } = await supabase.from('gym_sessions').upsert({
+      const basePayload = {
         id: session.id,
         title: session.title,
         sport: session.sport,
@@ -260,7 +278,17 @@ export const supabaseService = {
         completed_today_by_coach: session.completedTodayByCoach,
         notes: session.notes,
         updated_at: new Date().toISOString(),
+      };
+      const { error } = await supabase.from('gym_sessions').upsert({
+        ...basePayload,
+        tier1_price: session.tier1Price ?? session.price ?? 0,
+        tier2_price: session.tier2Price ?? 0,
+        tier3_price: session.tier3Price ?? 0,
       });
+      if (error) {
+        const retry = await supabase.from('gym_sessions').upsert(basePayload);
+        return !retry.error;
+      }
       return !error;
     } catch {
       return false;
@@ -427,6 +455,9 @@ export const supabaseService = {
         totalCost: Number(t.total_cost || 0),
         profit: Number(t.profit || 0),
         paymentMethod: t.payment_method,
+        coachId: t.coach_id || undefined,
+        coachName: t.coach_name || undefined,
+        notes: t.notes || undefined,
         timestamp: t.timestamp,
         cashierName: t.cashier_name,
       }));
@@ -438,7 +469,7 @@ export const supabaseService = {
   async insertPOSTransaction(t: POSTransaction): Promise<boolean> {
     if (!isSupabaseConfigured || !supabase) return false;
     try {
-      const { error } = await supabase.from('pos_transactions').insert({
+      const basePayload = {
         id: t.id,
         items: t.items,
         total_amount: t.totalAmount,
@@ -447,7 +478,17 @@ export const supabaseService = {
         payment_method: t.paymentMethod,
         timestamp: t.timestamp,
         cashier_name: t.cashierName,
+      };
+      const { error } = await supabase.from('pos_transactions').insert({
+        ...basePayload,
+        ...(t.coachId ? { coach_id: t.coachId } : {}),
+        ...(t.coachName ? { coach_name: t.coachName } : {}),
+        ...(t.notes ? { notes: t.notes } : {}),
       });
+      if (error && (t.coachId || t.coachName || t.notes)) {
+        const retry = await supabase.from('pos_transactions').insert(basePayload);
+        return !retry.error;
+      }
       return !error;
     } catch {
       return false;
@@ -477,6 +518,13 @@ export const supabaseService = {
         assignedSessionTitle: l.assigned_session_title,
         paymentMode: l.payment_mode,
         chargedAmount: Number(l.charged_amount || 0),
+        sessionStartedAt: l.session_started_at || undefined,
+        checkOutTime: l.check_out_time || undefined,
+        durationMinutes: l.duration_minutes !== undefined && l.duration_minutes !== null ? Number(l.duration_minutes) : undefined,
+        pricingTier: l.pricing_tier || undefined,
+        extraFeePaid: l.extra_fee_paid !== undefined && l.extra_fee_paid !== null ? Number(l.extra_fee_paid) : 0,
+        extraPaymentMethod: l.extra_payment_method || undefined,
+        checkOutStatus: l.check_out_status || undefined,
       }));
     } catch {
       return null;
@@ -486,7 +534,7 @@ export const supabaseService = {
   async insertCheckInLog(l: CheckInLog): Promise<boolean> {
     if (!isSupabaseConfigured || !supabase) return false;
     try {
-      const { error } = await supabase.from('check_in_logs').insert({
+      const basePayload = {
         id: l.id,
         member_id: l.memberId,
         member_name: l.memberName,
@@ -503,7 +551,21 @@ export const supabaseService = {
         assigned_session_title: l.assignedSessionTitle,
         payment_mode: l.paymentMode,
         charged_amount: l.chargedAmount ?? 0,
+      };
+      const { error } = await supabase.from('check_in_logs').upsert({
+        ...basePayload,
+        session_started_at: l.sessionStartedAt ?? null,
+        check_out_time: l.checkOutTime ?? null,
+        duration_minutes: l.durationMinutes ?? 0,
+        pricing_tier: l.pricingTier ?? null,
+        extra_fee_paid: l.extraFeePaid ?? 0,
+        extra_payment_method: l.extraPaymentMethod ?? null,
+        check_out_status: l.checkOutStatus ?? null,
       });
+      if (error) {
+        const retry = await supabase.from('check_in_logs').upsert(basePayload);
+        return !retry.error;
+      }
       return !error;
     } catch {
       return false;
@@ -654,7 +716,7 @@ export const supabaseService = {
   async insertExpense(e: ExpenseItem): Promise<boolean> {
     if (!isSupabaseConfigured || !supabase) return false;
     try {
-      const { error } = await supabase.from('expenses').upsert({
+      const { error } = await execWithTimeout(supabase.from('expenses').upsert({
         id: e.id,
         title: e.title,
         category: e.category,
@@ -665,7 +727,7 @@ export const supabaseService = {
         payment_method: e.paymentMethod,
         auto_generated: e.autoGenerated ?? false,
         related_entity_id: e.relatedEntityId,
-      });
+      }));
       return !error;
     } catch {
       return false;
@@ -706,7 +768,7 @@ export const supabaseService = {
   async insertCashInflow(i: CashInflowItem): Promise<boolean> {
     if (!isSupabaseConfigured || !supabase) return false;
     try {
-      const { error } = await supabase.from('cash_inflows').upsert({
+      const { error } = await execWithTimeout(supabase.from('cash_inflows').upsert({
         id: i.id,
         type: i.type,
         title: i.title,
@@ -715,7 +777,7 @@ export const supabaseService = {
         member_name: i.memberName,
         payment_method: i.paymentMethod,
         recorded_by: i.recordedBy,
-      });
+      }));
       return !error;
     } catch {
       return false;
@@ -753,6 +815,11 @@ export const supabaseService = {
         paymentStatus: m.payment_status,
         notes: m.notes,
         sourceType: m.source_type,
+        entryTime: m.entry_time || undefined,
+        checkOutTime: m.check_out_time || undefined,
+        durationMinutes: m.duration_minutes !== undefined && m.duration_minutes !== null ? Number(m.duration_minutes) : undefined,
+        pricingTier: m.pricing_tier || undefined,
+        extraFeePaid: m.extra_fee_paid !== undefined && m.extra_fee_paid !== null ? Number(m.extra_fee_paid) : 0,
       }));
     } catch {
       return null;
@@ -762,7 +829,7 @@ export const supabaseService = {
   async upsertMasterReportEntry(entry: MasterReportEntry): Promise<boolean> {
     if (!isSupabaseConfigured || !supabase) return false;
     try {
-      const { error } = await supabase.from('master_report_entries').upsert({
+      const basePayload = {
         id: entry.id,
         month: entry.month,
         date: entry.date,
@@ -777,7 +844,19 @@ export const supabaseService = {
         payment_status: entry.paymentStatus,
         notes: entry.notes,
         source_type: entry.sourceType,
+      };
+      const { error } = await supabase.from('master_report_entries').upsert({
+        ...basePayload,
+        entry_time: entry.entryTime ?? null,
+        check_out_time: entry.checkOutTime ?? null,
+        duration_minutes: entry.durationMinutes ?? null,
+        pricing_tier: entry.pricingTier ?? null,
+        extra_fee_paid: entry.extraFeePaid ?? 0,
       });
+      if (error) {
+        const retry = await supabase.from('master_report_entries').upsert(basePayload);
+        return !retry.error;
+      }
       return !error;
     } catch {
       return false;

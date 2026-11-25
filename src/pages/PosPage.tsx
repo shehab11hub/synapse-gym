@@ -22,6 +22,7 @@ import {
   ArrowUp,
   Boxes,
   RefreshCw,
+  UserCheck,
 } from 'lucide-react';
 import { useGymData } from '../context/GymDataContext';
 import { useAuth } from '../context/AuthContext';
@@ -32,6 +33,7 @@ import { sounds } from '../utils/sound';
 export const PosPage: React.FC = () => {
   const {
     products,
+    coaches,
     addProduct,
     updateProduct,
     deleteProduct,
@@ -50,7 +52,9 @@ export const PosPage: React.FC = () => {
 
   // Cart state
   const [cart, setCart] = useState<{ product: POSProduct; quantity: number }[]>([]);
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'instapay'>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'instapay' | 'coach_debt'>('cash');
+  const [selectedCoachIdForDebt, setSelectedCoachIdForDebt] = useState<string>('');
+  const [posDebtNotes, setPosDebtNotes] = useState<string>('');
 
   // Add Product Modal
   const [isAddProductModalOpen, setIsAddProductModalOpen] = useState(false);
@@ -221,11 +225,20 @@ export const PosPage: React.FC = () => {
     setCart((prev) => prev.filter((item) => item.product.id !== productId));
   };
 
-  const handleCheckout = () => {
+  const handleCheckout = async () => {
     if (cart.length === 0 || isProcessingSale) return;
 
     if (cartTotalAmount <= 0) {
       alert('تنبيه: إجمالي الفاتورة يجب أن يكون أكبر من صفر');
+      return;
+    }
+
+    const activeCoaches = coaches.filter((c) => c.active);
+    const chosenCoachId = selectedCoachIdForDebt || activeCoaches[0]?.id || '';
+    const chosenCoach = coaches.find((c) => c.id === chosenCoachId);
+
+    if (paymentMethod === 'coach_debt' && !chosenCoach) {
+      alert('يرجى اختيار الكابتن المراد تحميل قيمة المشتريات على حسابه');
       return;
     }
 
@@ -240,12 +253,15 @@ export const PosPage: React.FC = () => {
         totalPrice: Math.max(0, item.product.sellPrice * Math.max(1, Math.floor(item.quantity))),
       }));
 
-      const tx = processSale({
+      const tx = await processSale({
         items,
         totalAmount: cartTotalAmount,
         totalCost: cartTotalCost,
         profit: cartProfit,
         paymentMethod,
+        coachId: paymentMethod === 'coach_debt' ? chosenCoach?.id : undefined,
+        coachName: paymentMethod === 'coach_debt' ? chosenCoach?.name : undefined,
+        notes: paymentMethod === 'coach_debt' ? posDebtNotes.trim() || undefined : undefined,
         cashierName: currentUser?.name || 'الكاشير',
       });
 
@@ -256,11 +272,17 @@ export const PosPage: React.FC = () => {
         items: tx.items,
         total: tx.totalAmount,
         profit: tx.profit,
-        method: paymentMethod,
+        method:
+          paymentMethod === 'coach_debt'
+            ? `تحميل على الكابتن (${chosenCoach?.name || ''})`
+            : paymentMethod,
         time: new Date().toLocaleTimeString('ar-EG'),
       });
 
       setCart([]);
+      setPosDebtNotes('');
+    } catch (err: any) {
+      alert(err?.message || 'تعذر الاتصال بقاعدة البيانات أو الإنترنت ضعيف جداً.');
     } finally {
       setIsProcessingSale(false);
     }
@@ -759,50 +781,100 @@ export const PosPage: React.FC = () => {
               </div>
 
               {/* Payment Methods */}
-              <div className="mb-4">
-                <label className="block text-[11px] font-bold text-slate-400 mb-1.5">
+              <div className="mb-4 space-y-2.5">
+                <label className="block text-[11px] font-bold text-slate-400">
                   طريقة الدفع:
                 </label>
-                <div className="grid grid-cols-3 gap-1.5">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                   <button
                     type="button"
                     onClick={() => setPaymentMethod('cash')}
-                    className={`py-2 rounded-xl text-[11px] font-bold border transition flex flex-col items-center gap-1 ${
+                    className={`py-2 px-1 rounded-xl text-[11px] font-bold border transition flex flex-col items-center gap-1 cursor-pointer ${
                       paymentMethod === 'cash'
                         ? 'bg-teal-500/20 border-teal-500 text-teal-300'
-                        : 'bg-slate-900 border-slate-800 text-slate-400'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
                     }`}
                   >
                     <Banknote className="w-4 h-4" />
-                    <span>كاش (نقدي)</span>
+                    <span>كاش</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => setPaymentMethod('card')}
-                    className={`py-2 rounded-xl text-[11px] font-bold border transition flex flex-col items-center gap-1 ${
+                    className={`py-2 px-1 rounded-xl text-[11px] font-bold border transition flex flex-col items-center gap-1 cursor-pointer ${
                       paymentMethod === 'card'
                         ? 'bg-teal-500/20 border-teal-500 text-teal-300'
-                        : 'bg-slate-900 border-slate-800 text-slate-400'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
                     }`}
                   >
                     <CreditCard className="w-4 h-4" />
-                    <span>فيزا / بطاقة</span>
+                    <span>فيزا</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => setPaymentMethod('instapay')}
-                    className={`py-2 rounded-xl text-[11px] font-bold border transition flex flex-col items-center gap-1 ${
+                    className={`py-2 px-1 rounded-xl text-[11px] font-bold border transition flex flex-col items-center gap-1 cursor-pointer ${
                       paymentMethod === 'instapay'
                         ? 'bg-teal-500/20 border-teal-500 text-teal-300'
-                        : 'bg-slate-900 border-slate-800 text-slate-400'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
                     }`}
                   >
                     <Smartphone className="w-4 h-4" />
                     <span>انستاباي</span>
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPaymentMethod('coach_debt');
+                      if (!selectedCoachIdForDebt) {
+                        const firstActive = coaches.find((c) => c.active);
+                        if (firstActive) setSelectedCoachIdForDebt(firstActive.id);
+                      }
+                    }}
+                    className={`py-2 px-1 rounded-xl text-[11px] font-bold border transition flex flex-col items-center gap-1 cursor-pointer ${
+                      paymentMethod === 'coach_debt'
+                        ? 'bg-amber-500/20 border-amber-500 text-amber-300'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-amber-500/40'
+                    }`}
+                  >
+                    <UserCheck className="w-4 h-4" />
+                    <span>على الكابتن</span>
+                  </button>
                 </div>
+
+                {/* Coach Selector when charging POS sale to a coach */}
+                {paymentMethod === 'coach_debt' && (
+                  <div className="p-3 rounded-2xl bg-amber-950/30 border border-amber-500/30 space-y-2 animate-scale-up">
+                    <div className="flex items-center gap-1.5 text-[11px] font-black text-amber-300">
+                      <UserCheck className="w-3.5 h-3.5" />
+                      <span>تحميل الفاتورة كمديونية على الكابتن (لا تدخل الدرج الآن):</span>
+                    </div>
+                    <select
+                      value={selectedCoachIdForDebt}
+                      onChange={(e) => setSelectedCoachIdForDebt(e.target.value)}
+                      className="w-full bg-slate-900 border border-amber-500/40 rounded-xl px-3 py-2 text-xs text-white font-bold focus:outline-none focus:border-amber-400"
+                    >
+                      <option value="">-- اختر الكابتن المسؤول --</option>
+                      {coaches
+                        .filter((c) => c.active)
+                        .map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name} {c.code ? `(كود: ${c.code})` : ''}
+                          </option>
+                        ))}
+                    </select>
+                    <input
+                      type="text"
+                      value={posDebtNotes}
+                      onChange={(e) => setPosDebtNotes(e.target.value)}
+                      placeholder="اسم اللاعب أو ملاحظة (مثال: أخذها اللاعب أحمد)..."
+                      className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-[11px] text-white placeholder-slate-500 focus:outline-none focus:border-amber-400"
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Total breakdown */}

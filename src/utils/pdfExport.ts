@@ -10,6 +10,9 @@ import {
   PhysioBooking,
 } from '../types';
 import { formatEGP, formatTime12h } from './formatters';
+import { supabaseService } from '../services/supabaseService';
+import { isSupabaseConfigured } from '../lib/supabase';
+import { withDbTimeout, NetworkDbError, NETWORK_ERROR_MESSAGE } from './network';
 
 const getCategoryLabel = (cat?: string): string => {
   switch (cat) {
@@ -231,14 +234,46 @@ const openPrintWindow = (title: string, htmlContent: string) => {
 /**
  * 1. Print Daily Shift Report PDF (شامل كل العمليات: زجاجات مياه، مقبوضات، كباتن، مصاريف)
  */
-export const printDailyShiftReportPDF = (
+export const printDailyShiftReportPDF = async (
   closing: DailyShiftClosing,
-  entries: MasterReportEntry[],
-  expenses: ExpenseItem[],
-  inflows: CashInflowItem[],
-  posTransactions: POSTransaction[],
-  trainerTransactions: TrainerTransaction[]
+  initialEntries: MasterReportEntry[],
+  initialExpenses: ExpenseItem[],
+  initialInflows: CashInflowItem[],
+  initialPosTransactions: POSTransaction[],
+  initialTrainerTransactions: TrainerTransaction[]
 ) => {
+  let entries = initialEntries;
+  let expenses = initialExpenses;
+  let inflows = initialInflows;
+  let posTransactions = initialPosTransactions;
+  let trainerTransactions = initialTrainerTransactions;
+
+  if (isSupabaseConfigured) {
+    const [freshEntries, freshExpenses, freshInflows, freshPos, freshTrx] = await withDbTimeout(
+      Promise.all([
+        supabaseService.fetchMasterReportEntries(),
+        supabaseService.fetchExpenses(),
+        supabaseService.fetchCashInflows(),
+        supabaseService.fetchPOSTransactions(),
+        supabaseService.fetchTrainerTransactions(),
+      ]),
+      12000
+    );
+    if (freshEntries === null || freshExpenses === null || freshInflows === null) {
+      throw new NetworkDbError(NETWORK_ERROR_MESSAGE);
+    }
+    const d1 = closing.closingDayDate || closing.date;
+    const d2 = closing.nextDayDate || '';
+    const matchDate = (iso?: string) =>
+      Boolean(iso && (iso.startsWith(d1) || (d2 && iso.startsWith(d2))));
+
+    entries = freshEntries.filter((e) => matchDate(e.date));
+    expenses = freshExpenses.filter((e) => matchDate(e.date));
+    inflows = freshInflows.filter((i) => matchDate(i.date));
+    if (freshPos) posTransactions = freshPos.filter((t) => matchDate(t.timestamp));
+    if (freshTrx) trainerTransactions = freshTrx.filter((t) => matchDate(t.created_at));
+  }
+
   // Aggregate POS items sold today
   const posItemsMap: { [prodName: string]: { qty: number; unitPrice: number; totalRev: number; paymentMethods: Set<string> } } = {};
   posTransactions.forEach((tx) => {
@@ -514,16 +549,55 @@ export const printDailyShiftReportPDF = (
 /**
  * 2. Print Monthly Master Report PDF
  */
-export const printMonthlyMasterReportPDF = (
+export const printMonthlyMasterReportPDF = async (
   monthName: string,
-  entries: MasterReportEntry[],
-  expenses: ExpenseItem[],
-  inflows: CashInflowItem[],
-  posTransactions: POSTransaction[],
-  coaches: Coach[],
-  trainerTransactions: TrainerTransaction[],
+  initialEntries: MasterReportEntry[],
+  initialExpenses: ExpenseItem[],
+  initialInflows: CashInflowItem[],
+  initialPosTransactions: POSTransaction[],
+  initialCoaches: Coach[],
+  initialTrainerTransactions: TrainerTransaction[],
   netPeriodCash: number
 ) => {
+  let entries = initialEntries;
+  let expenses = initialExpenses;
+  let inflows = initialInflows;
+  let posTransactions = initialPosTransactions;
+  let coaches = initialCoaches;
+  let trainerTransactions = initialTrainerTransactions;
+
+  if (isSupabaseConfigured) {
+    const [freshEntries, freshExpenses, freshInflows, freshPos, freshCoaches, freshTrx] =
+      await withDbTimeout(
+        Promise.all([
+          supabaseService.fetchMasterReportEntries(),
+          supabaseService.fetchExpenses(),
+          supabaseService.fetchCashInflows(),
+          supabaseService.fetchPOSTransactions(),
+          supabaseService.fetchCoaches(),
+          supabaseService.fetchTrainerTransactions(),
+        ]),
+        12000
+      );
+    if (freshEntries === null || freshExpenses === null || freshInflows === null) {
+      throw new NetworkDbError(NETWORK_ERROR_MESSAGE);
+    }
+    entries =
+      monthName && monthName !== 'all'
+        ? freshEntries.filter((e) => e.month === monthName)
+        : freshEntries;
+    expenses = freshExpenses;
+    inflows = freshInflows;
+    if (freshPos) posTransactions = freshPos;
+    if (freshCoaches) coaches = freshCoaches;
+    if (freshTrx) {
+      trainerTransactions =
+        monthName && monthName !== 'all'
+          ? freshTrx.filter((t) => !t.month || t.month === monthName)
+          : freshTrx;
+    }
+  }
+
   const totalRev = entries.reduce((s, e) => s + e.amount, 0);
   const totalExp = expenses.reduce((s, e) => s + e.amount, 0);
   const totalPos = posTransactions.reduce((s, t) => s + t.totalAmount, 0);

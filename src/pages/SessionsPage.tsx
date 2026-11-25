@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Calendar,
   Clock,
@@ -16,27 +16,66 @@ import {
   Square,
   RotateCcw,
   X,
+  LogOut,
+  Settings,
 } from 'lucide-react';
 import { useGymData } from '../context/GymDataContext';
 import { GymSession, SessionCategory } from '../types';
 import { formatEGP } from '../utils/formatters';
+import { CheckOutSettlementModal } from '../components/CheckOutSettlementModal';
+import { sounds } from '../utils/sound';
+
+const formatElapsedHMS = (startIso: string, nowMs: number): string => {
+  const diffSec = Math.max(0, Math.floor((nowMs - new Date(startIso).getTime()) / 1000));
+  const hrs = Math.floor(diffSec / 3600);
+  const mins = Math.floor((diffSec % 3600) / 60);
+  const secs = diffSec % 60;
+  return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+};
 
 export const SessionsPage: React.FC = () => {
   const {
     sessions,
     coaches,
     members,
+    checkInLogs,
+    isAfterLastClosing,
     addSession,
+    updateSession,
     deleteSession,
     startSession,
     endSession,
     removePlayerFromSession,
     toggleSessionCoachCompletion,
     toggleMemberAsDoctor,
+    calculatePlayerCheckOutQuote,
+    completePlayerCheckOut,
   } = useGymData();
+
+  // Live 1-second clock for individual per-player timers (HH:MM:SS)
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Add Session modal state
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+
+  // Edit Session Settings & Tiers modal state
+  const [editingSession, setEditingSession] = useState<GymSession | null>(null);
+  const [editTierForm, setEditTierForm] = useState({
+    title: '',
+    sport: '',
+    hall: '',
+    tier1Price: 150,
+    tier2Price: 200,
+    tier3Price: 300,
+  });
+
+  // Check-Out Settlement Modal state
+  const [settlementLogId, setSettlementLogId] = useState<string | null>(null);
+  const [checkOutNotice, setCheckOutNotice] = useState<string | null>(null);
 
   // New Session form (بدون إلزام بتوقيت محدد، زرار بداية ونهاية عند الطلب)
   const [form, setForm] = useState({
@@ -45,8 +84,9 @@ export const SessionsPage: React.FC = () => {
     hall: 'القاعة الكبرى A',
     sessionCategory: 'group' as SessionCategory,
     coachIds: [] as string[],
-    price: 150,
-    durationMinutes: 60,
+    tier1Price: 150,
+    tier2Price: 200,
+    tier3Price: 300,
   });
 
   const handleCreateSession = (e: React.FormEvent) => {
@@ -56,13 +96,20 @@ export const SessionsPage: React.FC = () => {
       return;
     }
 
+    const t1 = Math.max(0, Number(form.tier1Price) || 0);
+    const t2 = Math.max(0, Number(form.tier2Price) || 0);
+    const t3 = Math.max(0, Number(form.tier3Price) || 0);
+
     addSession({
       title: form.title,
       sport: form.sport,
       hall: form.hall,
       sessionCategory: form.sessionCategory,
       coachIds: form.coachIds,
-      price: Number(form.price),
+      price: t1,
+      tier1Price: t1,
+      tier2Price: t2,
+      tier3Price: t3,
       status: 'idle',
       daysOfWeek: [0, 1, 2, 3, 4],
       enrolledPlayerIds: [],
@@ -76,9 +123,69 @@ export const SessionsPage: React.FC = () => {
       hall: 'القاعة الكبرى A',
       sessionCategory: 'group',
       coachIds: [],
-      price: 150,
-      durationMinutes: 60,
+      tier1Price: 150,
+      tier2Price: 200,
+      tier3Price: 300,
     });
+  };
+
+  const openEditSessionModal = (session: GymSession) => {
+    setEditingSession(session);
+    setEditTierForm({
+      title: session.title,
+      sport: session.sport,
+      hall: session.hall,
+      tier1Price: session.tier1Price ?? session.price ?? 150,
+      tier2Price: session.tier2Price ?? 200,
+      tier3Price: session.tier3Price ?? 300,
+    });
+  };
+
+  const handleSaveEditSession = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingSession) return;
+    const t1 = Math.max(0, Number(editTierForm.tier1Price) || 0);
+    const t2 = Math.max(0, Number(editTierForm.tier2Price) || 0);
+    const t3 = Math.max(0, Number(editTierForm.tier3Price) || 0);
+
+    updateSession(editingSession.id, {
+      title: editTierForm.title.trim() || editingSession.title,
+      sport: editTierForm.sport.trim() || editingSession.sport,
+      hall: editTierForm.hall.trim() || editingSession.hall,
+      price: t1,
+      tier1Price: t1,
+      tier2Price: t2,
+      tier3Price: t3,
+    });
+    sounds.playSuccessDing();
+    setEditingSession(null);
+  };
+
+  const handlePlayerCheckOut = async (logId: string) => {
+    const quote = calculatePlayerCheckOutQuote(logId);
+    if (!quote) return;
+
+    if (quote.durationMinutes <= 90 && quote.extraFeeDue <= 0) {
+      try {
+        const res = await completePlayerCheckOut(logId, {
+          paymentMethod: 'cash',
+          extraFee: 0,
+          durationMinutes: quote.durationMinutes,
+          pricingTier: 'tier1',
+        });
+        if (res.success) {
+          sounds.playSuccessDing();
+          setCheckOutNotice(
+            `✅ تم تسجيل خروج ${quote.log.memberName} (${quote.durationMinutes} دقيقة - الشريحة الأولى) بدون رسوم إضافية`
+          );
+          setTimeout(() => setCheckOutNotice(null), 5000);
+        }
+      } catch (err: any) {
+        alert(err?.message || 'تعذر الاتصال بقاعدة البيانات');
+      }
+    } else {
+      setSettlementLogId(logId);
+    }
   };
 
   const handleCoachSelect = (coachId: string) => {
@@ -139,11 +246,39 @@ export const SessionsPage: React.FC = () => {
         </div>
       </div>
 
+      {/* Check-Out Notification Banner */}
+      {checkOutNotice && (
+        <div className="p-4 rounded-2xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-xs font-black flex items-center justify-between animate-scale-up">
+          <span>{checkOutNotice}</span>
+          <button
+            onClick={() => setCheckOutNotice(null)}
+            className="p-1 text-emerald-400 hover:text-white cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Sessions Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {sessions.map((session) => {
           const isRunning = session.status === 'in-progress';
           const isDone = session.status === 'completed';
+
+          // Helper: get active check-in log for a player inside this session today
+          const getActiveLog = (memberId: string) =>
+            checkInLogs.find(
+              (l) =>
+                l.memberId === memberId &&
+                l.assignedSessionId === session.id &&
+                l.seatingStatus === 'assigned' &&
+                l.checkOutStatus !== 'checked_out' &&
+                isAfterLastClosing(l.timestamp)
+            );
+
+          const tier1 = session.tier1Price ?? session.price ?? 0;
+          const tier2 = session.tier2Price ?? tier1;
+          const tier3 = session.tier3Price ?? tier2;
 
           // Assigned coaches
           const assignedCoaches = coaches.filter((c) => session.coachIds.includes(c.id));
@@ -322,10 +457,13 @@ export const SessionsPage: React.FC = () => {
                 {totalPlayersCount > 0 ? (
                   <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
                     {/* Permanent Players */}
-                    {enrolledPlayers.map((player) => (
+                    {enrolledPlayers.map((player) => {
+                      const activeLog = getActiveLog(player.id);
+                      const timerStart = activeLog ? (activeLog.sessionStartedAt || activeLog.timestamp) : null;
+                      return (
                       <div
                         key={player.id}
-                        className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800/80 flex items-center justify-between text-xs hover:border-slate-700 transition"
+                        className="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-xs hover:border-slate-700 transition"
                       >
                         <div className="flex items-center gap-2">
                           <span className="font-mono text-[10px] bg-slate-800 px-1.5 py-0.5 rounded text-slate-400">
@@ -343,6 +481,21 @@ export const SessionsPage: React.FC = () => {
                         </div>
 
                         <div className="flex items-center gap-2">
+                          {timerStart && (
+                            <span className="inline-flex items-center gap-1 font-mono text-[11px] font-black px-2 py-0.5 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                              <Clock className="w-3 h-3 animate-pulse" />
+                              <span>{formatElapsedHMS(timerStart, nowMs)}</span>
+                            </span>
+                          )}
+                          {activeLog && (
+                            <button
+                              onClick={() => handlePlayerCheckOut(activeLog.id)}
+                              className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-slate-950 border border-amber-500/40 font-black text-[10px] transition flex items-center gap-1 cursor-pointer"
+                            >
+                              <LogOut className="w-3 h-3" />
+                              <span>تسجيل خروج</span>
+                            </button>
+                          )}
                           <span className="text-[10px] text-teal-400 font-medium">
                             متبقي: {player.remainingSessions} حصة
                           </span>
@@ -355,13 +508,17 @@ export const SessionsPage: React.FC = () => {
                           </button>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
 
                     {/* Temporary Players for Today */}
-                    {temporaryPlayers.map((player) => (
+                    {temporaryPlayers.map((player) => {
+                      const activeLog = getActiveLog(player.id);
+                      const timerStart = activeLog ? (activeLog.sessionStartedAt || activeLog.timestamp) : null;
+                      return (
                       <div
                         key={`temp-${player.id}`}
-                        className="p-2.5 rounded-xl bg-amber-950/20 border border-amber-500/30 flex items-center justify-between text-xs hover:border-amber-500/50 transition"
+                        className="p-2.5 rounded-xl bg-amber-950/20 border border-amber-500/30 flex flex-wrap items-center justify-between gap-2 text-xs hover:border-amber-500/50 transition"
                       >
                         <div className="flex items-center gap-2">
                           <span className="font-mono text-[10px] bg-amber-900/40 px-1.5 py-0.5 rounded text-amber-300">
@@ -374,6 +531,21 @@ export const SessionsPage: React.FC = () => {
                         </div>
 
                         <div className="flex items-center gap-2">
+                          {timerStart && (
+                            <span className="inline-flex items-center gap-1 font-mono text-[11px] font-black px-2 py-0.5 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                              <Clock className="w-3 h-3 animate-pulse" />
+                              <span>{formatElapsedHMS(timerStart, nowMs)}</span>
+                            </span>
+                          )}
+                          {activeLog && (
+                            <button
+                              onClick={() => handlePlayerCheckOut(activeLog.id)}
+                              className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-slate-950 border border-amber-500/40 font-black text-[10px] transition flex items-center gap-1 cursor-pointer"
+                            >
+                              <LogOut className="w-3 h-3" />
+                              <span>تسجيل خروج</span>
+                            </button>
+                          )}
                           <button
                             onClick={() => removePlayerFromSession(session.id, player.id)}
                             className="p-1 text-slate-500 hover:text-rose-400 rounded transition"
@@ -383,23 +555,44 @@ export const SessionsPage: React.FC = () => {
                           </button>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="p-4 rounded-xl bg-slate-900/30 border border-dashed border-slate-800 text-center text-xs text-slate-500">
                     لا يوجد لاعبين مسكنين بالحصة حالياً. يتم تسكين المتدربين من شاشة الاستقبال بعد سداد الرسوم أو الخصم من الباقة.
                   </div>
                 )}
+
+                {/* 3-Tier Duration Pricing Pill Strip */}
+                <div className="mt-3 p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[10px]">
+                  <span className="text-slate-400 font-bold">شرائح المدة:</span>
+                  <div className="flex items-center gap-2 flex-wrap font-mono">
+                    <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+                      0-90د: {formatEGP(tier1)}
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20">
+                      91-120د: {formatEGP(tier2)}
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-rose-500/10 text-rose-300 border border-rose-500/20">
+                      121-180د: {formatEGP(tier3)}
+                    </span>
+                  </div>
+                </div>
               </div>
 
               {/* Bottom Footer Actions */}
               <div className="p-6 pt-3 border-t border-slate-800/60 flex items-center justify-between text-xs text-slate-500">
-                <span className="text-[11px]">
-                  التسكين دائم تلقائياً للحصص القادمة
-                </span>
+                <button
+                  onClick={() => openEditSessionModal(session)}
+                  className="py-1.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-[11px] flex items-center gap-1.5 cursor-pointer transition"
+                >
+                  <Settings className="w-3.5 h-3.5 text-teal-400" />
+                  <span>إعدادات وتسعير الشرائح</span>
+                </button>
                 <button
                   onClick={() => deleteSession(session.id)}
-                  className="text-slate-500 hover:text-rose-400 p-1.5 rounded-lg hover:bg-rose-500/10 transition"
+                  className="text-slate-500 hover:text-rose-400 p-1.5 rounded-lg hover:bg-rose-500/10 transition cursor-pointer"
                   title="حذف الحصة"
                 >
                   <Trash2 className="w-4 h-4" />
@@ -496,40 +689,70 @@ export const SessionsPage: React.FC = () => {
 
                   <div>
                     <label className="block text-xs font-bold text-teal-300 mb-1.5">
-                      سعر تذكرة العميل (Client Ticket) - ج.م
+                      السعر الأساسي (0 - 90 دقيقة) - ج.م
                     </label>
                     <input
                       type="number"
                       required
                       min="0"
-                      value={form.price}
-                      onChange={(e) => setForm({ ...form, price: Number(e.target.value) })}
+                      value={form.tier1Price}
+                      onChange={(e) => setForm({ ...form, tier1Price: Number(e.target.value) })}
                       className="w-full bg-slate-900 border border-teal-500/50 rounded-xl px-3.5 py-2 text-xs sm:text-sm text-white focus:outline-none focus:border-teal-400 font-bold font-mono transition"
                     />
                   </div>
                 </div>
 
-                {/* Duration & Live Mode info */}
-                <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-2">
+                {/* 3-Tier Duration Pricing Section */}
+                <div className="p-4 rounded-2xl bg-slate-900/80 border border-amber-500/30 space-y-3">
                   <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-slate-300">
-                      المدة التقديرية للحصة (بالدقائق)
+                    <label className="text-xs font-black text-amber-300 flex items-center gap-1.5">
+                      <Clock className="w-4 h-4" />
+                      <span>تسعير الحصة حسب مدة التواجد (الشرائح الثلاث):</span>
                     </label>
-                    <span className="text-[11px] font-bold text-teal-400 bg-teal-500/10 px-2.5 py-0.5 rounded-lg border border-teal-500/20">
-                      {form.durationMinutes} دقيقة
-                    </span>
                   </div>
-                  <input
-                    type="range"
-                    min="15"
-                    max="180"
-                    step="15"
-                    value={form.durationMinutes}
-                    onChange={(e) => setForm({ ...form, durationMinutes: Number(e.target.value) })}
-                    className="w-full accent-teal-400 cursor-pointer"
-                  />
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-emerald-300 mb-1">
+                        0 - 90 دقيقة (ساعة ونصف)
+                      </label>
+                      <input
+                        type="number"
+                        required
+                        min="0"
+                        value={form.tier1Price}
+                        onChange={(e) => setForm({ ...form, tier1Price: Number(e.target.value) })}
+                        className="w-full bg-slate-950 border border-emerald-500/40 rounded-xl px-3 py-2 text-xs text-white font-mono font-bold focus:outline-none focus:border-emerald-400"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-amber-300 mb-1">
+                        91 - 120 دقيقة (ساعتين)
+                      </label>
+                      <input
+                        type="number"
+                        required
+                        min="0"
+                        value={form.tier2Price}
+                        onChange={(e) => setForm({ ...form, tier2Price: Number(e.target.value) })}
+                        className="w-full bg-slate-950 border border-amber-500/40 rounded-xl px-3 py-2 text-xs text-white font-mono font-bold focus:outline-none focus:border-amber-400"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-rose-300 mb-1">
+                        121 - 180 دقيقة (3 ساعات)
+                      </label>
+                      <input
+                        type="number"
+                        required
+                        min="0"
+                        value={form.tier3Price}
+                        onChange={(e) => setForm({ ...form, tier3Price: Number(e.target.value) })}
+                        className="w-full bg-slate-950 border border-rose-500/40 rounded-xl px-3 py-2 text-xs text-white font-mono font-bold focus:outline-none focus:border-rose-400"
+                      />
+                    </div>
+                  </div>
                   <p className="text-[10px] text-slate-400">
-                    💡 <span className="text-teal-300 font-bold">تحكم مباشر:</span> تبدأ الحصة وتنتهي بنقرة زر (بدء الحصة / إنهاء الحصة) بدون أي قيود زمنية جامدة.
+                    💡 يبدأ عداد وقت فردي لكل لاعب عند التسكين، وعند تسجيل الخروج يُحسب الفرق تلقائياً بناءً على مدة تواجده.
                   </p>
                 </div>
 
@@ -594,6 +817,137 @@ export const SessionsPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Edit Session Settings & 3-Tier Pricing Modal */}
+      {editingSession && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-6">
+          <div className="bg-[#0f172a] border border-amber-500/40 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400">
+                  <Settings className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white">تعديل إعدادات وتسعير الحصة</h3>
+                  <p className="text-[11px] text-slate-400">{editingSession.title}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingSession(null)}
+                className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditSession} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">اسم الحصة</label>
+                <input
+                  type="text"
+                  required
+                  value={editTierForm.title}
+                  onChange={(e) => setEditTierForm({ ...editTierForm, title: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1">النشاط الرياضي</label>
+                  <input
+                    type="text"
+                    value={editTierForm.sport}
+                    onChange={(e) => setEditTierForm({ ...editTierForm, sport: e.target.value })}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1">القاعة</label>
+                  <input
+                    type="text"
+                    value={editTierForm.hall}
+                    onChange={(e) => setEditTierForm({ ...editTierForm, hall: e.target.value })}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white"
+                  />
+                </div>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-slate-900/90 border border-amber-500/30 space-y-3">
+                <div className="text-xs font-black text-amber-300">تسعير الحصة حسب مدة التواجد:</div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-emerald-300 mb-1">
+                      0 - 90 دقيقة (أساسي)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      required
+                      value={editTierForm.tier1Price}
+                      onChange={(e) => setEditTierForm({ ...editTierForm, tier1Price: Number(e.target.value) })}
+                      className="w-full bg-slate-950 border border-emerald-500/40 rounded-xl px-3 py-2 text-xs text-white font-mono font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-amber-300 mb-1">
+                      91 - 120 دقيقة
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      required
+                      value={editTierForm.tier2Price}
+                      onChange={(e) => setEditTierForm({ ...editTierForm, tier2Price: Number(e.target.value) })}
+                      className="w-full bg-slate-950 border border-amber-500/40 rounded-xl px-3 py-2 text-xs text-white font-mono font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-rose-300 mb-1">
+                      121 - 180 دقيقة
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      required
+                      value={editTierForm.tier3Price}
+                      onChange={(e) => setEditTierForm({ ...editTierForm, tier3Price: Number(e.target.value) })}
+                      className="w-full bg-slate-950 border border-rose-500/40 rounded-xl px-3 py-2 text-xs text-white font-mono font-bold"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 px-4 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 font-black text-xs cursor-pointer"
+                >
+                  حفظ التعديلات في قاعدة البيانات
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingSession(null)}
+                  className="py-2.5 px-4 rounded-xl bg-slate-800 text-slate-300 font-bold text-xs cursor-pointer"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Check-Out Duration Settlement Modal */}
+      <CheckOutSettlementModal
+        checkInLogId={settlementLogId}
+        onClose={() => setSettlementLogId(null)}
+        onCompleted={(msg) => {
+          setCheckOutNotice(msg);
+          setTimeout(() => setCheckOutNotice(null), 5000);
+        }}
+      />
     </div>
   );
 };

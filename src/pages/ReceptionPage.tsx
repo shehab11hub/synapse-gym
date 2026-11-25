@@ -36,15 +36,27 @@ import { useGymData, generateUniqueMemberCode } from '../context/GymDataContext'
 import { Member, SessionCategory, Coach, CheckInLog } from '../types';
 import { DeskQRCodeModal } from '../components/checkin/DeskQRCodeModal';
 import { CheckInModal } from '../components/checkin/CheckInModal';
+import { CheckOutSettlementModal } from '../components/CheckOutSettlementModal';
 import { formatDateAr, formatEGP, formatArabicDayMonth, getSubscriptionStatus } from '../utils/formatters';
 import { generateQRDataUrl } from '../utils/qrGenerator';
 import { sounds } from '../utils/sound';
+import { LogOut } from 'lucide-react';
+
+const formatElapsedHMS = (startIso: string, nowMs: number): string => {
+  const diffSec = Math.max(0, Math.floor((nowMs - new Date(startIso).getTime()) / 1000));
+  const hrs = Math.floor(diffSec / 3600);
+  const mins = Math.floor((diffSec % 3600) / 60);
+  const secs = diffSec % 60;
+  return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+};
 
 export const ReceptionPage: React.FC = () => {
   const {
     members,
     findMemberByCode,
     performCheckIn,
+    calculatePlayerCheckOutQuote,
+    completePlayerCheckOut,
     cancelCheckIn,
     clearAllCheckInLogs,
     toggleMemberAsDoctor,
@@ -56,6 +68,13 @@ export const ReceptionPage: React.FC = () => {
     assignArrivedMember,
     renewMemberSubscription,
   } = useGymData();
+
+  const [settlementLogId, setSettlementLogId] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleCancelCheckIn = (logId: string, memberName: string) => {
     if (
@@ -195,13 +214,48 @@ export const ReceptionPage: React.FC = () => {
     }
   };
 
-  // Check-in trigger
+  // Check-in / Check-out trigger
   const handleTriggerCheckIn = (member: Member, method: 'qr' | 'manual' = 'manual') => {
     const res = performCheckIn(member.id, method);
+    if (res.success && res.isCheckOut) {
+      if (res.requiresSettlement && res.checkOutLogId) {
+        sounds.playBeep();
+        setSettlementLogId(res.checkOutLogId);
+      } else {
+        sounds.playSuccessDing();
+        alert(`✅ تم تسجيل خروج اللاعب ${member.name} بنجاح (المدة: ${res.durationMinutes || 0} دقيقة - الشريحة الأولى بدون رسوم إضافية).`);
+      }
+      return;
+    }
+
     if (res.success && res.member) {
       setCheckedInMember(res.member);
       setIsCheckInModalOpen(true);
       setSelectedMember(res.member);
+    }
+  };
+
+  const handleManualCheckOut = async (logId: string) => {
+    const quote = calculatePlayerCheckOutQuote(logId);
+    if (!quote) return;
+
+    if (quote.durationMinutes <= 90 && quote.extraFeeDue <= 0) {
+      try {
+        const res = await completePlayerCheckOut(logId, {
+          paymentMethod: 'cash',
+          extraFee: 0,
+          durationMinutes: quote.durationMinutes,
+          pricingTier: 'tier1',
+        });
+        if (res.success) {
+          sounds.playSuccessDing();
+          alert(`✅ تم تسجيل خروج ${quote.log.memberName} (${quote.durationMinutes} دقيقة - الشريحة الأولى) بدون رسوم إضافية.`);
+        }
+      } catch (err: any) {
+        alert(err?.message || 'تعذر الاتصال بقاعدة البيانات');
+      }
+    } else {
+      setSettlementLogId(logId);
     }
   };
 
@@ -256,7 +310,7 @@ export const ReceptionPage: React.FC = () => {
   };
 
   // Confirm Seating & Routing Action
-  const handleConfirmSeating = (e: React.FormEvent) => {
+  const handleConfirmSeating = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedLogForSeating || isSubmittingSeating) return;
 
@@ -310,7 +364,7 @@ export const ReceptionPage: React.FC = () => {
         seatingForm.directEntryType === 'new_subscription' &&
         !seatingForm.isSubAlreadyRenewed
       ) {
-        renewMemberSubscription(
+        await renewMemberSubscription(
           selectedLogForSeating.memberId,
           seatingForm.subPlanName,
           Number(seatingForm.subDurationDays) || 30,
@@ -789,24 +843,60 @@ export const ReceptionPage: React.FC = () => {
                             </span>
                           )}
                         </div>
+
+                        {/* Individual Timer / Check-Out Status */}
+                        {log.assignedSessionId && (
+                          <div className="flex items-center justify-between pt-1.5 border-t border-slate-800/80">
+                            <span className="text-slate-400 text-[10px]">مدة التواجد:</span>
+                            {log.checkOutStatus === 'checked_out' ? (
+                              <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-teal-500/15 text-teal-300 border border-teal-500/30">
+                                ✅ تم الخروج ({log.durationMinutes || 0} د{log.extraFeePaid ? ` • فرق +${formatEGP(log.extraFeePaid)}` : ''})
+                              </span>
+                            ) : (
+                              <span className="text-[11px] font-mono font-black px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                                <Clock className="w-3 h-3 animate-pulse" />
+                                <span>{formatElapsedHMS(log.sessionStartedAt || log.timestamp, nowMs)}</span>
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
 
-                  {/* Seating CTA & Cancel Actions */}
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => openSeatingModal(log)}
-                      className={`flex-1 py-2.5 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                        isAssigned
-                          ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
-                          : 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 shadow-lg shadow-amber-500/20'
-                      }`}
-                    >
-                      <Layers className="w-3.5 h-3.5" />
-                      <span>{isAssigned ? 'تعديل التوجيه والتسكين' : 'تسكين وتوجيه اللاعب الآن'}</span>
-                    </button>
+                  {/* Seating CTA, Check-Out & Cancel Actions */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {isAssigned && log.assignedSessionId && log.checkOutStatus !== 'checked_out' ? (
+                      <button
+                        type="button"
+                        onClick={() => handleManualCheckOut(log.id)}
+                        className={`flex-1 py-2.5 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                          log.checkOutStatus === 'pending_settlement'
+                            ? 'bg-rose-500 hover:bg-rose-400 text-white animate-pulse shadow-lg shadow-rose-500/30'
+                            : 'bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-slate-950 border border-amber-500/40'
+                        }`}
+                      >
+                        <LogOut className="w-3.5 h-3.5" />
+                        <span>
+                          {log.checkOutStatus === 'pending_settlement'
+                            ? 'طلب خروج (تسوية فرق المدة)'
+                            : 'تسجيل خروج اللاعب'}
+                        </span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => openSeatingModal(log)}
+                        className={`flex-1 py-2.5 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                          isAssigned
+                            ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                            : 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 shadow-lg shadow-amber-500/20'
+                        }`}
+                      >
+                        <Layers className="w-3.5 h-3.5" />
+                        <span>{isAssigned ? 'تعديل التوجيه والتسكين' : 'تسكين وتوجيه اللاعب الآن'}</span>
+                      </button>
+                    )}
 
                     <button
                       type="button"
@@ -2014,19 +2104,23 @@ export const ReceptionPage: React.FC = () => {
                           <button
                             type="button"
                             disabled={seatingForm.isSubAlreadyRenewed}
-                            onClick={() => {
+                            onClick={async () => {
                               if (!selectedLogForSeating) return;
-                              renewMemberSubscription(
-                                selectedLogForSeating.memberId,
-                                seatingForm.subPlanName,
-                                Number(seatingForm.subDurationDays) || 30,
-                                Number(seatingForm.subFee) || 0,
-                                seatingForm.subPaymentMethod,
-                                `اشتراك صالة فوري من شاشة التسكين (${seatingForm.subPlanName})`
-                              );
-                              setSeatingForm((prev) => ({ ...prev, isSubAlreadyRenewed: true }));
-                              sounds.playCashRegister();
-                              alert(`✓ تم تسجيل تحصيل مبلغ ${formatEGP(seatingForm.subFee)} بنجاح (${seatingForm.subPaymentMethod === 'cash' ? 'كاش بالدرج' : 'تحويل إنستاباي'}) وتفعيل اشتراك ${seatingForm.subDurationDays} يوم للاعب! وتم ترحيل الحركة للتقرير واليومية.`);
+                              try {
+                                await renewMemberSubscription(
+                                  selectedLogForSeating.memberId,
+                                  seatingForm.subPlanName,
+                                  Number(seatingForm.subDurationDays) || 30,
+                                  Number(seatingForm.subFee) || 0,
+                                  seatingForm.subPaymentMethod,
+                                  `اشتراك صالة فوري من شاشة التسكين (${seatingForm.subPlanName})`
+                                );
+                                setSeatingForm((prev) => ({ ...prev, isSubAlreadyRenewed: true }));
+                                sounds.playCashRegister();
+                                alert(`✓ تم تسجيل تحصيل مبلغ ${formatEGP(seatingForm.subFee)} بنجاح (${seatingForm.subPaymentMethod === 'cash' ? 'كاش بالدرج' : 'تحويل إنستاباي'}) وتفعيل اشتراك ${seatingForm.subDurationDays} يوم للاعب! وتم ترحيل الحركة للتقرير واليومية.`);
+                              } catch (err: any) {
+                                alert(err?.message || 'تعذر الاتصال بقاعدة البيانات');
+                              }
                             }}
                             className={`flex-1 py-2.5 px-4 rounded-xl font-black text-xs transition cursor-pointer flex items-center justify-center gap-2 ${
                               seatingForm.isSubAlreadyRenewed
@@ -2388,6 +2482,13 @@ export const ReceptionPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Check-Out Duration Settlement Modal */}
+      <CheckOutSettlementModal
+        checkInLogId={settlementLogId}
+        onClose={() => setSettlementLogId(null)}
+        onCompleted={(msg) => alert(msg)}
+      />
     </div>
   );
 };

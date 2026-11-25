@@ -134,7 +134,7 @@ export const ExpensesPage: React.FC = () => {
     paymentMethod: 'cash' as 'cash' | 'card' | 'instapay',
   });
 
-  const handleCreateExpense = (e: React.FormEvent) => {
+  const handleCreateExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!expenseForm.title.trim() || isSubmittingExpense) return;
 
@@ -146,7 +146,7 @@ export const ExpensesPage: React.FC = () => {
 
     setIsSubmittingExpense(true);
     try {
-      addExpense({
+      await addExpense({
         title: expenseForm.title.trim(),
         category: expenseForm.category,
         amount,
@@ -164,12 +164,14 @@ export const ExpensesPage: React.FC = () => {
         notes: '',
         paymentMethod: 'cash',
       });
+    } catch (err: any) {
+      alert(err?.message || 'تعذر الاتصال بقاعدة البيانات');
     } finally {
       setIsSubmittingExpense(false);
     }
   };
 
-  const handleCreateCashDeposit = (e: React.FormEvent) => {
+  const handleCreateCashDeposit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inflowForm.title.trim() || isSubmittingInflow) return;
 
@@ -181,7 +183,7 @@ export const ExpensesPage: React.FC = () => {
 
     setIsSubmittingInflow(true);
     try {
-      addCashInflow({
+      await addCashInflow({
         title: inflowForm.title.trim(),
         type: 'manual_deposit',
         amount,
@@ -199,6 +201,8 @@ export const ExpensesPage: React.FC = () => {
         memberName: '',
         paymentMethod: 'cash',
       });
+    } catch (err: any) {
+      alert(err?.message || 'تعذر الاتصال بقاعدة البيانات');
     } finally {
       setIsSubmittingInflow(false);
     }
@@ -233,7 +237,7 @@ export const ExpensesPage: React.FC = () => {
 
     setIsSubmittingRenewal(true);
     try {
-      const res = renewMemberSubscription(
+      const res = await renewMemberSubscription(
         selectedMemberForRenewal.id,
         renewalForm.planName,
         durationDays || 30,
@@ -334,7 +338,7 @@ export const ExpensesPage: React.FC = () => {
     }
   };
 
-  const handleManualMovementSubmit = (e: React.FormEvent) => {
+  const handleManualMovementSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSubmittingMovement) return;
 
@@ -350,7 +354,7 @@ export const ExpensesPage: React.FC = () => {
 
     setIsSubmittingMovement(true);
     try {
-      addManualCashMovement(
+      await addManualCashMovement(
         manualMovementForm.type,
         amount,
         manualMovementForm.title.trim(),
@@ -365,6 +369,8 @@ export const ExpensesPage: React.FC = () => {
         amount: 200,
         notes: '',
       });
+    } catch (err: any) {
+      alert(err?.message || 'تعذر الاتصال بقاعدة البيانات');
     } finally {
       setIsSubmittingMovement(false);
     }

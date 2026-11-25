@@ -33,6 +33,7 @@ import { sounds } from '../utils/sound';
 import { supabaseService } from '../services/supabaseService';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { getSubscriptionStatus } from '../utils/formatters';
+import { withDbTimeout, NETWORK_ERROR_MESSAGE, NetworkDbError } from '../utils/network';
 
 export const generateUniqueMemberCode = (existingMembers: Member[]): string => {
   const existingCodes = new Set(existingMembers.map((m) => m.code?.toUpperCase()));
@@ -43,7 +44,22 @@ export const generateUniqueMemberCode = (existingMembers: Member[]): string => {
   return code;
 };
 
+export const generateUniqueCoachCode = (existingCoaches: Coach[]): string => {
+  const existingCodes = new Set(existingCoaches.map((c) => c.code?.trim()));
+  let code = '';
+  do {
+    code = Math.floor(10000 + Math.random() * 90000).toString();
+  } while (existingCodes.has(code));
+  return code;
+};
+
 interface GymDataContextType {
+  // System Loading & Network Resilience
+  isInitialLoading: boolean;
+  networkError: string | null;
+  reportNetworkError: (msg?: string) => void;
+  clearNetworkError: () => void;
+
   // Members
   members: Member[];
   addMember: (member: Omit<Member, 'id'>) => Member;
@@ -54,7 +70,40 @@ interface GymDataContextType {
     memberId: string,
     method?: 'qr' | 'manual',
     fallbackMember?: Partial<Member>
-  ) => { success: boolean; member?: Member; message?: string };
+  ) => {
+    success: boolean;
+    member?: Member;
+    message?: string;
+    isCheckOut?: boolean;
+    requiresSettlement?: boolean;
+    checkOutLogId?: string;
+    durationMinutes?: number;
+    extraFeeDue?: number;
+  };
+  calculatePlayerCheckOutQuote: (checkInLogId: string) => {
+    log: CheckInLog;
+    session?: GymSession;
+    member?: Member;
+    entryTime: string;
+    durationMinutes: number;
+    tier: 'tier1' | 'tier2' | 'tier3';
+    tierLabel: string;
+    tierTotalPrice: number;
+    paidAtEntry: number;
+    extraFeeDue: number;
+  } | null;
+  completePlayerCheckOut: (
+    checkInLogId: string,
+    options: {
+      paymentMethod: 'cash' | 'instapay' | 'card' | 'coach_debt' | 'package_deduction';
+      extraFee: number;
+      durationMinutes: number;
+      pricingTier: 'tier1' | 'tier2' | 'tier3';
+      coachId?: string;
+      notes?: string;
+      authorizedBy?: string;
+    }
+  ) => Promise<{ success: boolean; message?: string }>;
   cancelCheckIn: (checkInLogId: string) => { success: boolean };
   clearAllCheckInLogs: () => void;
   renewMemberSubscription: (
@@ -65,7 +114,7 @@ interface GymDataContextType {
     paymentMethod: 'cash' | 'instapay',
     notes?: string,
     sessionsCount?: number
-  ) => { success: boolean; member?: Member };
+  ) => Promise<{ success: boolean; member?: Member }>;
   wipeAllDataToCleanSlate: () => void;
 
   // Sessions / Classes
@@ -84,7 +133,7 @@ interface GymDataContextType {
   addCoach: (coach: Omit<Coach, 'id' | 'currentBalance' | 'totalPaidToday'>) => void;
   updateCoach: (id: string, updates: Partial<Coach>) => void;
   settleCoachAccount: (coachId: string, adminUsername: string) => { success: boolean; settledAmount: number };
-  payMonthlySalary: (coachId: string, adminUsername: string) => { success: boolean; salaryAmount: number };
+  payMonthlySalary: (coachId: string, adminUsername: string) => Promise<{ success: boolean; salaryAmount: number }>;
   settlementLogs: SettlementLog[];
 
   // Physiotherapy & Massage
@@ -144,16 +193,16 @@ interface GymDataContextType {
   updateProduct: (id: string, updates: Partial<POSProduct>) => void;
   deleteProduct: (id: string) => void;
   transactions: POSTransaction[];
-  processSale: (saleData: Omit<POSTransaction, 'id' | 'timestamp'>) => POSTransaction;
+  processSale: (saleData: Omit<POSTransaction, 'id' | 'timestamp'>) => Promise<POSTransaction>;
 
   // Expenses & Cash Drawer
   expenses: ExpenseItem[];
   cashInflows: CashInflowItem[];
-  addExpense: (expense: Omit<ExpenseItem, 'id' | 'date'>) => ExpenseItem;
+  addExpense: (expense: Omit<ExpenseItem, 'id' | 'date'>) => Promise<ExpenseItem>;
   deleteExpense: (id: string) => void;
-  addCashInflow: (inflow: Omit<CashInflowItem, 'id' | 'date'>) => CashInflowItem;
+  addCashInflow: (inflow: Omit<CashInflowItem, 'id' | 'date'>) => Promise<CashInflowItem>;
   deleteCashInflow: (id: string) => void;
-  addManualCashMovement: (type: 'deposit' | 'withdrawal', amount: number, title: string, notes?: string) => void;
+  addManualCashMovement: (type: 'deposit' | 'withdrawal', amount: number, title: string, notes?: string) => Promise<void>;
   getDrawerStats: () => {
     totalCashIn: number;
     totalCashOut: number;
@@ -215,7 +264,7 @@ interface GymDataContextType {
     paymentMethod?: 'cash' | 'instapay',
     notes?: string,
     authorizedBy?: string
-  ) => { success: boolean; repaidAmount: number };
+  ) => Promise<{ success: boolean; repaidAmount: number }>;
   addCoachManualMovement: (data: {
     coach_id: string;
     movement_type: 'payout' | 'deposit' | 'charge';
@@ -223,7 +272,7 @@ interface GymDataContextType {
     reason: string;
     payment_method?: 'cash' | 'instapay';
     authorized_by?: string;
-  }) => { success: boolean; type: 'payout' | 'deposit' | 'charge' };
+  }) => Promise<{ success: boolean; type: 'payout' | 'deposit' | 'charge' }>;
   getCoachMonthlyBreakdown: (coachId: string, month: string) => {
     currentMonthCharges: number;
     previousCarriedDebt: number;
@@ -265,8 +314,8 @@ interface GymDataContextType {
 
   // DAILY SHIFT CLOSING (تقفيل اليومية والدرج)
   dailyShiftClosings: DailyShiftClosing[];
-  getRunningOperations: () => { runningSessions: GymSession[]; runningPhysio: PhysioBooking[]; hasRunning: boolean };
-  closeDailyShift: (closingData: Omit<DailyShiftClosing, 'id' | 'closedAt'>) => DailyShiftClosing;
+  getRunningOperations: () => { runningSessions: GymSession[]; runningPhysio: PhysioBooking[]; activeSeatedPlayers: CheckInLog[]; hasRunning: boolean };
+  closeDailyShift: (closingData: Omit<DailyShiftClosing, 'id' | 'closedAt'>) => Promise<DailyShiftClosing>;
   getTodayShiftStatus: () => { isClosedToday: boolean; lastClosing?: DailyShiftClosing };
   exportDailyShiftXLSX: (closingId?: string) => Promise<void>;
   isAfterLastClosing: (dateStr?: string) => boolean;
@@ -336,133 +385,55 @@ const INITIAL_BILLING_CYCLES: MonthlyBillingCycle[] = [
 const GymDataContext = createContext<GymDataContextType | undefined>(undefined);
 
 export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Members
-  const [members, setMembers] = useState<Member[]>(() => {
-    const saved = localStorage.getItem('synapse_members');
-    return saved ? JSON.parse(saved) : INITIAL_MEMBERS;
-  });
+  const [isInitialLoading, setIsInitialLoading] = useState<boolean>(isSupabaseConfigured);
+  const [networkError, setNetworkError] = useState<string | null>(null);
 
-  // Sessions
-  const [sessions, setSessions] = useState<GymSession[]>(() => {
-    const saved = localStorage.getItem('synapse_sessions');
-    return saved ? JSON.parse(saved) : INITIAL_SESSIONS;
-  });
+  const reportNetworkError = (msg?: string) => {
+    setNetworkError(msg || NETWORK_ERROR_MESSAGE);
+  };
 
-  // Coaches
-  const [coaches, setCoaches] = useState<Coach[]>(() => {
-    const saved = localStorage.getItem('synapse_coaches');
-    return saved ? JSON.parse(saved) : INITIAL_COACHES;
-  });
+  const clearNetworkError = () => {
+    setNetworkError(null);
+  };
 
-  // Physio
-  const [physioBookings, setPhysioBookings] = useState<PhysioBooking[]>(() => {
-    const saved = localStorage.getItem('synapse_physio');
-    return saved ? JSON.parse(saved) : INITIAL_PHYSIO_BOOKINGS;
-  });
+  // Strict Pessimistic DB Write helper (12s timeout + online check)
+  const strictDbWrite = async (dbOperation: () => Promise<boolean>): Promise<boolean> => {
+    if (!isSupabaseConfigured) return true;
+    try {
+      const ok = await withDbTimeout(dbOperation(), 12000);
+      if (!ok) {
+        setNetworkError(NETWORK_ERROR_MESSAGE);
+        return false;
+      }
+      return true;
+    } catch {
+      setNetworkError(NETWORK_ERROR_MESSAGE);
+      return false;
+    }
+  };
 
-  // Products
-  const [products, setProducts] = useState<POSProduct[]>(() => {
-    const saved = localStorage.getItem('synapse_products');
-    return saved ? JSON.parse(saved) : INITIAL_PRODUCTS;
-  });
+  // Single Source of Truth State (Strictly synced from Supabase - Zero localStorage cache)
+  const [members, setMembers] = useState<Member[]>(INITIAL_MEMBERS);
+  const [sessions, setSessions] = useState<GymSession[]>(INITIAL_SESSIONS);
+  const [coaches, setCoaches] = useState<Coach[]>(INITIAL_COACHES);
+  const [physioBookings, setPhysioBookings] = useState<PhysioBooking[]>(INITIAL_PHYSIO_BOOKINGS);
+  const [products, setProducts] = useState<POSProduct[]>(INITIAL_PRODUCTS);
+  const [transactions, setTransactions] = useState<POSTransaction[]>([]);
+  const [expenses, setExpenses] = useState<ExpenseItem[]>(INITIAL_EXPENSES);
+  const [cashInflows, setCashInflows] = useState<CashInflowItem[]>(INITIAL_INFLOWS);
+  const [checkInLogs, setCheckInLogs] = useState<CheckInLog[]>(INITIAL_CHECKIN_LOGS);
+  const [settlementLogs, setSettlementLogs] = useState<SettlementLog[]>([]);
+  const [trainerTransactions, setTrainerTransactions] = useState<TrainerTransaction[]>(INITIAL_TRAINER_TRANSACTIONS);
+  const [masterReportEntries, setMasterReportEntries] = useState<MasterReportEntry[]>(INITIAL_MASTER_ENTRIES);
+  const [billingCycles, setBillingCycles] = useState<MonthlyBillingCycle[]>(INITIAL_BILLING_CYCLES);
+  const [currentMonth, setCurrentMonth] = useState<string>(dynamicCurrentMonth);
+  const [monthlyArchives, setMonthlyArchives] = useState<MonthlyArchive[]>([]);
+  const [yearlyArchives, setYearlyArchives] = useState<YearlyArchive[]>([]);
+  const [dailyShiftClosings, setDailyShiftClosings] = useState<DailyShiftClosing[]>([]);
+  const [periodArchives, setPeriodArchives] = useState<PeriodArchive[]>([]);
 
-  // Transactions
-  const [transactions, setTransactions] = useState<POSTransaction[]>(() => {
-    const saved = localStorage.getItem('synapse_transactions');
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  // Expenses
-  const [expenses, setExpenses] = useState<ExpenseItem[]>(() => {
-    const saved = localStorage.getItem('synapse_expenses');
-    return saved ? JSON.parse(saved) : INITIAL_EXPENSES;
-  });
-
-  // Cash Inflows
-  const [cashInflows, setCashInflows] = useState<CashInflowItem[]>(() => {
-    const saved = localStorage.getItem('synapse_cash_inflows');
-    return saved ? JSON.parse(saved) : INITIAL_INFLOWS;
-  });
-
-  // CheckIn Logs
-  const [checkInLogs, setCheckInLogs] = useState<CheckInLog[]>(() => {
-    const saved = localStorage.getItem('synapse_checkin_logs');
-    return saved ? JSON.parse(saved) : INITIAL_CHECKIN_LOGS;
-  });
-
-  // Settlement Logs
-  const [settlementLogs, setSettlementLogs] = useState<SettlementLog[]>(() => {
-    const saved = localStorage.getItem('synapse_settlement_logs');
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  // Trainer Transactions (Unified Master Ledger)
-  const [trainerTransactions, setTrainerTransactions] = useState<TrainerTransaction[]>(() => {
-    const saved = localStorage.getItem('synapse_trainer_transactions');
-    return saved ? JSON.parse(saved) : INITIAL_TRAINER_TRANSACTIONS;
-  });
-
-  // Comprehensive Master Report
-  const [masterReportEntries, setMasterReportEntries] = useState<MasterReportEntry[]>(() => {
-    const saved = localStorage.getItem('synapse_master_report');
-    return saved ? JSON.parse(saved) : INITIAL_MASTER_ENTRIES;
-  });
-
-  // Billing Cycles
-  const [billingCycles, setBillingCycles] = useState<MonthlyBillingCycle[]>(() => {
-    const saved = localStorage.getItem('synapse_billing_cycles');
-    return saved ? JSON.parse(saved) : INITIAL_BILLING_CYCLES;
-  });
-
-  // Current Month
-  const [currentMonth, setCurrentMonth] = useState<string>(() => {
-    const saved = localStorage.getItem('synapse_current_month');
-    return saved ? saved : dynamicCurrentMonth;
-  });
-
-  // Monthly Archives (أرشيف الشهور السابق للرجوع إليها أوفلاين)
-  const [monthlyArchives, setMonthlyArchives] = useState<MonthlyArchive[]>(() => {
-    const saved = localStorage.getItem('synapse_monthly_archives');
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  // Yearly Archives
-  const [yearlyArchives, setYearlyArchives] = useState<YearlyArchive[]>(() => {
-    const saved = localStorage.getItem('synapse_yearly_archives');
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  // Daily Shift Closings
-  const [dailyShiftClosings, setDailyShiftClosings] = useState<DailyShiftClosing[]>(() => {
-    const saved = localStorage.getItem('synapse_daily_closings');
-    return saved ? JSON.parse(saved) : [];
-  });
-
+  // Backend Directory Sync (non-blocking)
   useEffect(() => {
-    localStorage.setItem('synapse_monthly_archives', JSON.stringify(monthlyArchives));
-  }, [monthlyArchives]);
-
-  useEffect(() => {
-    localStorage.setItem('synapse_yearly_archives', JSON.stringify(yearlyArchives));
-  }, [yearlyArchives]);
-
-  useEffect(() => {
-    localStorage.setItem('synapse_daily_closings', JSON.stringify(dailyShiftClosings));
-  }, [dailyShiftClosings]);
-
-  // PERIOD ARCHIVES
-  const [periodArchives, setPeriodArchives] = useState<PeriodArchive[]>(() => {
-    const saved = localStorage.getItem('synapse_period_archives');
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  useEffect(() => {
-    localStorage.setItem('synapse_period_archives', JSON.stringify(periodArchives));
-  }, [periodArchives]);
-
-  // Persistence effects & Backend Directory Sync
-  useEffect(() => {
-    localStorage.setItem('synapse_members', JSON.stringify(members));
     if (members.length > 0) {
       try {
         fetch('/api/members', {
@@ -476,9 +447,12 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, [members]);
 
-  // INITIAL SUPABASE FULL DATA SYNC & REALTIME LIVE ENGINE (When online & configured)
+  // INITIAL SUPABASE FULL DATA SYNC & REALTIME LIVE ENGINE
   useEffect(() => {
-    if (!isSupabaseConfigured) return;
+    if (!isSupabaseConfigured) {
+      setIsInitialLoading(false);
+      return;
+    }
 
     const syncFromSupabase = async () => {
       try {
@@ -517,7 +491,23 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         ]);
 
         if (remoteMembers !== null) setMembers(remoteMembers);
-        if (remoteCoaches !== null) setCoaches(remoteCoaches);
+        if (remoteCoaches !== null) {
+          const usedCodes = new Set(remoteCoaches.map((c) => c.code?.trim()).filter(Boolean));
+          const normalizedCoaches = remoteCoaches.map((c) => {
+            if (c.code && /^\d{5}$/.test(c.code.trim())) return c;
+            let newCode = '';
+            do {
+              newCode = Math.floor(10000 + Math.random() * 90000).toString();
+            } while (usedCodes.has(newCode));
+            usedCodes.add(newCode);
+            const updatedCoach = { ...c, code: newCode };
+            if (isSupabaseConfigured) {
+              supabaseService.upsertCoach(updatedCoach).catch(() => {});
+            }
+            return updatedCoach;
+          });
+          setCoaches(normalizedCoaches);
+        }
         if (remoteSessions !== null) setSessions(remoteSessions);
         if (remotePhysio !== null) setPhysioBookings(remotePhysio);
         if (remoteProducts !== null) setProducts(remoteProducts);
@@ -532,7 +522,10 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         if (remoteMonthlyArchives !== null) setMonthlyArchives(remoteMonthlyArchives);
         if (remoteYearlyArchives !== null) setYearlyArchives(remoteYearlyArchives);
       } catch (err) {
-        console.warn('Initial Supabase sync skipped or failed (using local cache):', err);
+        console.warn('Initial Supabase sync failed:', err);
+        setNetworkError(NETWORK_ERROR_MESSAGE);
+      } finally {
+        setIsInitialLoading(false);
       }
     };
 
@@ -550,6 +543,10 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         .on('postgres_changes', { event: '*', schema: 'public', table: 'members' }, async () => {
           const fresh = await supabaseService.fetchMembers();
           if (fresh !== null) setMembers(fresh);
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'coaches' }, async () => {
+          const fresh = await supabaseService.fetchCoaches();
+          if (fresh !== null) setCoaches(fresh);
         })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'gym_sessions' }, async () => {
           const fresh = await supabaseService.fetchSessions();
@@ -571,6 +568,10 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           const fresh = await supabaseService.fetchProducts();
           if (fresh !== null) setProducts(fresh);
         })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'pos_transactions' }, async () => {
+          const fresh = await supabaseService.fetchPOSTransactions();
+          if (fresh !== null) setTransactions(fresh);
+        })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_shift_closings' }, async () => {
           const fresh = await supabaseService.fetchDailyShiftClosings();
           if (fresh !== null) setDailyShiftClosings(fresh);
@@ -591,81 +592,6 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         supabase.removeChannel(channel);
       }
     };
-  }, []);
-
-  useEffect(() => {
-    localStorage.setItem('synapse_sessions', JSON.stringify(sessions));
-  }, [sessions]);
-
-  useEffect(() => {
-    localStorage.setItem('synapse_coaches', JSON.stringify(coaches));
-  }, [coaches]);
-
-  useEffect(() => {
-    localStorage.setItem('synapse_physio', JSON.stringify(physioBookings));
-  }, [physioBookings]);
-
-  useEffect(() => {
-    localStorage.setItem('synapse_products', JSON.stringify(products));
-  }, [products]);
-
-  useEffect(() => {
-    localStorage.setItem('synapse_transactions', JSON.stringify(transactions));
-  }, [transactions]);
-
-  useEffect(() => {
-    localStorage.setItem('synapse_expenses', JSON.stringify(expenses));
-  }, [expenses]);
-
-  useEffect(() => {
-    localStorage.setItem('synapse_cash_inflows', JSON.stringify(cashInflows));
-  }, [cashInflows]);
-
-  useEffect(() => {
-    localStorage.setItem('synapse_checkin_logs', JSON.stringify(checkInLogs));
-  }, [checkInLogs]);
-
-  useEffect(() => {
-    localStorage.setItem('synapse_settlement_logs', JSON.stringify(settlementLogs));
-  }, [settlementLogs]);
-
-  useEffect(() => {
-    localStorage.setItem('synapse_trainer_transactions', JSON.stringify(trainerTransactions));
-  }, [trainerTransactions]);
-
-  useEffect(() => {
-    localStorage.setItem('synapse_master_report', JSON.stringify(masterReportEntries));
-  }, [masterReportEntries]);
-
-  useEffect(() => {
-    localStorage.setItem('synapse_billing_cycles', JSON.stringify(billingCycles));
-  }, [billingCycles]);
-
-  useEffect(() => {
-    localStorage.setItem('synapse_current_month', currentMonth);
-  }, [currentMonth]);
-
-  // Cross-tab / Mobile-to-Desk Real-time Sync for CheckIn Logs and Members
-  useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'synapse_checkin_logs' && e.newValue) {
-        try {
-          setCheckInLogs(JSON.parse(e.newValue));
-        } catch {
-          // ignore
-        }
-      }
-      if (e.key === 'synapse_members' && e.newValue) {
-        try {
-          setMembers(JSON.parse(e.newValue));
-        } catch {
-          // ignore
-        }
-      }
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
   // Polling for mobile check-ins via serverless relay /api/checkin
@@ -859,7 +785,6 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           }
           return log;
         });
-        localStorage.setItem('synapse_checkin_logs', JSON.stringify(nextLogs));
         return nextLogs;
       });
 
@@ -891,7 +816,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     });
   };
 
-  const renewMemberSubscription = (
+  const renewMemberSubscription = async (
     memberId: string,
     planName: string,
     durationDays: number,
@@ -899,7 +824,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     paymentMethod: 'cash' | 'instapay',
     notes?: string,
     sessionsCount?: number
-  ): { success: boolean; member?: Member } => {
+  ): Promise<{ success: boolean; member?: Member }> => {
     const member = members.find((m) => m.id === memberId || m.code === memberId);
     if (!member) return { success: false };
 
@@ -921,12 +846,12 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       paymentStatus: 'paid',
     };
 
-    setMembers((prev) => prev.map((m) => (m.id === member.id ? updatedMember : m)));
-    if (isSupabaseConfigured) {
-      supabaseService.upsertMember(updatedMember).catch(() => {});
+    // Pessimistic DB Write: Persist member + inflow + master report FIRST
+    const memberOk = await strictDbWrite(() => supabaseService.upsertMember(updatedMember));
+    if (!memberOk) {
+      throw new NetworkDbError(NETWORK_ERROR_MESSAGE);
     }
 
-    // 1. Record inflow to drawer/financial flow
     if (fee > 0) {
       const inflowTitle = `اشتراك ${paymentMethod === 'cash' ? 'نقدي بالدرج' : 'إنستاباي'} (${planName} - ${durationDays} يوم) - لاعب: ${member.name} (${member.code})`;
       const inflow: CashInflowItem = {
@@ -939,9 +864,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         paymentMethod: paymentMethod,
         recordedBy: 'الاستقبال',
       };
-      setCashInflows((prev) => [inflow, ...prev]);
 
-      // 2. Record to Master Report
       const repEntry: MasterReportEntry = {
         id: `rep-${Date.now()}`,
         month: currentMonth,
@@ -958,15 +881,23 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         notes: notes || `سداد ${paymentMethod === 'cash' ? 'نقدي بالدرج' : 'تحويل إنستاباي'} بالاستقبال`,
         sourceType: 'subscription',
       };
-      setMasterReportEntries((prev) => [repEntry, ...prev]);
 
-      if (isSupabaseConfigured) {
-        supabaseService.insertCashInflow(inflow).catch(() => {});
-        supabaseService.upsertMasterReportEntry(repEntry).catch(() => {});
-      }
+      const finOk = await strictDbWrite(async () => {
+        const [a, b] = await Promise.all([
+          supabaseService.insertCashInflow(inflow),
+          supabaseService.upsertMasterReportEntry(repEntry),
+        ]);
+        return a && b;
+      });
+      if (!finOk) throw new NetworkDbError(NETWORK_ERROR_MESSAGE);
+
+      setCashInflows((prev) => [inflow, ...prev]);
+      setMasterReportEntries((prev) => [repEntry, ...prev]);
     }
 
-    // 3. Update any unassigned checkInLog for this member to be valid
+    setMembers((prev) => prev.map((m) => (m.id === member.id ? updatedMember : m)));
+
+    // Update any unassigned checkInLog for this member to be valid
     setCheckInLogs((prev) =>
       prev.map((l) =>
         l.memberId === member.id || l.memberCode === member.code
@@ -988,6 +919,273 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         m.phone.includes(clean) ||
         m.name.toLowerCase().includes(clean)
     );
+  };
+
+  const calculatePlayerCheckOutQuote = (checkInLogId: string) => {
+    const log = checkInLogs.find((l) => l.id === checkInLogId);
+    if (!log) return null;
+    const session = log.assignedSessionId
+      ? sessions.find((s) => s.id === log.assignedSessionId)
+      : undefined;
+    const member = members.find((m) => m.id === log.memberId || m.code === log.memberCode);
+
+    const entryTime = log.sessionStartedAt || log.timestamp;
+    const elapsedMs = Math.max(0, Date.now() - new Date(entryTime).getTime());
+    const durationMinutes = Math.max(1, Math.round(elapsedMs / 60000));
+
+    const tier1Price = session?.tier1Price ?? session?.price ?? (log.chargedAmount || 0);
+    const tier2Price = session?.tier2Price && session.tier2Price > 0 ? session.tier2Price : tier1Price;
+    const tier3Price = session?.tier3Price && session.tier3Price > 0 ? session.tier3Price : tier2Price;
+    const paidAtEntry = log.chargedAmount && log.chargedAmount > 0 ? log.chargedAmount : tier1Price;
+
+    let tier: 'tier1' | 'tier2' | 'tier3' = 'tier1';
+    let tierLabel = 'الشريحة الأولى (0 - 90 دقيقة)';
+    let tierTotalPrice = tier1Price;
+    let extraFeeDue = 0;
+
+    if (durationMinutes > 120) {
+      tier = 'tier3';
+      tierLabel = 'الشريحة الثالثة (121 - 180 دقيقة)';
+      tierTotalPrice = tier3Price;
+      extraFeeDue = Math.max(0, tier3Price - paidAtEntry);
+    } else if (durationMinutes > 90) {
+      tier = 'tier2';
+      tierLabel = 'الشريحة الثانية (91 - 120 دقيقة)';
+      tierTotalPrice = tier2Price;
+      extraFeeDue = Math.max(0, tier2Price - paidAtEntry);
+    }
+
+    return {
+      log,
+      session,
+      member,
+      entryTime,
+      durationMinutes,
+      tier,
+      tierLabel,
+      tierTotalPrice,
+      paidAtEntry,
+      extraFeeDue,
+    };
+  };
+
+  const completePlayerCheckOut = async (
+    checkInLogId: string,
+    options: {
+      paymentMethod: 'cash' | 'instapay' | 'card' | 'coach_debt' | 'package_deduction';
+      extraFee: number;
+      durationMinutes: number;
+      pricingTier: 'tier1' | 'tier2' | 'tier3';
+      coachId?: string;
+      notes?: string;
+      authorizedBy?: string;
+    }
+  ): Promise<{ success: boolean; message?: string }> => {
+    const log = checkInLogs.find((l) => l.id === checkInLogId);
+    if (!log) return { success: false, message: 'سجل الحضور غير موجود' };
+
+    const nowIso = new Date().toISOString();
+    const entryTime = log.sessionStartedAt || log.timestamp;
+    const tierLabel =
+      options.pricingTier === 'tier3'
+        ? 'الشريحة الثالثة (121 - 180 دقيقة)'
+        : options.pricingTier === 'tier2'
+        ? 'الشريحة الثانية (91 - 120 دقيقة)'
+        : 'الشريحة الأولى (0 - 90 دقيقة)';
+
+    const updatedLog: CheckInLog = {
+      ...log,
+      checkOutStatus: 'checked_out',
+      checkOutTime: nowIso,
+      durationMinutes: options.durationMinutes,
+      pricingTier: options.pricingTier,
+      extraFeePaid: options.extraFee,
+      extraPaymentMethod: options.paymentMethod,
+    };
+
+    // Pessimistic DB Write: Persist check-out log to Supabase FIRST
+    const logSaved = await strictDbWrite(() => supabaseService.insertCheckInLog(updatedLog));
+    if (!logSaved) {
+      return { success: false, message: NETWORK_ERROR_MESSAGE };
+    }
+
+    setCheckInLogs((prev) => prev.map((l) => (l.id === checkInLogId ? updatedLog : l)));
+
+    // Remove temporary player from active session list
+    if (log.assignedSessionId) {
+      setSessions((prev) =>
+        prev.map((s) => {
+          if (s.id === log.assignedSessionId) {
+            const updatedSess = {
+              ...s,
+              temporaryPlayerIds: (s.temporaryPlayerIds || []).filter((id) => id !== log.memberId),
+            };
+            if (isSupabaseConfigured) {
+              supabaseService.upsertSession(updatedSess).catch(() => {});
+            }
+            return updatedSess;
+          }
+          return s;
+        })
+      );
+    }
+
+    // Update existing master report entry with duration & exit time
+    setMasterReportEntries((prev) =>
+      prev.map((entry) => {
+        if (
+          entry.playerName === log.memberName &&
+          isAfterLastClosing(entry.date) &&
+          entry.sourceType === 'session'
+        ) {
+          const updatedEntry: MasterReportEntry = {
+            ...entry,
+            entryTime,
+            checkOutTime: nowIso,
+            durationMinutes: options.durationMinutes,
+            pricingTier: tierLabel,
+            extraFeePaid: (entry.extraFeePaid || 0) + options.extraFee,
+          };
+          if (isSupabaseConfigured) {
+            supabaseService.upsertMasterReportEntry(updatedEntry).catch(() => {});
+          }
+          return updatedEntry;
+        }
+        return entry;
+      })
+    );
+
+    // Record extra fee financial movement if > 0 or package deduction
+    if (options.extraFee > 0) {
+      if (
+        options.paymentMethod === 'cash' ||
+        options.paymentMethod === 'instapay' ||
+        options.paymentMethod === 'card'
+      ) {
+        const inflow: CashInflowItem = {
+          id: `inf-chkout-${Date.now()}`,
+          type: 'subscription',
+          title: `فرق مدة حصة (${options.durationMinutes} د - ${tierLabel}) - ${log.memberName}`,
+          amount: options.extraFee,
+          date: nowIso,
+          memberName: log.memberName,
+          paymentMethod: options.paymentMethod,
+          recordedBy: options.authorizedBy || 'الاستقبال',
+        };
+        setCashInflows((prev) => [inflow, ...prev]);
+
+        const repEntry: MasterReportEntry = {
+          id: `rep-chkout-${Date.now()}`,
+          month: currentMonth,
+          date: nowIso,
+          playerName: log.memberName,
+          playerCode: log.memberCode,
+          amount: options.extraFee,
+          coachId: log.assignedCoachId,
+          coachName: log.assignedCoachName || 'بدون مدرب',
+          sessionCategory: log.assignedCategory || 'group',
+          sessionTitle: `فرق مدة خروج: ${log.assignedSessionTitle || 'حصة'}`,
+          paymentMethod: options.paymentMethod,
+          paymentStatus: 'paid',
+          notes: options.notes || `فرق مدة التواجد (${options.durationMinutes} دقيقة) - ${tierLabel}`,
+          sourceType: 'session',
+          entryTime,
+          checkOutTime: nowIso,
+          durationMinutes: options.durationMinutes,
+          pricingTier: tierLabel,
+          extraFeePaid: options.extraFee,
+        };
+        setMasterReportEntries((prev) => [repEntry, ...prev]);
+
+        if (isSupabaseConfigured) {
+          supabaseService.insertCashInflow(inflow).catch(() => {});
+          supabaseService.upsertMasterReportEntry(repEntry).catch(() => {});
+        }
+      } else if (options.paymentMethod === 'coach_debt') {
+        const targetCoachId = options.coachId || log.assignedCoachId || coaches[0]?.id || 'COACH-01';
+        const targetCoach = coaches.find((c) => c.id === targetCoachId);
+        const coachName = targetCoach?.name || log.assignedCoachName || 'الكابتن';
+
+        const debtTrx: TrainerTransaction = {
+          transaction_id: `TRX-OUT-${Date.now()}-${targetCoachId}`,
+          coach_id: targetCoachId,
+          coach_name: coachName,
+          amount: options.extraFee,
+          collected_by: 'coach',
+          payer_type: `فرق مدة حصة (${options.durationMinutes} دقيقة)`,
+          payer_name: log.memberName,
+          gym_share: options.extraFee,
+          coach_share: 0,
+          status: 'pending',
+          created_at: nowIso,
+          month: currentMonth,
+          type: 'session_charge',
+          payment_method: 'coach_collected',
+          notes: options.notes || `تحميل فرق مدة (${options.durationMinutes} د - ${tierLabel}) للاعب ${log.memberName}`,
+        };
+        setTrainerTransactions((prev) => [debtTrx, ...prev]);
+
+        const repEntry: MasterReportEntry = {
+          id: `rep-chkout-${Date.now()}`,
+          month: currentMonth,
+          date: nowIso,
+          playerName: log.memberName,
+          playerCode: log.memberCode,
+          amount: options.extraFee,
+          coachId: targetCoachId,
+          coachName,
+          sessionCategory: log.assignedCategory || 'group',
+          sessionTitle: `فرق مدة خروج (على الكابتن): ${log.assignedSessionTitle || 'حصة'}`,
+          paymentMethod: 'coach_debt',
+          paymentStatus: 'pending_on_coach',
+          notes: options.notes || `تحميل فرق مدة (${options.durationMinutes} دقيقة) على كابتن ${coachName}`,
+          sourceType: 'session',
+          entryTime,
+          checkOutTime: nowIso,
+          durationMinutes: options.durationMinutes,
+          pricingTier: tierLabel,
+          extraFeePaid: options.extraFee,
+        };
+        setMasterReportEntries((prev) => [repEntry, ...prev]);
+
+        if (isSupabaseConfigured) {
+          supabaseService.upsertTrainerTransaction(debtTrx).catch(() => {});
+          supabaseService.upsertMasterReportEntry(repEntry).catch(() => {});
+        }
+      } else if (options.paymentMethod === 'package_deduction') {
+        const mem = members.find((m) => m.id === log.memberId);
+        if (mem && mem.remainingSessions > 0) {
+          updateMember(mem.id, { remainingSessions: Math.max(0, mem.remainingSessions - 1) });
+        }
+        const repEntry: MasterReportEntry = {
+          id: `rep-chkout-${Date.now()}`,
+          month: currentMonth,
+          date: nowIso,
+          playerName: log.memberName,
+          playerCode: log.memberCode,
+          amount: 0,
+          coachId: log.assignedCoachId,
+          coachName: log.assignedCoachName || 'بدون مدرب',
+          sessionCategory: log.assignedCategory || 'group',
+          sessionTitle: `فرق مدة خروج (خصم حصة إضافية): ${log.assignedSessionTitle || 'حصة'}`,
+          paymentMethod: 'cash',
+          paymentStatus: 'paid',
+          notes: `تسوية فرق مدة (${options.durationMinutes} دقيقة - ${tierLabel}) بخصم حصة إضافية من الباقة`,
+          sourceType: 'session',
+          entryTime,
+          checkOutTime: nowIso,
+          durationMinutes: options.durationMinutes,
+          pricingTier: tierLabel,
+          extraFeePaid: 0,
+        };
+        setMasterReportEntries((prev) => [repEntry, ...prev]);
+        if (isSupabaseConfigured) {
+          supabaseService.upsertMasterReportEntry(repEntry).catch(() => {});
+        }
+      }
+    }
+
+    return { success: true };
   };
 
   const performCheckIn = (
@@ -1018,6 +1216,56 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     if (!member) {
       return { success: false, message: 'عضو غير موجود' };
+    }
+
+    // Check if member is ALREADY active inside a session today -> treat as Check-Out Scan!
+    const activeSessionLog = checkInLogs.find(
+      (l) =>
+        (l.memberId === member!.id || l.memberCode === member!.code) &&
+        isAfterLastClosing(l.timestamp) &&
+        l.seatingStatus === 'assigned' &&
+        Boolean(l.assignedSessionId) &&
+        l.checkOutStatus !== 'checked_out'
+    );
+
+    if (activeSessionLog) {
+      const quote = calculatePlayerCheckOutQuote(activeSessionLog.id);
+      if (quote && quote.extraFeeDue <= 0 && quote.durationMinutes <= 90) {
+        // <= 90 mins (Tier 1): Complete check-out immediately with 0 EGP extra
+        completePlayerCheckOut(activeSessionLog.id, {
+          paymentMethod: 'cash',
+          extraFee: 0,
+          durationMinutes: quote.durationMinutes,
+          pricingTier: 'tier1',
+        });
+        return {
+          success: true,
+          member,
+          isCheckOut: true,
+          requiresSettlement: false,
+          durationMinutes: quote.durationMinutes,
+          extraFeeDue: 0,
+        };
+      } else if (quote) {
+        // > 90 mins: flag pending settlement so Reception opens Duration Settlement Modal
+        const flaggedLog: CheckInLog = {
+          ...activeSessionLog,
+          checkOutStatus: 'pending_settlement',
+        };
+        setCheckInLogs((prev) => prev.map((l) => (l.id === activeSessionLog.id ? flaggedLog : l)));
+        if (isSupabaseConfigured) {
+          supabaseService.insertCheckInLog(flaggedLog).catch(() => {});
+        }
+        return {
+          success: true,
+          member,
+          isCheckOut: true,
+          requiresSettlement: true,
+          checkOutLogId: activeSessionLog.id,
+          durationMinutes: quote.durationMinutes,
+          extraFeeDue: quote.extraFeeDue,
+        };
+      }
     }
 
     // التحقق الدقيق من صلاحية اشتراك اللاعب وحصصه
@@ -1454,6 +1702,9 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const newCoach: Coach = {
       ...coachData,
       id: `cch-${Date.now()}`,
+      code: coachData.code && /^\d{5}$/.test(coachData.code.trim())
+        ? coachData.code.trim()
+        : generateUniqueCoachCode(coaches),
       currentBalance: 0,
       totalPaidToday: 0,
     };
@@ -1535,28 +1786,20 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   // AUTOMATIC HOOK 2: Pay Monthly Salary for monthly coach and log in Expenses!
-  const payMonthlySalary = (coachId: string, adminUsername: string) => {
+  const payMonthlySalary = async (coachId: string, adminUsername: string): Promise<{ success: boolean; salaryAmount: number }> => {
     const coach = coaches.find((c) => c.id === coachId);
     if (!coach || coach.paymentType !== 'monthly' || !coach.monthlySalary) {
       return { success: false, salaryAmount: 0 };
     }
 
     const salary = coach.monthlySalary;
+    const updatedCoach: Coach = {
+      ...coach,
+      monthlySalaryPaidThisMonth: true,
+      lastSalaryPaymentDate: new Date().toISOString().slice(0, 10),
+      totalPaidToday: coach.totalPaidToday + salary,
+    };
 
-    setCoaches((prev) =>
-      prev.map((c) =>
-        c.id === coachId
-          ? {
-              ...c,
-              monthlySalaryPaidThisMonth: true,
-              lastSalaryPaymentDate: new Date().toISOString().slice(0, 10),
-              totalPaidToday: c.totalPaidToday + salary,
-            }
-          : c
-      )
-    );
-
-    // Log expense
     const autoExpense: ExpenseItem = {
       id: `exp-salary-${Date.now()}`,
       title: `صرف الراتب الشهري: ${coach.name}`,
@@ -1569,17 +1812,20 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       autoGenerated: true,
       relatedEntityId: coach.id,
     };
-    setExpenses((prev) => [autoExpense, ...prev]);
 
-    if (isSupabaseConfigured) {
-      supabaseService.upsertCoach({
-        ...coach,
-        monthlySalaryPaidThisMonth: true,
-        lastSalaryPaymentDate: new Date().toISOString().slice(0, 10),
-        totalPaidToday: coach.totalPaidToday + salary,
-      }).catch(() => {});
-      supabaseService.insertExpense(autoExpense).catch(() => {});
+    const ok = await strictDbWrite(async () => {
+      const [a, b] = await Promise.all([
+        supabaseService.upsertCoach(updatedCoach),
+        supabaseService.insertExpense(autoExpense),
+      ]);
+      return a && b;
+    });
+    if (!ok) {
+      throw new NetworkDbError(NETWORK_ERROR_MESSAGE);
     }
+
+    setCoaches((prev) => prev.map((c) => (c.id === coachId ? updatedCoach : c)));
+    setExpenses((prev) => [autoExpense, ...prev]);
 
     return { success: true, salaryAmount: salary };
   };
@@ -1928,28 +2174,38 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         ? 'coach_charge'
         : paymentDetails?.paymentMode || 'cash_drawer';
 
+    const sessionStartedAt = pathway !== 'gym_direct_no_coach' ? new Date().toISOString() : undefined;
+    const checkOutStatus = pathway !== 'gym_direct_no_coach' ? ('active' as const) : undefined;
+
     // 1. Update CheckIn Log with seating details & payment status
     setCheckInLogs((prev) =>
-      prev.map((l) =>
-        l.id === checkInLogId
-          ? {
-              ...l,
-              seatingStatus: 'assigned',
-              assignedCategory: category,
-              assignedCoachId: pathway === 'gym_direct_no_coach' ? undefined : coachId,
-              assignedCoachName: coachName,
-              assignedSessionId: pathway === 'gym_direct_no_coach' ? undefined : (sessionId || matchingSession?.id),
-              assignedSessionTitle: activityTitle,
-              paymentMode: effectivePaymentMode,
-              seatingPathway: pathway,
-              coachShareType: paymentDetails?.coachShareType,
-              coachShareValue: paymentDetails?.coachShareValue,
-              coachShareAmount: coachShareAmount,
-              gymShareAmount: gymShareAmount,
-              chargedAmount: feeAmount,
-            }
-          : l
-      )
+      prev.map((l) => {
+        if (l.id === checkInLogId) {
+          const updatedLog: CheckInLog = {
+            ...l,
+            seatingStatus: 'assigned',
+            assignedCategory: category,
+            assignedCoachId: pathway === 'gym_direct_no_coach' ? undefined : coachId,
+            assignedCoachName: coachName,
+            assignedSessionId: pathway === 'gym_direct_no_coach' ? undefined : (sessionId || matchingSession?.id),
+            assignedSessionTitle: activityTitle,
+            paymentMode: effectivePaymentMode,
+            seatingPathway: pathway,
+            coachShareType: paymentDetails?.coachShareType,
+            coachShareValue: paymentDetails?.coachShareValue,
+            coachShareAmount: coachShareAmount,
+            gymShareAmount: gymShareAmount,
+            chargedAmount: feeAmount,
+            sessionStartedAt: l.sessionStartedAt || sessionStartedAt,
+            checkOutStatus: checkOutStatus,
+          };
+          if (isSupabaseConfigured) {
+            supabaseService.insertCheckInLog(updatedLog).catch(() => {});
+          }
+          return updatedLog;
+        }
+        return l;
+      })
     );
 
     if (!member) return;
@@ -2132,13 +2388,90 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
-  const processSale = (saleData: Omit<POSTransaction, 'id' | 'timestamp'>) => {
+  const processSale = async (saleData: Omit<POSTransaction, 'id' | 'timestamp'>): Promise<POSTransaction> => {
     const newTx: POSTransaction = {
       ...saleData,
       id: `tx-${Date.now()}`,
       timestamp: new Date().toISOString(),
     };
 
+    // Pessimistic DB Write: Persist POS transaction to Supabase FIRST
+    const txOk = await strictDbWrite(() => supabaseService.insertPOSTransaction(newTx));
+    if (!txOk) {
+      throw new NetworkDbError(NETWORK_ERROR_MESSAGE);
+    }
+
+    // Prepare side-effect records and persist to Supabase BEFORE updating state
+    if (saleData.paymentMethod === 'cash' || saleData.paymentMethod === 'instapay') {
+      const inflow: CashInflowItem = {
+        id: `inf-pos-${Date.now()}`,
+        type: 'pos',
+        title: `مبيعات ${saleData.paymentMethod === 'instapay' ? 'إنستاباي' : 'كاش'} بالمتجر - فاتورة #${newTx.id.slice(-4)}`,
+        amount: newTx.totalAmount,
+        date: new Date().toISOString(),
+        paymentMethod: saleData.paymentMethod,
+        recordedBy: saleData.cashierName,
+      };
+      const inflowOk = await strictDbWrite(() => supabaseService.insertCashInflow(inflow));
+      if (!inflowOk) throw new NetworkDbError(NETWORK_ERROR_MESSAGE);
+      setCashInflows((prev) => [inflow, ...prev]);
+    } else if (saleData.paymentMethod === 'coach_debt' && saleData.coachId) {
+      const targetCoach = coaches.find((c) => c.id === saleData.coachId);
+      const coachName = targetCoach?.name || saleData.coachName || 'الكابتن';
+      const itemsSummary = saleData.items
+        .map((i) => `${i.quantity}× ${i.productName}`)
+        .join('، ');
+      const extraNote = saleData.notes?.trim() ? ` (${saleData.notes.trim()})` : '';
+
+      const posDebtTrx: TrainerTransaction = {
+        transaction_id: `TRX-POS-${Date.now()}-${saleData.coachId}`,
+        coach_id: saleData.coachId,
+        coach_name: coachName,
+        amount: newTx.totalAmount,
+        collected_by: 'coach',
+        payer_type: 'مشتريات بار / بوفيه (POS)',
+        payer_name: itemsSummary,
+        gym_share: newTx.totalAmount,
+        coach_share: 0,
+        status: 'pending',
+        created_at: newTx.timestamp,
+        month: currentMonth,
+        type: 'pos_charge',
+        payment_method: 'coach_collected',
+        notes: `تحميل بار (#${newTx.id.slice(-4)}): ${itemsSummary}${extraNote} - بواسطة: ${saleData.cashierName}`,
+      };
+
+      const repEntry: MasterReportEntry = {
+        id: `rep-pos-${Date.now()}`,
+        month: currentMonth,
+        date: newTx.timestamp,
+        playerName: saleData.notes?.trim() ? `بار (${saleData.notes.trim()})` : 'مبيعات البار (POS)',
+        playerCode: targetCoach?.code || saleData.coachId,
+        amount: newTx.totalAmount,
+        coachId: saleData.coachId,
+        coachName,
+        sessionCategory: 'gym',
+        sessionTitle: `تحميل بار POS: ${itemsSummary}`,
+        paymentMethod: 'coach_debt',
+        paymentStatus: 'pending_on_coach',
+        notes: `تحميل مشتريات بار على كابتن ${coachName} | ${itemsSummary}${extraNote}`,
+        sourceType: 'pos',
+      };
+
+      const debtOk = await strictDbWrite(async () => {
+        const [a, b] = await Promise.all([
+          supabaseService.upsertTrainerTransaction(posDebtTrx),
+          supabaseService.upsertMasterReportEntry(repEntry),
+        ]);
+        return a && b;
+      });
+      if (!debtOk) throw new NetworkDbError(NETWORK_ERROR_MESSAGE);
+
+      setTrainerTransactions((prev) => [posDebtTrx, ...prev]);
+      setMasterReportEntries((prev) => [repEntry, ...prev]);
+    }
+
+    // Update stock & POS transaction state after DB confirmation
     setProducts((prev) => {
       const updated = prev.map((p) => {
         const bought = saleData.items.find((item) => item.productId === p.id);
@@ -2158,41 +2491,21 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     });
 
     setTransactions((prev) => [newTx, ...prev]);
-    if (isSupabaseConfigured) {
-      supabaseService.insertPOSTransaction(newTx).catch(() => {});
-    }
-
-    // Log inflow to drawer for cash and instapay sales
-    if (saleData.paymentMethod === 'cash' || saleData.paymentMethod === 'instapay') {
-      const inflow: CashInflowItem = {
-        id: `inf-pos-${Date.now()}`,
-        type: 'pos',
-        title: `مبيعات ${saleData.paymentMethod === 'instapay' ? 'إنستاباي' : 'كاش'} بالمتجر - فاتورة #${newTx.id.slice(-4)}`,
-        amount: newTx.totalAmount,
-        date: new Date().toISOString(),
-        paymentMethod: saleData.paymentMethod,
-        recordedBy: saleData.cashierName,
-      };
-      setCashInflows((prev) => [inflow, ...prev]);
-      if (isSupabaseConfigured) {
-        supabaseService.insertCashInflow(inflow).catch(() => {});
-      }
-    }
-
     return newTx;
   };
 
   // Expenses & Drawer Methods (Accounting for literally every single pound!)
-  const addExpense = (expData: Omit<ExpenseItem, 'id' | 'date'>) => {
+  const addExpense = async (expData: Omit<ExpenseItem, 'id' | 'date'>): Promise<ExpenseItem> => {
     const newExp: ExpenseItem = {
       ...expData,
       id: `exp-${Date.now()}`,
       date: new Date().toISOString(),
     };
-    setExpenses((prev) => [newExp, ...prev]);
-    if (isSupabaseConfigured) {
-      supabaseService.insertExpense(newExp).catch(() => {});
+    const ok = await strictDbWrite(() => supabaseService.insertExpense(newExp));
+    if (!ok) {
+      throw new NetworkDbError(NETWORK_ERROR_MESSAGE);
     }
+    setExpenses((prev) => [newExp, ...prev]);
     return newExp;
   };
 
@@ -2239,26 +2552,27 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
-  const addCashInflow = (infData: Omit<CashInflowItem, 'id' | 'date'>) => {
+  const addCashInflow = async (infData: Omit<CashInflowItem, 'id' | 'date'>): Promise<CashInflowItem> => {
     const newInf: CashInflowItem = {
       ...infData,
       id: `inf-${Date.now()}`,
       date: new Date().toISOString(),
     };
-    setCashInflows((prev) => [newInf, ...prev]);
-    if (isSupabaseConfigured) {
-      supabaseService.insertCashInflow(newInf).catch(() => {});
+    const ok = await strictDbWrite(() => supabaseService.insertCashInflow(newInf));
+    if (!ok) {
+      throw new NetworkDbError(NETWORK_ERROR_MESSAGE);
     }
+    setCashInflows((prev) => [newInf, ...prev]);
     return newInf;
   };
 
   // Manual cash movement (تسوية عهدة: إيداع نقدي أو سحب شخصي من الدرج)
-  const addManualCashMovement = (
+  const addManualCashMovement = async (
     type: 'deposit' | 'withdrawal',
     amount: number,
     title: string,
     notes?: string
-  ) => {
+  ): Promise<void> => {
     const reasonText = (title || '').trim();
     if (type === 'deposit') {
       const inflow: CashInflowItem = {
@@ -2270,10 +2584,9 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         paymentMethod: 'cash',
         recordedBy: 'الاستقبال',
       };
+      const ok = await strictDbWrite(() => supabaseService.insertCashInflow(inflow));
+      if (!ok) throw new NetworkDbError(NETWORK_ERROR_MESSAGE);
       setCashInflows((prev) => [inflow, ...prev]);
-      if (isSupabaseConfigured) {
-        supabaseService.insertCashInflow(inflow).catch(() => {});
-      }
     } else {
       const expense: ExpenseItem = {
         id: `exp-manual-${Date.now()}`,
@@ -2285,10 +2598,9 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         paymentMethod: 'cash',
         recordedBy: 'الاستقبال',
       };
+      const ok = await strictDbWrite(() => supabaseService.insertExpense(expense));
+      if (!ok) throw new NetworkDbError(NETWORK_ERROR_MESSAGE);
       setExpenses((prev) => [expense, ...prev]);
-      if (isSupabaseConfigured) {
-        supabaseService.insertExpense(expense).catch(() => {});
-      }
     }
   };
 
@@ -2651,17 +2963,17 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
   };
 
-  const repayCoachDebt = (
+  const repayCoachDebt = async (
     coachId: string,
     amount: number,
     paymentMethod: 'cash' | 'instapay' = 'cash',
     notes?: string,
     authorizedBy = 'الاستقبال'
-  ) => {
+  ): Promise<{ success: boolean; repaidAmount: number }> => {
     const coach = coaches.find((c) => c.id === coachId);
     if (!coach || amount <= 0) return { success: false, repaidAmount: 0 };
 
-    // Record repayment in Trainer Transactions
+    const nowIso = new Date().toISOString();
     const repaymentTrx: TrainerTransaction = {
       transaction_id: `REP-${Date.now()}`,
       coach_id: coachId,
@@ -2673,8 +2985,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       gym_share: amount,
       coach_share: 0,
       status: 'settled',
-      created_at: new Date().toISOString(),
-      settled_at: new Date().toISOString(),
+      created_at: nowIso,
+      settled_at: nowIso,
       settled_by: authorizedBy,
       month: currentMonth,
       type: 'coach_repayment',
@@ -2682,102 +2994,102 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       notes: notes || `سداد ${amount} ج.م من المديونية المستحقة على كابتن ${coach.name}`,
     };
 
-    // Update pending receivable transactions if available
-    let remaining = amount;
-    setTrainerTransactions((prev) => {
-      const updated = prev.map((t) => {
-        if (
-          t.coach_id === coachId &&
-          t.status === 'pending' &&
-          remaining > 0
-        ) {
-          const share = (t.gym_share !== undefined && t.gym_share > 0) ? t.gym_share : t.amount;
-          if (remaining >= share) {
-            remaining -= share;
-            return {
-              ...t,
-              status: 'settled' as const,
-              settled_at: new Date().toISOString(),
-              settled_by: authorizedBy,
-            };
-          } else {
-            const left = share - remaining;
-            remaining = 0;
-            return {
-              ...t,
-              gym_share: left,
-            };
-          }
-        }
-        return t;
-      });
-      return [repaymentTrx, ...updated];
-    });
-
-    // Also update any matching master report entries
-    let repRemaining = amount;
-    setMasterReportEntries((prev) =>
-      prev.map((entry) => {
-        if (
-          entry.coachId === coachId &&
-          entry.paymentStatus === 'pending_on_coach' &&
-          repRemaining > 0
-        ) {
-          if (repRemaining >= entry.amount) {
-            repRemaining -= entry.amount;
-            return {
-              ...entry,
-              paymentStatus: 'paid' as const,
-              notes: entry.notes ? `${entry.notes} (تم السداد)` : 'تم السداد',
-            };
-          }
-        }
-        return entry;
-      })
-    );
-
-    // Update coach balance
-    setCoaches((prev) =>
-      prev.map((c) =>
-        c.id === coachId
-          ? {
-              ...c,
-              currentBalance: (c.currentBalance || 0) + amount,
-            }
-          : c
-      )
-    );
-
-    // Automatically record into Cash Inflow / Cash Drawer
     const inflowItem: CashInflowItem = {
       id: `inf-cch-rep-${Date.now()}`,
       type: 'coach_settlement',
       title: `إيداع سداد تحميل - كابتن ${coach.name}`,
       amount: amount,
-      date: new Date().toISOString(),
+      date: nowIso,
       memberName: coach.name,
       paymentMethod: paymentMethod,
       recordedBy: authorizedBy,
     };
-    setCashInflows((prev) => [inflowItem, ...prev]);
 
-    if (isSupabaseConfigured) {
-      supabaseService.upsertTrainerTransaction(repaymentTrx).catch(() => {});
-      supabaseService.insertCashInflow(inflowItem).catch(() => {});
+    // Compute updated trainer transactions & master report entries to persist
+    let remaining = amount;
+    const modifiedTrainerTrx: TrainerTransaction[] = [];
+    const nextTrainerTrx = trainerTransactions.map((t) => {
+      if (t.coach_id === coachId && t.status === 'pending' && remaining > 0) {
+        const share = t.gym_share !== undefined && t.gym_share > 0 ? t.gym_share : t.amount;
+        if (remaining >= share) {
+          remaining -= share;
+          const upd: TrainerTransaction = {
+            ...t,
+            status: 'settled',
+            settled_at: nowIso,
+            settled_by: authorizedBy,
+          };
+          modifiedTrainerTrx.push(upd);
+          return upd;
+        } else {
+          const left = share - remaining;
+          remaining = 0;
+          const upd: TrainerTransaction = {
+            ...t,
+            gym_share: left,
+          };
+          modifiedTrainerTrx.push(upd);
+          return upd;
+        }
+      }
+      return t;
+    });
+
+    let repRemaining = amount;
+    const modifiedMasterEntries: MasterReportEntry[] = [];
+    const nextMasterEntries = masterReportEntries.map((entry) => {
+      if (entry.coachId === coachId && entry.paymentStatus === 'pending_on_coach' && repRemaining > 0) {
+        if (repRemaining >= entry.amount) {
+          repRemaining -= entry.amount;
+          const upd: MasterReportEntry = {
+            ...entry,
+            paymentStatus: 'paid',
+            notes: entry.notes ? `${entry.notes} (تم السداد)` : 'تم السداد',
+          };
+          modifiedMasterEntries.push(upd);
+          return upd;
+        }
+      }
+      return entry;
+    });
+
+    // Pessimistic DB Write FIRST
+    const ok = await strictDbWrite(async () => {
+      const results = await Promise.all([
+        supabaseService.upsertTrainerTransaction(repaymentTrx),
+        supabaseService.insertCashInflow(inflowItem),
+        ...modifiedTrainerTrx.map((t) => supabaseService.upsertTrainerTransaction(t)),
+        ...modifiedMasterEntries.map((e) => supabaseService.upsertMasterReportEntry(e)),
+      ]);
+      return results.every(Boolean);
+    });
+    if (!ok) {
+      throw new NetworkDbError(NETWORK_ERROR_MESSAGE);
     }
+
+    setTrainerTransactions([repaymentTrx, ...nextTrainerTrx]);
+    setMasterReportEntries(nextMasterEntries);
+    setCoaches((prev) =>
+      prev.map((c) =>
+        c.id === coachId
+          ? { ...c, currentBalance: (c.currentBalance || 0) + amount }
+          : c
+      )
+    );
+    setCashInflows((prev) => [inflowItem, ...prev]);
 
     return { success: true, repaidAmount: amount };
   };
 
   // MANUAL COACH MOVEMENT (تسجيل حركة يدوية لحساب الكابتن مع ربط الدرج والمصاريف)
-  const addCoachManualMovement = (data: {
+  const addCoachManualMovement = async (data: {
     coach_id: string;
     movement_type: 'payout' | 'deposit' | 'charge';
     amount: number;
     reason: string;
     payment_method?: 'cash' | 'instapay';
     authorized_by?: string;
-  }) => {
+  }): Promise<{ success: boolean; type: 'payout' | 'deposit' | 'charge' }> => {
     const coach = coaches.find((c) => c.id === data.coach_id);
     const coachName = coach ? coach.name : 'مدرب';
     const authUser = data.authorized_by || 'الاستقبال';
@@ -2785,8 +3097,6 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const nowIso = new Date().toISOString();
 
     if (data.movement_type === 'payout') {
-      // 1. صرف نقدية للكابتن من الدرج (سلفة / دفعة نقدية / مكافأة)
-      // يخصم المبلغ أوتوماتيكياً من الدرج ويسجل فوراً في جدول المصاريف بند "مستحقات ومدفوعات كباتن"
       const newExp: ExpenseItem = {
         id: `exp-coach-${Date.now()}`,
         title: `صرف مستحقات/سلفة كابتن ${coachName}: ${data.reason}`,
@@ -2799,14 +3109,6 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         autoGenerated: false,
         relatedEntityId: data.coach_id,
       };
-      setExpenses((prev) => [newExp, ...prev]);
-
-      // تحديث مدفوعات اليوم للمدرب
-      setCoaches((prev) =>
-        prev.map((c) => (c.id === data.coach_id ? { ...c, totalPaidToday: c.totalPaidToday + data.amount } : c))
-      );
-
-      // تسجيل في دفتر معاملات الكابتن
       const newTrx: TrainerTransaction = {
         transaction_id: `TRX-PAY-${Date.now()}`,
         coach_id: data.coach_id,
@@ -2825,20 +3127,28 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         month: currentMonth,
         notes: data.reason,
       };
-      setTrainerTransactions((prev) => [newTrx, ...prev]);
 
-      if (isSupabaseConfigured) {
-        supabaseService.insertExpense(newExp).catch(() => {});
-        supabaseService.upsertTrainerTransaction(newTrx).catch(() => {});
+      const ok = await strictDbWrite(async () => {
+        const calls: Promise<boolean>[] = [
+          supabaseService.insertExpense(newExp),
+          supabaseService.upsertTrainerTransaction(newTrx),
+        ];
         if (coach) {
-          supabaseService.upsertCoach({ ...coach, totalPaidToday: coach.totalPaidToday + data.amount }).catch(() => {});
+          calls.push(supabaseService.upsertCoach({ ...coach, totalPaidToday: coach.totalPaidToday + data.amount }));
         }
-      }
+        const results = await Promise.all(calls);
+        return results.every(Boolean);
+      });
+      if (!ok) throw new NetworkDbError(NETWORK_ERROR_MESSAGE);
+
+      setExpenses((prev) => [newExp, ...prev]);
+      setCoaches((prev) =>
+        prev.map((c) => (c.id === data.coach_id ? { ...c, totalPaidToday: c.totalPaidToday + data.amount } : c))
+      );
+      setTrainerTransactions((prev) => [newTrx, ...prev]);
 
       return { success: true, type: 'payout' as const };
     } else if (data.movement_type === 'deposit') {
-      // 2. توريد / سداد نقدية من الكابتن للدرج (إيداع نقدي)
-      // يضاف المبلغ أوتوماتيكياً للدرج ويسجل فوراً في إيرادات الدرج تحت بند "سداد تحميل من كابتن"
       const inflow: CashInflowItem = {
         id: `inf-coach-${Date.now()}`,
         type: 'coach_settlement',
@@ -2849,9 +3159,6 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         paymentMethod: method,
         recordedBy: authUser,
       };
-      setCashInflows((prev) => [inflow, ...prev]);
-
-      let remaining = data.amount;
       const newTrx: TrainerTransaction = {
         transaction_id: `TRX-DEP-${Date.now()}`,
         coach_id: data.coach_id,
@@ -2872,6 +3179,18 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         notes: data.reason,
       };
 
+      const ok = await strictDbWrite(async () => {
+        const [a, b] = await Promise.all([
+          supabaseService.insertCashInflow(inflow),
+          supabaseService.upsertTrainerTransaction(newTrx),
+        ]);
+        return a && b;
+      });
+      if (!ok) throw new NetworkDbError(NETWORK_ERROR_MESSAGE);
+
+      setCashInflows((prev) => [inflow, ...prev]);
+
+      let remaining = data.amount;
       setTrainerTransactions((prev) => {
         const updated = prev.map((t) => {
           if (
@@ -2902,14 +3221,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return [newTrx, ...updated];
       });
 
-      if (isSupabaseConfigured) {
-        supabaseService.insertCashInflow(inflow).catch(() => {});
-        supabaseService.upsertTrainerTransaction(newTrx).catch(() => {});
-      }
-
       return { success: true, type: 'deposit' as const };
     } else {
-      // 3. تحميل مديونية على الكابتن (فلوس أخذها الكابتن لحساب الجيم)
       const newTrx: TrainerTransaction = {
         transaction_id: `TRX-CHG-${Date.now()}`,
         coach_id: data.coach_id,
@@ -2926,8 +3239,6 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         month: currentMonth,
         notes: data.reason,
       };
-      setTrainerTransactions((prev) => [newTrx, ...prev]);
-
       const repEntry: MasterReportEntry = {
         id: `rep-coach-chg-${Date.now()}`,
         month: currentMonth,
@@ -2944,7 +3255,23 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         notes: data.reason,
         sourceType: 'manual',
       };
+
+      const ok = await strictDbWrite(async () => {
+        const [a, b] = await Promise.all([
+          supabaseService.upsertTrainerTransaction(newTrx),
+          supabaseService.upsertMasterReportEntry(repEntry),
+        ]);
+        return a && b;
+      });
+      if (!ok) throw new NetworkDbError(NETWORK_ERROR_MESSAGE);
+
+      setTrainerTransactions((prev) => [newTrx, ...prev]);
       setMasterReportEntries((prev) => [repEntry, ...prev]);
+
+      if (isSupabaseConfigured) {
+        supabaseService.upsertTrainerTransaction(newTrx).catch(() => {});
+        supabaseService.upsertMasterReportEntry(repEntry).catch(() => {});
+      }
 
       if (isSupabaseConfigured) {
         supabaseService.upsertTrainerTransaction(newTrx).catch(() => {});
@@ -3251,12 +3578,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       )
     );
 
-    // 7. Remove the checkInLog itself from state & localStorage immediately
-    setCheckInLogs((prev) => {
-      const remaining = prev.filter((l) => l.id !== checkInLogId);
-      localStorage.setItem('synapse_checkin_logs', JSON.stringify(remaining));
-      return remaining;
-    });
+    // 7. Remove the checkInLog itself from state immediately
+    setCheckInLogs((prev) => prev.filter((l) => l.id !== checkInLogId));
 
     // 8. Delete from Supabase if configured so refresh will NOT restore it
     if (isSupabaseConfigured) {
@@ -3275,7 +3598,6 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const clearAllCheckInLogs = () => {
     setCheckInLogs([]);
-    localStorage.setItem('synapse_checkin_logs', JSON.stringify([]));
     if (isSupabaseConfigured) {
       supabaseService.clearAllCheckInLogs().catch(() => {});
     }
@@ -3619,28 +3941,40 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return { success: true, periodArchive: periodArchiveRecord };
   };
 
-  // Check for any currently running sessions or physiotherapy
+  // Check for any currently running sessions, physiotherapy, or players still inside active sessions
   const getRunningOperations = () => {
     const runningSessions = sessions.filter((s) => s.status === 'in-progress');
     const runningPhysio = physioBookings.filter(
       (p) => p.status === 'active' || p.status === 'paused'
     );
+    const activeSeatedPlayers = checkInLogs.filter(
+      (l) =>
+        isAfterLastClosing(l.timestamp) &&
+        l.seatingStatus === 'assigned' &&
+        Boolean(l.assignedSessionId) &&
+        l.checkOutStatus !== 'checked_out'
+    );
     return {
       runningSessions,
       runningPhysio,
-      hasRunning: runningSessions.length > 0 || runningPhysio.length > 0,
+      activeSeatedPlayers,
+      hasRunning:
+        runningSessions.length > 0 ||
+        runningPhysio.length > 0 ||
+        activeSeatedPlayers.length > 0,
     };
   };
 
   // DAILY SHIFT CLOSING (تقفيل اليومية والدرج)
-  const closeDailyShift = (closingData: Omit<DailyShiftClosing, 'id' | 'closedAt'>): DailyShiftClosing => {
+  const closeDailyShift = async (closingData: Omit<DailyShiftClosing, 'id' | 'closedAt'>): Promise<DailyShiftClosing> => {
     const running = getRunningOperations();
     if (running.hasRunning) {
       const runningNames = [
         ...running.runningSessions.map((s) => `حصة: ${s.title}`),
         ...running.runningPhysio.map((p) => `جلسة تأهيل: ${p.patientName} (${p.roomName})`),
+        ...running.activeSeatedPlayers.map((l) => `لاعب لم يسجل خروج: ${l.memberName}`),
       ].join('، ');
-      throw new Error(`لا يمكن تقفيل اليومية! يوجد حالياً حصص تدريبية أو جلسات علاج طبيعي جارية: ${runningNames}`);
+      throw new Error(`لا يمكن تقفيل اليومية! يوجد عمليات أو لاعبون لم يسجلوا خروج بعد: ${runningNames}`);
     }
 
     // Month expiration check:
@@ -3673,6 +4007,12 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       closedAt: new Date().toISOString(),
     };
 
+    // Pessimistic DB Write: Persist daily shift closing to Supabase FIRST
+    const ok = await strictDbWrite(() => supabaseService.insertDailyShiftClosing(newClosing));
+    if (!ok) {
+      throw new NetworkDbError(NETWORK_ERROR_MESSAGE);
+    }
+
     setDailyShiftClosings((prev) => [newClosing, ...prev]);
 
     // Handle discrepancy audit log
@@ -3690,6 +4030,9 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           autoGenerated: true,
         };
         setExpenses((prev) => [deficitExpense, ...prev]);
+        if (isSupabaseConfigured) {
+          supabaseService.insertExpense(deficitExpense).catch(() => {});
+        }
       } else {
         const surplusInflow: CashInflowItem = {
           id: `inf-surplus-${Date.now()}`,
@@ -3701,12 +4044,14 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           recordedBy: newClosing.closedBy,
         };
         setCashInflows((prev) => [surplusInflow, ...prev]);
+        if (isSupabaseConfigured) {
+          supabaseService.insertCashInflow(surplusInflow).catch(() => {});
+        }
       }
     }
 
     // 1. تصفير ومسح طابور وحضور وتسجيلات الاستقبال بالكامل لتبدأ اليومية الجديدة نظيفة
     setCheckInLogs([]);
-    localStorage.setItem('synapse_checkin_logs', JSON.stringify([]));
 
     // 2. إعادة ضبط كافة الحصص لوضع الاستعداد (idle) وإفراغ التسكين المؤقت لليوم ومزامنتها في Supabase
     const resetSessions = sessions.map((s) => ({
@@ -3723,7 +4068,6 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setPhysioBookings((prev) => prev.filter((b) => b.status !== 'completed'));
 
     if (isSupabaseConfigured) {
-      supabaseService.insertDailyShiftClosing(newClosing).catch(() => {});
       supabaseService.clearAllCheckInLogs().catch(() => {});
       supabaseService.clearCheckInLogsForDate(newClosing.date).catch(() => {});
       supabaseService.clearCompletedPhysioBookings().catch(() => {});
@@ -3796,6 +4140,10 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   return (
     <GymDataContext.Provider
       value={{
+        isInitialLoading,
+        networkError,
+        reportNetworkError,
+        clearNetworkError,
         members,
         cancelCheckIn,
         clearAllCheckInLogs,
@@ -3806,6 +4154,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         toggleMemberAsDoctor,
         findMemberByCode,
         performCheckIn,
+        calculatePlayerCheckOutQuote,
+        completePlayerCheckOut,
         sessions,
         addSession,
         updateSession,

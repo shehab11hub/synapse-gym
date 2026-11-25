@@ -170,7 +170,7 @@ export const MasterReportPage: React.FC = () => {
 
   // Today's direct cash collected at reception
   const todayDirectEntries = masterReportEntries.filter(
-    (e) => e.date?.startsWith(todayIso) && e.paymentMethod !== 'coach_collected'
+    (e) => e.date?.startsWith(todayIso) && e.paymentMethod !== 'coach_collected' && e.paymentMethod !== 'coach_debt'
   );
   const todayDirectCash = todayDirectEntries.reduce((sum, e) => sum + e.amount, 0);
 
@@ -196,7 +196,7 @@ export const MasterReportPage: React.FC = () => {
 
   // Today's coach debts loaded
   const todayCoachDebts = masterReportEntries.filter(
-    (e) => e.date?.startsWith(todayIso) && e.paymentMethod === 'coach_collected'
+    (e) => e.date?.startsWith(todayIso) && (e.paymentMethod === 'coach_collected' || e.paymentMethod === 'coach_debt')
   );
   const todayCoachDebtsAmount = todayCoachDebts.reduce((sum, e) => sum + e.amount, 0);
 
@@ -287,8 +287,8 @@ export const MasterReportPage: React.FC = () => {
   });
 
   // 1. Separate Direct Subscriptions (regular payments at the top) vs Coach Loaded Players
-  const directEntries = filteredEntries.filter((e) => e.paymentMethod !== 'coach_collected');
-  const coachEntries = filteredEntries.filter((e) => e.paymentMethod === 'coach_collected');
+  const directEntries = filteredEntries.filter((e) => e.paymentMethod !== 'coach_collected' && e.paymentMethod !== 'coach_debt');
+  const coachEntries = filteredEntries.filter((e) => e.paymentMethod === 'coach_collected' || e.paymentMethod === 'coach_debt');
 
   // 2. Filter Expenses & Repayments dynamically according to selectedMonth and selectedYearFilter
   const filteredExpenses = expenses.filter((exp) => {
@@ -424,7 +424,7 @@ export const MasterReportPage: React.FC = () => {
 
     setIsSubmittingShiftClose(true);
     try {
-      const closed = closeDailyShift({
+      const closed = await closeDailyShift({
         date: shiftClosingDayDate,
         closingDayDate: shiftClosingDayDate,
         nextDayDate: shiftNextDayDate,
@@ -466,7 +466,7 @@ export const MasterReportPage: React.FC = () => {
       );
 
       // 1. Generate & open the Shift Closing PDF immediately
-      printDailyShiftReportPDF(
+      await printDailyShiftReportPDF(
         closed,
         shiftEntries,
         shiftExpenses,
@@ -626,10 +626,11 @@ export const MasterReportPage: React.FC = () => {
   const getPaymentMethodBadge = (method: string) => {
     switch (method) {
       case 'coach_collected':
+      case 'coach_debt':
         return (
           <span className="px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold text-[11px] flex items-center gap-1 whitespace-nowrap">
             <User className="w-3 h-3" />
-            <span>مع الكابتن</span>
+            <span>{method === 'coach_debt' ? 'تحميل بار على الكابتن' : 'مع الكابتن'}</span>
           </span>
         );
       case 'instapay':
@@ -734,9 +735,12 @@ export const MasterReportPage: React.FC = () => {
                   const runningItems = [
                     ...running.runningSessions.map((s) => `• حصة تدريبية جارية: ${s.title}`),
                     ...running.runningPhysio.map((p) => `• جلسة علاج طبيعي / مساج: ${p.patientName} (${p.roomName})`),
+                    ...(running.activeSeatedPlayers || []).map(
+                      (l) => `• لاعب لم يسجل خروج: ${l.memberName} (${l.assignedSessionTitle || 'حصة'})`
+                    ),
                   ].join('\n');
                   alert(
-                    `⚠️ عذراً، لا يمكن إتمام تقفيل اليومية الآن!\n\nيوجد عمليات ما زالت قيد التشغيل ولم تنتهي بعد:\n${runningItems}\n\nيرجى إنهاء كافة الحصص وجلسات العلاج الطبيعي أولاً من صفحاتها الخاصة ثم المحاولة مجدداً.`
+                    `⚠️ عذراً، لا يمكن إتمام تقفيل اليومية الآن!\n\nيوجد عمليات أو لاعبون ما زالوا داخل الحصص ولم يسجلوا خروج بعد:\n${runningItems}\n\nيرجى إنهاء كافة الحصص وجلسات العلاج الطبيعي وتسجيل خروج اللاعبين أولاً ثم المحاولة مجدداً.`
                   );
                   return;
                 }

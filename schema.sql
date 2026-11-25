@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS public.members (
 -- TABLE: coaches
 CREATE TABLE IF NOT EXISTS public.coaches (
   id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+  code VARCHAR(10),
   name TEXT NOT NULL,
   phone TEXT NOT NULL,
   specialty TEXT NOT NULL,
@@ -128,6 +129,9 @@ CREATE TABLE IF NOT EXISTS public.gym_sessions (
   coach_ids JSONB DEFAULT '[]'::JSONB,
   session_category TEXT DEFAULT 'group' CHECK (session_category IN ('private', 'group', 'physio', 'massage', 'gym')),
   price NUMERIC(10, 2) DEFAULT 0.00,
+  tier1_price NUMERIC(10, 2) DEFAULT 0.00,
+  tier2_price NUMERIC(10, 2) DEFAULT 0.00,
+  tier3_price NUMERIC(10, 2) DEFAULT 0.00,
   start_time TEXT,
   end_time TEXT,
   status TEXT DEFAULT 'idle' CHECK (status IN ('idle', 'in-progress', 'completed')),
@@ -194,7 +198,10 @@ CREATE TABLE IF NOT EXISTS public.pos_transactions (
   total_amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
   total_cost NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
   profit NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
-  payment_method TEXT NOT NULL DEFAULT 'cash' CHECK (payment_method IN ('cash', 'card', 'instapay')),
+  payment_method TEXT NOT NULL DEFAULT 'cash' CHECK (payment_method IN ('cash', 'card', 'instapay', 'coach_debt')),
+  coach_id TEXT,
+  coach_name TEXT,
+  notes TEXT,
   timestamp TIMESTAMPTZ DEFAULT NOW(),
   cashier_name TEXT NOT NULL
 );
@@ -216,7 +223,14 @@ CREATE TABLE IF NOT EXISTS public.check_in_logs (
   assigned_session_id TEXT,
   assigned_session_title TEXT,
   payment_mode TEXT,
-  charged_amount NUMERIC(10, 2) DEFAULT 0.00
+  charged_amount NUMERIC(10, 2) DEFAULT 0.00,
+  session_started_at TIMESTAMPTZ,
+  check_out_time TIMESTAMPTZ,
+  duration_minutes INTEGER DEFAULT 0,
+  pricing_tier TEXT,
+  extra_fee_paid NUMERIC(10, 2) DEFAULT 0.00,
+  extra_payment_method TEXT,
+  check_out_status TEXT DEFAULT 'active'
 );
 
 -- TABLE: settlement_logs
@@ -290,10 +304,15 @@ CREATE TABLE IF NOT EXISTS public.master_report_entries (
   coach_name TEXT NOT NULL,
   session_category TEXT NOT NULL CHECK (session_category IN ('private', 'group', 'physio', 'massage', 'gym')),
   session_title TEXT,
-  payment_method TEXT NOT NULL CHECK (payment_method IN ('cash', 'instapay', 'card', 'coach_collected')),
+  payment_method TEXT NOT NULL CHECK (payment_method IN ('cash', 'instapay', 'card', 'coach_collected', 'coach_debt')),
   payment_status TEXT NOT NULL CHECK (payment_status IN ('paid', 'pending_on_coach', 'unpaid')),
   notes TEXT,
   source_type TEXT NOT NULL,
+  entry_time TIMESTAMPTZ,
+  check_out_time TIMESTAMPTZ,
+  duration_minutes INTEGER,
+  pricing_tier TEXT,
+  extra_fee_paid NUMERIC(10, 2) DEFAULT 0.00,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
