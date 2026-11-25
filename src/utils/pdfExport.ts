@@ -297,7 +297,7 @@ export const printDailyShiftReportPDF = async (
   const html = `
     <div class="header-banner">
       <div>
-        <h1 class="header-title">SYNAPSE GYM - تقرير إقفال الوردية واليومية الشامل</h1>
+        <h1 class="header-title">EGYFIT - تقرير إقفال الوردية واليومية الشامل</h1>
         <p class="header-subtitle">
           ${
             closing.closingDayDate && closing.nextDayDate
@@ -538,12 +538,12 @@ export const printDailyShiftReportPDF = async (
     </table>
 
     <div class="footer">
-      <div>تم إصدار التقرير تلقائياً بواسطة منظومة Synapse Gym SaaS لإدارة الأندية الرياضية</div>
+      <div>EGYFIT — Powered by Synapse • تم إصدار التقرير تلقائياً</div>
       <div>صفحة 1 من 1 | توقيع الإدارة: ________________________</div>
     </div>
   `;
 
-  openPrintWindow(`تقرير وردية ${closing.date}`, html);
+  openPrintWindow(`EGYFIT - تقرير وردية ${closing.date}`, html);
 };
 
 /**
@@ -605,7 +605,7 @@ export const printMonthlyMasterReportPDF = async (
   const html = `
     <div class="header-banner">
       <div>
-        <h1 class="header-title">SYNAPSE GYM - التقرير المالي والإداري الشهري الشامل</h1>
+        <h1 class="header-title">EGYFIT - التقرير المالي والإداري الشهري الشامل</h1>
         <p class="header-subtitle">
           الدورة الشهرية: <strong>${monthName}</strong> | تاريخ استخراج التقرير: <strong>${new Date().toLocaleDateString('ar-EG')}</strong>
         </p>
@@ -722,12 +722,12 @@ export const printMonthlyMasterReportPDF = async (
     </table>
 
     <div class="footer">
-      <div>تم إصدار التقرير الشهري تلقائياً من خادم Synapse Gym SaaS</div>
+      <div>EGYFIT — Powered by Synapse • تم إصدار التقرير الشهري تلقائياً</div>
       <div>يعتمد بتوقيع المدير العام: ________________________</div>
     </div>
   `;
 
-  openPrintWindow(`تقرير شهر ${monthName}`, html);
+  openPrintWindow(`EGYFIT - تقرير شهر ${monthName}`, html);
 };
 
 /**
@@ -737,7 +737,7 @@ export const printYearlyArchiveReportPDF = (archive: YearlyArchive) => {
   const html = `
     <div class="header-banner">
       <div>
-        <h1 class="header-title">SYNAPSE GYM - التقرير المالي والإداري السنوي المعتمد</h1>
+        <h1 class="header-title">EGYFIT - التقرير المالي والإداري السنوي المعتمد</h1>
         <p class="header-subtitle">
           السنة المالية: <strong>${archive.year}</strong> | أرشف بواسطة: <strong>${archive.archivedBy}</strong> | تاريخ الأرشفة: <strong>${new Date(archive.archivedAt).toLocaleDateString('ar-EG')}</strong>
         </p>
@@ -800,12 +800,12 @@ export const printYearlyArchiveReportPDF = (archive: YearlyArchive) => {
     </table>
 
     <div class="footer">
-      <div>أرشيف مالي محفوظ أوفلاين في قاعدة بيانات Synapse Gym SaaS</div>
+      <div>EGYFIT — Powered by Synapse • أرشيف مالي محفوظ في قاعدة البيانات</div>
       <div>اعتماد المدير العام: ________________________</div>
     </div>
   `;
 
-  openPrintWindow(`تقرير سنة ${archive.year}`, html);
+  openPrintWindow(`EGYFIT - تقرير سنة ${archive.year}`, html);
 };
 
 /**
@@ -823,7 +823,7 @@ export const printPhysioReceiptPDF = (booking: PhysioBooking) => {
   const html = `
     <div class="header-banner">
       <div>
-        <h1 class="header-title">SYNAPSE GYM - عيادة التأهيل والمساج والاستشفاء</h1>
+        <h1 class="header-title">EGYFIT - عيادة التأهيل والمساج والاستشفاء</h1>
         <p class="header-subtitle">
           إيصال محاسبة جلسة رسمية | رقم الجلسة: <strong>${booking.id}</strong> | تاريخ: <strong>${new Date(booking.startTime).toLocaleDateString('ar-EG')}</strong>
         </p>

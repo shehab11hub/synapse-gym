@@ -4,13 +4,13 @@ import {
   User,
   ShieldAlert,
   ArrowRight,
-  Dumbbell,
   ShieldCheck,
   KeyRound,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { sounds } from '../utils/sound';
 import { CoachPortalPage } from './CoachPortalPage';
+import { BrandLogo } from '../components/BrandLogo';
 
 export const LoginPage: React.FC = () => {
   const { login } = useAuth();
@@ -63,18 +63,7 @@ export const LoginPage: React.FC = () => {
         <div className="bg-[#0f172a]/80 backdrop-blur-xl border border-slate-800 rounded-3xl p-8 shadow-2xl shadow-black/80 relative">
           {/* Top Brand */}
           <div className="text-center mb-8">
-            <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-tr from-teal-500 to-cyan-400 p-0.5 shadow-xl shadow-teal-500/25 mb-4 flex items-center justify-center">
-              <div className="w-full h-full bg-[#0b1120] rounded-[14px] flex items-center justify-center">
-                <Dumbbell className="w-8 h-8 text-teal-400 transform -rotate-45" />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-center gap-2">
-              <h1 className="text-2xl font-black tracking-wider text-white">SYNAPSE</h1>
-              <span className="text-xs uppercase font-extrabold px-2 py-0.5 rounded-md bg-teal-500/20 text-teal-400 border border-teal-500/30">
-                GYM SaaS
-              </span>
-            </div>
+            <BrandLogo size="lg" centered className="mb-3" />
             <p className="text-slate-400 text-xs mt-1.5">
               نظام إدارة الجيم والاشتراكات السحابي المتكامل
             </p>
@@ -163,7 +152,7 @@ export const LoginPage: React.FC = () => {
 
           {/* Footer note */}
           <div className="mt-6 pt-4 border-t border-slate-800/60 text-center text-xs text-slate-500">
-            <p>منظومة Synapse Gym SaaS - الإصدار الإنتاجي للتشغيل الفعلي v2.4</p>
+            <p>EGYFIT — Powered by Synapse • الإصدار الإنتاجي للتشغيل الفعلي v2.4</p>
           </div>
         </div>
       </div>

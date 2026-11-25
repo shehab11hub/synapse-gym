@@ -16,6 +16,7 @@ import {
   Search,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { BrandLogo } from '../BrandLogo';
 
 interface SidebarProps {
   activeTab: string;
@@ -123,20 +124,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Brand Header */}
       <div className="p-5 border-b border-slate-800/60">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-gradient-to-tr from-teal-600 via-teal-500 to-cyan-400 flex items-center justify-center shadow-lg shadow-teal-500/20 text-white font-black text-xl tracking-wider">
-              S
-            </div>
-            <div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-xl font-extrabold text-white tracking-wide">SYNAPSE</span>
-                <span className="text-[10px] uppercase font-bold tracking-widest px-1.5 py-0.5 rounded bg-teal-500/20 text-teal-400 border border-teal-500/30">
-                  SaaS
-                </span>
-              </div>
-              <p className="text-xs text-slate-400 font-medium">نظام إدارة الأندية الرياضية</p>
-            </div>
-          </div>
+          <BrandLogo size="sm" />
 
           {isDrawer && onCloseMobile && (
             <button

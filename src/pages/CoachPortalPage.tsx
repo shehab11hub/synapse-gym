@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  Dumbbell,
   KeyRound,
   LogOut,
   RefreshCw,
@@ -22,6 +21,7 @@ import { isSupabaseConfigured } from '../lib/supabase';
 import { Coach, TrainerTransaction, POSTransaction } from '../types';
 import { formatEGP } from '../utils/formatters';
 import { sounds } from '../utils/sound';
+import { BrandLogo } from '../components/BrandLogo';
 
 interface CoachPortalPageProps {
   onBackToStaffLogin?: () => void;
@@ -267,11 +267,7 @@ export const CoachPortalPage: React.FC<CoachPortalPageProps> = ({ onBackToStaffL
           <div className="bg-[#0f172a]/85 backdrop-blur-xl border border-amber-500/30 rounded-3xl p-8 shadow-2xl shadow-black/80 relative">
             {/* Top Brand */}
             <div className="text-center mb-7">
-              <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-400 p-0.5 shadow-xl shadow-amber-500/25 mb-4 flex items-center justify-center">
-                <div className="w-full h-full bg-[#0b1120] rounded-[14px] flex items-center justify-center">
-                  <Dumbbell className="w-8 h-8 text-amber-400 transform -rotate-45" />
-                </div>
-              </div>
+              <BrandLogo size="lg" centered className="mb-4" />
 
               <h1 className="text-2xl font-black text-white">بوابة الكباتن والمدربين</h1>
               <p className="text-slate-400 text-xs mt-1.5">

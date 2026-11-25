@@ -239,8 +239,8 @@ export const exportMasterReportToXLSX = async (inputData: MasterReportExportPayl
   }
 
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'Synapse Gym SaaS Pro';
-  workbook.lastModifiedBy = 'Synapse Management';
+  workbook.creator = 'EGYFIT — Powered by Synapse';
+  workbook.lastModifiedBy = 'EGYFIT Management';
   workbook.created = new Date();
   workbook.modified = new Date();
 
@@ -255,7 +255,7 @@ export const exportMasterReportToXLSX = async (inputData: MasterReportExportPayl
 
   summarySheet.mergeCells('A1:E1');
   const titleCell = summarySheet.getCell('A1');
-  titleCell.value = 'التقرير المالي والتشغيلي المجمع - SYNAPSE GYM';
+  titleCell.value = 'EGYFIT — التقرير المالي والتشغيلي المجمع';
   titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
   titleCell.font = { bold: true, size: 16, color: { argb: 'FFFFFFFF' }, name: 'Segoe UI' };
   titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TITLE_BANNER_BG } };
@@ -263,7 +263,7 @@ export const exportMasterReportToXLSX = async (inputData: MasterReportExportPayl
 
   summarySheet.mergeCells('A2:E2');
   const subtitleCell = summarySheet.getCell('A2');
-  subtitleCell.value = `الدورة المالية: ${data.selectedMonth} | تاريخ التصدير: ${new Date().toLocaleDateString('ar-EG')} ${new Date().toLocaleTimeString('ar-EG')}`;
+  subtitleCell.value = `الدورة المالية: ${data.selectedMonth} | تاريخ التصدير: ${new Date().toLocaleDateString('ar-EG')} ${new Date().toLocaleTimeString('ar-EG')} | Powered by Synapse`;
   subtitleCell.alignment = { vertical: 'middle', horizontal: 'center' };
   subtitleCell.font = { italic: true, size: 10, color: { argb: 'FF94A3B8' }, name: 'Segoe UI' };
   subtitleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
@@ -781,7 +781,7 @@ export const exportMasterReportToXLSX = async (inputData: MasterReportExportPayl
 
   // Trigger download
   const cleanMonth = data.selectedMonth.replace(/\s+/g, '_');
-  await downloadWorkbook(workbook, `التقرير_الشامل_${cleanMonth}.xlsx`);
+  await downloadWorkbook(workbook, `EGYFIT_التقرير_الشامل_${cleanMonth}.xlsx`);
 };
 
 // ============================================================================
@@ -840,7 +840,7 @@ export const exportDailyShiftToXLSX = async (
   }
 
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'Synapse Gym SaaS Pro';
+  workbook.creator = 'EGYFIT — Powered by Synapse';
   workbook.created = new Date();
 
   // -------------------------------------------------------------
@@ -851,7 +851,7 @@ export const exportDailyShiftToXLSX = async (
   // Title Banner
   sheet.mergeCells('A1:D1');
   const title = sheet.getCell('A1');
-  title.value = `تقرير تقفيل وردية اليوم والدرج - SYNAPSE GYM`;
+  title.value = `EGYFIT — تقرير تقفيل وردية اليوم والدرج`;
   title.alignment = { vertical: 'middle', horizontal: 'center' };
   title.font = { bold: true, size: 15, color: { argb: 'FFFFFFFF' }, name: 'Segoe UI' };
   title.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TITLE_BANNER_BG } };
@@ -862,7 +862,7 @@ export const exportDailyShiftToXLSX = async (
   const shiftDateText = closing.closingDayDate && closing.nextDayDate
     ? `وردية يوم: ${closing.closingDayDate} حتى صباح: ${closing.nextDayDate}`
     : `تاريخ الوردية: ${closing.date}`;
-  sub.value = `${shiftDateText} | وقت الإقفال: ${new Date(closing.closedAt).toLocaleTimeString('ar-EG')} | المقفل بواسطة: ${closing.closedBy}`;
+  sub.value = `${shiftDateText} | وقت الإقفال: ${new Date(closing.closedAt).toLocaleTimeString('ar-EG')} | المقفل بواسطة: ${closing.closedBy} | Powered by Synapse`;
   sub.alignment = { vertical: 'middle', horizontal: 'center' };
   sub.font = { italic: true, size: 10, color: { argb: 'FF94A3B8' } };
   sub.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
@@ -1454,8 +1454,8 @@ export const exportDailyShiftToXLSX = async (
   finalizeWorksheet(playersSheet, 18);
 
   const outFileName = closing.closingDayDate && closing.nextDayDate
-    ? `تقفيل_وردية_${closing.closingDayDate}_الى_${closing.nextDayDate}.xlsx`
-    : `تقفيل_وردية_${closing.date}.xlsx`;
+    ? `EGYFIT_تقفيل_وردية_${closing.closingDayDate}_الى_${closing.nextDayDate}.xlsx`
+    : `EGYFIT_تقفيل_وردية_${closing.date}.xlsx`;
   await downloadWorkbook(workbook, outFileName);
 };
 
@@ -1464,14 +1464,14 @@ export const exportDailyShiftToXLSX = async (
 // ============================================================================
 export const exportYearlyArchiveToXLSX = async (archive: YearlyArchive) => {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'Synapse Gym SaaS Pro';
+  workbook.creator = 'EGYFIT — Powered by Synapse';
 
   // Tab 1: Yearly KPI Summary
   const sheet = workbook.addWorksheet(`أرشيف_${archive.year}`);
 
   sheet.mergeCells('A1:C1');
   const title = sheet.getCell('A1');
-  title.value = `الأرشيف المالي والإداري الشامل لعام ${archive.year} - SYNAPSE GYM`;
+  title.value = `EGYFIT — الأرشيف المالي والإداري الشامل لعام ${archive.year} (Powered by Synapse)`;
   title.alignment = { vertical: 'middle', horizontal: 'center' };
   title.font = { bold: true, size: 14, color: { argb: 'FFFFFFFF' } };
   title.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: TITLE_BANNER_BG } };
@@ -1529,7 +1529,7 @@ export const exportYearlyArchiveToXLSX = async (archive: YearlyArchive) => {
   finalizeWorksheet(sheet, 18);
   finalizeWorksheet(monthSheet, 16);
 
-  await downloadWorkbook(workbook, `أرشيف_سنة_${archive.year}_المجمع.xlsx`);
+  await downloadWorkbook(workbook, `EGYFIT_أرشيف_سنة_${archive.year}_المجمع.xlsx`);
 };
 
 export const exportYearlyArchiveToJSON = (archive: YearlyArchive) => {
@@ -1563,7 +1563,7 @@ export interface PeriodArchivePayload {
 
 export const exportPeriodArchiveToXLSX = async (payload: PeriodArchivePayload) => {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'Synapse Gym SaaS Pro';
+  workbook.creator = 'EGYFIT — Powered by Synapse';
 
   const totalRev = payload.masterEntries.reduce((s, e) => s + e.amount, 0);
   const totalExp = payload.expenses.reduce((s, e) => s + e.amount, 0);
@@ -1661,7 +1661,7 @@ export const exportPeriodArchiveToXLSX = async (payload: PeriodArchivePayload) =
   });
   finalizeWorksheet(trSheet, 16);
 
-  await downloadWorkbook(workbook, `أرشيف_فترة_${payload.periodName.replace(/\s+/g, '_')}.xlsx`);
+  await downloadWorkbook(workbook, `EGYFIT_أرشيف_فترة_${payload.periodName.replace(/\s+/g, '_')}.xlsx`);
 };
 
 export const exportPeriodArchiveToJSON = (payload: PeriodArchivePayload) => {

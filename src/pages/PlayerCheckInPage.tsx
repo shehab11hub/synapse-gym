@@ -8,7 +8,6 @@ import {
   ShieldCheck,
   UserCheck,
   AlertCircle,
-  Dumbbell,
   ArrowRight,
   Zap,
   UserPlus,
@@ -21,6 +20,7 @@ import {
   Phone,
 } from 'lucide-react';
 import { useGymData, generateUniqueMemberCode } from '../context/GymDataContext';
+import { BrandLogo } from '../components/BrandLogo';
 import { useAuth } from '../context/AuthContext';
 import { Member, SessionCategory } from '../types';
 import { formatDateAr, formatArabicDayMonth, getSubscriptionStatus } from '../utils/formatters';
@@ -407,17 +407,9 @@ export const PlayerCheckInPage: React.FC = () => {
 
       {/* Top Header */}
       <header className="relative z-10 max-w-md mx-auto w-full pt-2 sm:pt-4 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center text-slate-950 font-black shadow-lg shadow-emerald-500/20">
-            <Dumbbell className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-base font-black tracking-wide text-white flex items-center gap-1.5">
-              <span>SYNAPSE GYM</span>
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            </div>
-            <p className="text-[11px] text-emerald-400 font-bold">بوابة الحضور الذاتي بالـ QR</p>
-          </div>
+        <div>
+          <BrandLogo size="sm" />
+          <p className="text-[11px] text-emerald-400 font-bold mt-1">بوابة الحضور الذاتي بالـ QR</p>
         </div>
 
         <span className="text-[10px] font-mono px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 flex items-center gap-1">
@@ -829,6 +821,7 @@ export const PlayerCheckInPage: React.FC = () => {
           <span>بوابة طاقم الإدارة والاستقبال (موظفين فقط)</span>
           <ArrowRight className="w-3.5 h-3.5" />
         </button>
+        <p className="text-[10px] text-slate-600 font-medium mt-1">EGYFIT — Powered by Synapse</p>
       </footer>
 
       {/* Staff Authentication Modal */}
