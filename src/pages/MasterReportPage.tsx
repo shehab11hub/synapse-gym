@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   FileSpreadsheet,
   Download,
@@ -28,7 +28,7 @@ import {
 } from 'lucide-react';
 import { useGymData } from '../context/GymDataContext';
 import { useAuth } from '../context/AuthContext';
-import { MasterReportEntry, SessionCategory, Coach, ExpenseItem, CashInflowItem } from '../types';
+import { MasterReportEntry, SessionCategory, Coach, ExpenseItem, CashInflowItem, DailyShiftClosing } from '../types';
 import { formatEGP, formatDateAr } from '../utils/formatters';
 import { sounds } from '../utils/sound';
 import {
@@ -36,6 +36,10 @@ import {
   printMonthlyMasterReportPDF,
   printYearlyArchiveReportPDF,
 } from '../utils/pdfExport';
+import { supabaseService } from '../services/supabaseService';
+import { isSupabaseConfigured } from '../lib/supabase';
+import { PaginationBar } from '../components/PaginationBar';
+import { TableRowsSkeleton } from '../components/PageSkeleton';
 
 export const ARABIC_MONTH_NAMES = [
   'يناير',
@@ -89,6 +93,63 @@ export const MasterReportPage: React.FC = () => {
   } = useGymData();
 
   const { currentUser, users } = useAuth();
+
+  // Server-Side Paginated Daily Shift Closings History (20 per page)
+  const [closingsSearch, setClosingsSearch] = useState('');
+  const [closingsPage, setClosingsPage] = useState(1);
+  const [pagedClosings, setPagedClosings] = useState<DailyShiftClosing[]>([]);
+  const [closingsTotalPages, setClosingsTotalPages] = useState(1);
+  const [closingsTotalCount, setClosingsTotalCount] = useState(0);
+  const [isClosingsLoading, setIsClosingsLoading] = useState(false);
+
+  const loadClosingsPage = useCallback(
+    async (page: number) => {
+      if (currentUser?.role !== 'admin') return;
+      if (!isSupabaseConfigured) {
+        const q = closingsSearch.trim().toLowerCase();
+        const filtered = dailyShiftClosings.filter(
+          (c) =>
+            !q ||
+            c.closedBy.toLowerCase().includes(q) ||
+            (c.shiftDateLabel || c.date).toLowerCase().includes(q) ||
+            (c.notes || '').toLowerCase().includes(q)
+        );
+        const total = filtered.length;
+        const pages = Math.max(1, Math.ceil(total / 20));
+        const safePage = Math.min(page, pages);
+        setPagedClosings(filtered.slice((safePage - 1) * 20, safePage * 20));
+        setClosingsTotalCount(total);
+        setClosingsTotalPages(pages);
+        return;
+      }
+
+      setIsClosingsLoading(true);
+      try {
+        const res = await supabaseService.fetchDailyShiftClosingsPaginated({
+          page,
+          pageSize: 20,
+          search: closingsSearch,
+        });
+        if (res) {
+          setPagedClosings(res.data);
+          setClosingsTotalCount(res.count);
+          setClosingsTotalPages(res.totalPages);
+          setClosingsPage(res.page);
+        }
+      } finally {
+        setIsClosingsLoading(false);
+      }
+    },
+    [closingsSearch, dailyShiftClosings, currentUser?.role]
+  );
+
+  useEffect(() => {
+    if (currentUser?.role !== 'admin') return;
+    const timer = setTimeout(() => {
+      loadClosingsPage(closingsPage);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [closingsPage, loadClosingsPage, currentUser?.role]);
 
   if (currentUser?.role !== 'admin') {
     return (
@@ -1412,6 +1473,146 @@ export const MasterReportPage: React.FC = () => {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* ======================================================== */}
+      {/* 4. PAGINATED DAILY SHIFT CLOSINGS HISTORY (20 / PAGE)    */}
+      {/* ======================================================== */}
+      <div className="bg-[#0f172a]/90 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30">
+              <Lock className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-black text-white">
+                سجل تقارير تقفيل اليوميات السابقة (Daily Shift Closings)
+              </h3>
+              <p className="text-[11px] text-slate-400">
+                أرشيف تقفيل الورديات مع بحث مباشر في قاعدة البيانات وترقيم صفحات (20 تقرير/صفحة)
+              </p>
+            </div>
+          </div>
+
+          <div className="relative w-full sm:w-72">
+            <input
+              type="text"
+              value={closingsSearch}
+              onChange={(e) => {
+                setClosingsSearch(e.target.value);
+                setClosingsPage(1);
+              }}
+              placeholder="ابحث باسم المقفل، التاريخ، أو الملاحظات..."
+              className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 pl-9 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
+            />
+            <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+          </div>
+        </div>
+
+        {isClosingsLoading ? (
+          <TableRowsSkeleton rows={5} cols={7} />
+        ) : pagedClosings.length > 0 ? (
+          <>
+            <div className="overflow-x-auto rounded-2xl border border-slate-800">
+              <table className="w-full text-right text-xs">
+                <thead>
+                  <tr className="bg-slate-900 border-b border-slate-800 text-slate-400 text-[11px] font-bold">
+                    <th className="py-3 px-4">فترة الوردية</th>
+                    <th className="py-3 px-4">المقفل بواسطة</th>
+                    <th className="py-3 px-4">إجمالي الكاش المتوقع</th>
+                    <th className="py-3 px-4">الجرد الفعلي</th>
+                    <th className="py-3 px-4">العجز / الفائض</th>
+                    <th className="py-3 px-4">تحميلات الكباتن</th>
+                    <th className="py-3 px-4 text-center">إصدار التقرير</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {pagedClosings.map((closing) => {
+                    const diff = closing.difference ?? 0;
+                    return (
+                      <tr key={closing.id} className="hover:bg-slate-800/40 transition">
+                        <td className="py-3 px-4">
+                          <div className="font-bold text-white">
+                            {closing.shiftDateLabel || closing.date}
+                          </div>
+                          <div className="text-[10px] text-slate-400 font-mono">
+                            {new Date(closing.closedAt).toLocaleString('ar-EG')}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 font-bold text-slate-200">{closing.closedBy}</td>
+                        <td className="py-3 px-4 font-mono font-bold text-teal-300">
+                          {formatEGP(closing.expectedNetDrawerCash)}
+                        </td>
+                        <td className="py-3 px-4 font-mono font-bold text-white">
+                          {formatEGP(closing.actualCountedCash ?? closing.expectedNetDrawerCash)}
+                        </td>
+                        <td className="py-3 px-4 font-mono font-bold">
+                          {diff === 0 ? (
+                            <span className="text-emerald-400">مطابق (0)</span>
+                          ) : diff > 0 ? (
+                            <span className="text-cyan-400">+{formatEGP(diff)}</span>
+                          ) : (
+                            <span className="text-rose-400">-{formatEGP(Math.abs(diff))}</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 font-mono font-bold text-amber-400">
+                          {formatEGP(closing.totalCoachDebtsLoadedToday)}
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => exportDailyShiftXLSX(closing.id)}
+                              className="px-2.5 py-1 rounded-lg bg-teal-500/20 hover:bg-teal-500 text-teal-300 hover:text-slate-950 font-bold text-[11px] transition cursor-pointer flex items-center gap-1"
+                            >
+                              <Download className="w-3 h-3" />
+                              <span>Excel</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const dDate = closing.closingDayDate || closing.date;
+                                const nDate = closing.nextDayDate;
+                                const matchD = (v?: string) =>
+                                  Boolean(v && (v.startsWith(dDate) || (nDate && v.startsWith(nDate))));
+                                printDailyShiftReportPDF(
+                                  closing,
+                                  masterReportEntries.filter((e) => matchD(e.date)),
+                                  expenses.filter((e) => matchD(e.date)),
+                                  cashInflows.filter((i) => matchD(i.date)),
+                                  transactions.filter((t) => matchD(t.timestamp)),
+                                  trainerTransactions.filter((t) => matchD(t.created_at))
+                                );
+                              }}
+                              className="px-2.5 py-1 rounded-lg bg-sky-500/20 hover:bg-sky-500 text-sky-300 hover:text-slate-950 font-bold text-[11px] transition cursor-pointer flex items-center gap-1"
+                            >
+                              <Printer className="w-3 h-3" />
+                              <span>PDF</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <PaginationBar
+              currentPage={closingsPage}
+              totalPages={closingsTotalPages}
+              totalCount={closingsTotalCount}
+              pageSize={20}
+              onPageChange={setClosingsPage}
+              isLoading={isClosingsLoading}
+              label="تقرير تقفيل"
+            />
+          </>
+        ) : (
+          <div className="p-8 text-center text-xs text-slate-500">
+            لا توجد تقارير تقفيل مسجلة تطابق البحث حتى الآن.
+          </div>
+        )}
       </div>
 
       {/* Start New Month Modal */}

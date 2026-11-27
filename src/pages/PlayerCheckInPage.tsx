@@ -97,7 +97,7 @@ const markScanAsConsumed = () => {
 };
 
 export const PlayerCheckInPage: React.FC = () => {
-  const { members, findMemberByCode, performCheckIn, addMember } = useGymData();
+  const { members, findMemberByCode, performCheckIn, addMember, memberSubscriptionHistoryMap } = useGymData();
   const { currentUser, login } = useAuth();
 
   const [phoneInput, setPhoneInput] = useState('');
@@ -193,7 +193,7 @@ export const PlayerCheckInPage: React.FC = () => {
               name: parsed.name,
               phone: parsed.phone || '',
               type: 'member',
-              subscriptionPlan: parsed.subscriptionPlan || 'بدون اشتراك نشط',
+              subscriptionPlan: parsed.subscriptionPlan || 'زائر جديد — غير مشترك من قبل',
               subscriptionFee: parsed.subscriptionFee || 0,
               startDate: parsed.startDate || new Date().toISOString().split('T')[0],
               endDate: parsed.endDate || '',
@@ -348,26 +348,26 @@ export const PlayerCheckInPage: React.FC = () => {
         window.history.replaceState({}, document.title, window.location.pathname);
       }
     } else {
-      // New visitor/player -> Create membership record with this phone and check in!
+      // New visitor/player -> Create membership record with this phone and NO fake endDate!
       const generatedCode = generateUniqueMemberCode(members);
       const created = addMember({
         code: generatedCode,
         name: `متدرب جديد (${cleanPhone})`,
         phone: cleanPhone,
         type: 'member',
-        subscriptionPlan: 'تمرين حر (غير مسجل اشتراك)',
+        subscriptionPlan: 'زائر جديد — غير مشترك من قبل',
         subscriptionFee: 0,
         startDate: new Date().toISOString().split('T')[0],
-        endDate: new Date().toISOString().split('T')[0],
+        endDate: '',
         totalDays: 0,
         remainingDays: 0,
         totalSessions: 0,
         remainingSessions: 0,
-        active: true,
+        active: false,
         sessionCategory: 'gym',
         paymentMethod: undefined,
         paymentStatus: 'unpaid',
-        notes: 'تسجيل دخول ذاتي برقم الهاتف فقط',
+        notes: 'زائر جديد — تسجيل دخول ذاتي برقم الهاتف فقط',
       });
 
       persistMemberAuthentication(created);
@@ -420,12 +420,19 @@ export const PlayerCheckInPage: React.FC = () => {
 
       {/* Main Interactive View */}
       <main className="relative z-10 max-w-md mx-auto w-full my-auto py-6">
-        {/* VIEW 1: LOADING & CHECKING PERSISTENT AUTH */}
+        {/* VIEW 1: LOADING & CHECKING PERSISTENT AUTH (DARK SKELETON) */}
         {step === 'loading' && (
-          <div className="bg-[#0f172a]/95 border-2 border-emerald-500/30 rounded-3xl p-8 sm:p-10 shadow-2xl backdrop-blur-xl text-center space-y-4">
-            <div className="w-12 h-12 rounded-full border-4 border-emerald-500 border-t-transparent animate-spin mx-auto" />
-            <h2 className="text-base font-black text-white">جاري فحص هوية العضو وتسجيل الحضور تلقائياً...</h2>
-            <p className="text-xs text-slate-400">Zero-Click Smart Attendance Flow</p>
+          <div className="bg-[#0f172a]/95 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl backdrop-blur-xl space-y-5 animate-pulse">
+            <div className="w-20 h-20 rounded-full bg-slate-800 mx-auto" />
+            <div className="space-y-2 text-center">
+              <div className="h-5 w-48 bg-slate-800 rounded-xl mx-auto" />
+              <div className="h-3 w-36 bg-slate-800/70 rounded-full mx-auto" />
+            </div>
+            <div className="h-14 w-full bg-slate-800/60 rounded-2xl" />
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-2.5">
+              <div className="h-4 w-32 bg-slate-800 rounded-lg mx-auto" />
+              <div className="h-3 w-56 bg-slate-800/70 rounded-full mx-auto" />
+            </div>
           </div>
         )}
 
@@ -462,17 +469,21 @@ export const PlayerCheckInPage: React.FC = () => {
 
             {/* Subscription Metrics Breakdown */}
             {(() => {
-              const subInfo = getSubscriptionStatus(checkedMember);
+              const history =
+                memberSubscriptionHistoryMap[(checkedMember.code || '').toUpperCase()] ||
+                memberSubscriptionHistoryMap[checkedMember.id] ||
+                [];
+              const subInfo = getSubscriptionStatus(checkedMember, history);
 
               if (subInfo.status === 'expired') {
                 return (
                   <div className="p-4 rounded-2xl bg-rose-500/15 border-2 border-rose-500/40 text-rose-300 text-center space-y-2.5 animate-scale-up">
                     <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 font-bold text-xs border border-rose-500/30">
                       <AlertCircle className="w-4 h-4 text-rose-400" />
-                      <span>{subInfo.badgeText || 'اشتراكك منتهي الصلاحية'}</span>
+                      <span>⚠️ اشتراك منتهي</span>
                     </div>
                     <div className="text-sm font-black text-white">
-                      ⚠️ {subInfo.fullText || (subInfo.dateFormatted ? `انتهى اشتراكك بتاريخ: ${subInfo.dateFormatted}` : 'انتهى اشتراكك')}
+                      {subInfo.dateFormatted ? `انتهى: ${subInfo.dateFormatted}` : 'انتهى الاشتراك السابق'}
                     </div>
                     <p className="text-xs text-slate-300 leading-relaxed">
                       تم تسجيل وصولك وإشعار الاستقبال. يرجى التوجه لموظف الاستقبال الآن لتجديد باقة الاشتراك أو دفع تذكرة يومية لمتابعة تمرينك.
@@ -483,18 +494,13 @@ export const PlayerCheckInPage: React.FC = () => {
 
               if (subInfo.status === 'none') {
                 return (
-                  <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-center space-y-2">
-                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 font-bold text-xs">
-                      <AlertCircle className="w-4 h-4 text-amber-400" />
-                      <span>لا يوجد اشتراك نشط حالياً</span>
+                  <div className="p-4 rounded-2xl bg-sky-500/15 border border-sky-500/35 text-sky-300 text-center space-y-2">
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-sky-500/20 text-sky-200 font-bold text-xs border border-sky-500/30">
+                      <span>🆕 زائر جديد — غير مشترك من قبل</span>
                     </div>
                     <p className="text-xs text-slate-300 leading-relaxed">
                       تم تسجيل وصولك بنجاح وظهر اسمك في شاشة الاستقبال. يرجى التوجه لموظف الاستقبال للاشتراك أو التسكين في حصة تدريبية أو تمرين حر.
                     </p>
-                    <div className="text-[11px] text-slate-400 pt-1 border-t border-amber-500/20 flex items-center justify-center gap-2">
-                      <span className="font-bold text-slate-300">الحالة:</span>
-                      <span>عضوية مسجلة - بانتظار التسكين والتفعيل</span>
-                    </div>
                   </div>
                 );
               }
@@ -634,20 +640,24 @@ export const PlayerCheckInPage: React.FC = () => {
 
             {/* Subscription Metrics Breakdown */}
             {(() => {
-              const subInfo = getSubscriptionStatus(checkedMember);
+              const history =
+                memberSubscriptionHistoryMap[(checkedMember.code || '').toUpperCase()] ||
+                memberSubscriptionHistoryMap[checkedMember.id] ||
+                [];
+              const subInfo = getSubscriptionStatus(checkedMember, history);
 
               if (subInfo.status === 'expired') {
                 return (
                   <div className="p-4 rounded-2xl bg-rose-500/15 border-2 border-rose-500/40 text-rose-300 text-center space-y-2.5">
                     <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 font-bold text-xs border border-rose-500/30">
                       <AlertCircle className="w-4 h-4 text-rose-400" />
-                      <span>اشتراكك منتهي الصلاحية (انتهت الأيام)</span>
+                      <span>⚠️ اشتراك منتهي</span>
                     </div>
                     <div className="text-sm font-black text-white">
-                      ⚠️ انتهى اشتراكك بتاريخ: <span className="text-rose-300">{subInfo.dateFormatted || 'سابقاً'}</span>
+                      {subInfo.dateFormatted ? `انتهى: ${subInfo.dateFormatted}` : 'انتهى الاشتراك السابق'}
                     </div>
                     <p className="text-xs text-slate-300 leading-relaxed">
-                      انتهت مدة الأيام المحددة للاشتراك وسقطت أي حصص متبقية لانتهاء المدة. يرجى التوجه لموظف الاستقبال لتجديد الاشتراك.
+                      يرجى التوجه لموظف الاستقبال لتجديد الاشتراك.
                     </p>
                   </div>
                 );
@@ -655,10 +665,9 @@ export const PlayerCheckInPage: React.FC = () => {
 
               if (subInfo.status === 'none') {
                 return (
-                  <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-center space-y-2">
-                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 font-bold text-xs">
-                      <AlertCircle className="w-4 h-4 text-amber-400" />
-                      <span>لا يوجد اشتراك نشط حالياً</span>
+                  <div className="p-4 rounded-2xl bg-sky-500/15 border border-sky-500/35 text-sky-300 text-center space-y-2">
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-sky-500/20 text-sky-200 font-bold text-xs border border-sky-500/30">
+                      <span>🆕 زائر جديد — غير مشترك من قبل</span>
                     </div>
                     <p className="text-xs text-slate-300 leading-relaxed">
                       حسابك مسجل. يرجى التوجه لموظف الاستقبال للاشتراك أو التسكين في حصة تدريبية.

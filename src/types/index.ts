@@ -377,3 +377,48 @@ export interface DailyShiftClosing {
   totalCoachEarningsToday?: number; // مستحقات وأرباح الكباتن الناشئة اليوم من تحصيلات الاستقبال
   notes?: string;
 }
+
+// SUBSCRIPTION HISTORY RECORD (سجل اشتراكات اللاعب التاريخي)
+export interface MemberSubscriptionRecord {
+  id: string;
+  memberId: string;
+  memberCode: string;
+  planName: string;
+  sessionCategory?: SessionCategory;
+  startDate: string;
+  endDate: string;
+  totalDays: number;
+  totalSessions: number;
+  fee: number;
+  paymentMethod?: string;
+  status: 'active' | 'expired' | 'cancelled';
+  createdAt: string;
+}
+
+// SERVER-SIDE PAGINATION RESPONSE WRAPPER
+export interface PaginatedResult<T> {
+  data: T[];
+  count: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+// SMART CACHE TYPES (البيانات الثابتة وإعدادات الجيم)
+export interface SubscriptionPlanPreset {
+  id: string;
+  name: string;
+  durationDays: number;
+  sessionsCount: number;
+  fee: number;
+  category: SessionCategory;
+}
+
+export interface GymSettings {
+  branchName: string;
+  currentMonth: string;
+  defaultTier1Minutes: number;
+  defaultTier2Minutes: number;
+  defaultTier3Minutes: number;
+  updatedAt: string;
+}

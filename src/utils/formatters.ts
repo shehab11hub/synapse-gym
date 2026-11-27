@@ -71,9 +71,10 @@ export interface SubscriptionStatusInfo {
   status: 'active' | 'active_sessions' | 'expired' | 'none';
   isExpired: boolean;
   isActive: boolean;
+  hasHistory: boolean;
   badgeText: string;
   fullText: string;
-  color: 'emerald' | 'teal' | 'rose' | 'amber' | 'slate';
+  color: 'emerald' | 'teal' | 'rose' | 'amber' | 'sky' | 'slate';
   dateFormatted?: string;
   remainingDays?: number;
   remainingSessions?: number;
@@ -112,29 +113,43 @@ export function calculateRemainingDays(endDate?: string): number {
  * Clearly indicates if subscription is active until [Day X Month Y],
  * expired on [Day X Month Y], or player has no subscription.
  */
-export function getSubscriptionStatus(member?: {
-  active?: boolean;
-  endDate?: string;
-  remainingDays?: number;
-  totalDays?: number;
-  remainingSessions?: number;
-  totalSessions?: number;
-  subscriptionPlan?: string;
-} | null): SubscriptionStatusInfo {
+export function getSubscriptionStatus(
+  member?: {
+    active?: boolean;
+    startDate?: string;
+    endDate?: string;
+    remainingDays?: number;
+    totalDays?: number;
+    remainingSessions?: number;
+    totalSessions?: number;
+    subscriptionPlan?: string;
+    subscriptionFee?: number;
+  } | null,
+  subscriptionHistory?: Array<{
+    endDate?: string;
+    date?: string;
+    totalDays?: number;
+    totalSessions?: number;
+    fee?: number;
+    amount?: number;
+  }>
+): SubscriptionStatusInfo {
   if (!member) {
     return {
       status: 'none',
       isExpired: false,
       isActive: false,
-      badgeText: 'بدون اشتراك نشط',
-      fullText: 'اللاعب غير مسجل بأي اشتراك نشط حالياً',
-      color: 'amber',
+      hasHistory: false,
+      badgeText: '🆕 زائر جديد — غير مشترك من قبل',
+      fullText: 'زائر جديد — لم يسبق له الاشتراك في الجيم من قبل',
+      color: 'sky',
     };
   }
 
   const remainingSessions = member.remainingSessions ?? 0;
   const totalDays = member.totalDays ?? 0;
   const totalSessions = member.totalSessions ?? 0;
+  const subscriptionFee = member.subscriptionFee ?? 0;
 
   let remainingDays = member.remainingDays ?? 0;
   let isDatePast = false;
@@ -159,49 +174,36 @@ export function getSubscriptionStatus(member?: {
     }
   }
 
-  const dateFormatted = member.endDate ? formatArabicDayMonth(member.endDate) : '';
+  const hasHistoryEntries = Boolean(subscriptionHistory && subscriptionHistory.length > 0);
+  const hasLongerEndThanStart = Boolean(
+    member.endDate &&
+      member.startDate &&
+      member.endDate.slice(0, 10) > member.startDate.slice(0, 10)
+  );
+  const hasPriorSubscription =
+    hasHistoryEntries ||
+    totalDays > 0 ||
+    totalSessions > 0 ||
+    subscriptionFee > 0 ||
+    hasLongerEndThanStart;
 
-  // 1. Expired subscription (If days ended, any unconsumed sessions are forfeit)
-  const hasExpiredDays = (totalDays > 0 && remainingDays <= 0) || (Boolean(member.endDate) && isDatePast);
-  if (hasExpiredDays) {
-    return {
-      status: 'expired',
-      isExpired: true,
-      isActive: false,
-      badgeText: 'اشتراك منتهي (انتهت الأيام)',
-      fullText: dateFormatted
-        ? `اشتراك منتهي (انتهت مدة الأيام في ${dateFormatted}${remainingSessions > 0 ? ` وسقطت ${remainingSessions} حصة متبقية` : ''})`
-        : `اشتراك منتهي الصلاحية (انتهت الأيام${remainingSessions > 0 ? ` وسقطت ${remainingSessions} حصة متبقية` : ''})`,
-      color: 'rose',
-      dateFormatted,
-      remainingDays: 0,
-      remainingSessions,
-    };
-  }
+  const lastHistoryEnd =
+    subscriptionHistory && subscriptionHistory.length > 0
+      ? subscriptionHistory[0].endDate || subscriptionHistory[0].date
+      : undefined;
+  const effectiveEndDate = member.endDate || lastHistoryEnd;
+  const dateFormatted = hasPriorSubscription && effectiveEndDate
+    ? formatArabicDayMonth(effectiveEndDate)
+    : undefined;
 
-  // 1b. Expired subscription (If session-based package has exhausted all sessions)
-  const hasExhaustedSessions = totalSessions > 0 && remainingSessions <= 0;
-  if (hasExhaustedSessions) {
-    return {
-      status: 'expired',
-      isExpired: true,
-      isActive: false,
-      badgeText: 'اشتراك منتهي (نفدت الحصص)',
-      fullText: 'اشتراك منتهي (تم استهلاك جميع الحصص 0 متبقية - يتطلب التجديد أو دفع تمرينة)',
-      color: 'rose',
-      dateFormatted,
-      remainingDays: Math.max(0, remainingDays),
-      remainingSessions: 0,
-    };
-  }
-
-  // 2. Active duration subscription
-  if (remainingDays > 0 && !isDatePast) {
+  // 1. Active duration subscription
+  if (remainingDays > 0 && !isDatePast && hasPriorSubscription) {
     const sessionsSuffix = totalSessions > 0 ? ` - ${remainingSessions} حصة` : '';
     return {
       status: 'active',
       isExpired: false,
       isActive: true,
+      hasHistory: true,
       badgeText: `ساري (${remainingDays} يوم${sessionsSuffix})`,
       fullText: dateFormatted
         ? `اشتراك ساري حتى ${dateFormatted} (متبقي ${remainingDays} يوم${sessionsSuffix})`
@@ -213,27 +215,54 @@ export function getSubscriptionStatus(member?: {
     };
   }
 
-  // 3. Active sessions only (no duration)
-  if (remainingSessions > 0) {
+  // 2. Active sessions only (no duration expiry or date not past)
+  if (totalSessions > 0 && remainingSessions > 0 && !isDatePast) {
     return {
       status: 'active_sessions',
       isExpired: false,
       isActive: true,
+      hasHistory: true,
       badgeText: `ساري (${remainingSessions} حصة)`,
       fullText: `اشتراك حصص ساري (متبقي ${remainingSessions} حصة من أصل ${totalSessions || remainingSessions})`,
       color: 'teal',
+      dateFormatted,
       remainingSessions,
-      remainingDays: 0,
+      remainingDays: Math.max(0, remainingDays),
     };
   }
 
-  // 4. No active subscription
+  // 3. Never subscribed before (New Visitor — no subscription history)
+  if (!hasPriorSubscription) {
+    return {
+      status: 'none',
+      isExpired: false,
+      isActive: false,
+      hasHistory: false,
+      badgeText: '🆕 زائر جديد — غير مشترك من قبل',
+      fullText: 'زائر جديد — لم يسبق له الاشتراك في الجيم من قبل',
+      color: 'sky',
+      dateFormatted: undefined,
+      remainingDays: 0,
+      remainingSessions: 0,
+    };
+  }
+
+  // 4. Expired subscription (Had a prior subscription, but days or sessions ran out)
+  const hasExhaustedSessions = totalSessions > 0 && remainingSessions <= 0;
   return {
-    status: 'none',
-    isExpired: false,
+    status: 'expired',
+    isExpired: true,
     isActive: false,
-    badgeText: 'بدون اشتراك نشط',
-    fullText: 'اللاعب بدون اشتراك نشط حالياً',
-    color: 'amber',
+    hasHistory: true,
+    badgeText: '⚠️ اشتراك منتهي',
+    fullText: hasExhaustedSessions && !isDatePast
+      ? '⚠️ اشتراك منتهي (نفدت جميع الحصص المتاحة)'
+      : dateFormatted
+      ? `⚠️ اشتراك منتهي — انتهى: ${dateFormatted}`
+      : '⚠️ اشتراك منتهي الصلاحية',
+    color: 'rose',
+    dateFormatted,
+    remainingDays: 0,
+    remainingSessions,
   };
 }

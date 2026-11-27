@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   Search,
   Users,
@@ -29,6 +29,10 @@ import { Member, SessionCategory } from '../types';
 import { formatEGP, formatDateAr, getSubscriptionStatus } from '../utils/formatters';
 import { generateQRDataUrl } from '../utils/qrGenerator';
 import { sounds } from '../utils/sound';
+import { supabaseService } from '../services/supabaseService';
+import { isSupabaseConfigured } from '../lib/supabase';
+import { PaginationBar } from '../components/PaginationBar';
+import { CardsGridSkeleton } from '../components/PageSkeleton';
 
 export const MembersSearchPage: React.FC = () => {
   const {
@@ -38,12 +42,18 @@ export const MembersSearchPage: React.FC = () => {
     renewMemberSubscription,
     performCheckIn,
     checkInLogs,
+    memberSubscriptionHistoryMap,
   } = useGymData();
 
-  // Search & Filter State
+  // Search, Filter & Server-Side Pagination State (Limit 20)
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'expired'>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pagedMembers, setPagedMembers] = useState<Member[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [isPageLoading, setIsPageLoading] = useState(false);
 
   // Renewal Modal
   const [renewalMember, setRenewalMember] = useState<Member | null>(null);
@@ -88,7 +98,7 @@ export const MembersSearchPage: React.FC = () => {
   const [copiedPhone, setCopiedPhone] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
 
-  // Filtered Members
+  // Local Filtered Members Fallback (when offline / non-Supabase)
   const filteredMembers = useMemo(() => {
     return members.filter((m) => {
       const q = searchQuery.trim().toLowerCase();
@@ -102,15 +112,66 @@ export const MembersSearchPage: React.FC = () => {
 
       if (!matchesQuery) return false;
 
-      const subStatus = getSubscriptionStatus(m);
-      if (statusFilter === 'active' && subStatus.status !== 'active') return false;
+      const history =
+        memberSubscriptionHistoryMap[(m.code || '').toUpperCase()] ||
+        memberSubscriptionHistoryMap[m.id] ||
+        [];
+      const subStatus = getSubscriptionStatus(m, history);
+      if (statusFilter === 'active' && !subStatus.isActive) return false;
       if (statusFilter === 'expired' && subStatus.status !== 'expired') return false;
 
       if (categoryFilter !== 'all' && m.sessionCategory !== categoryFilter) return false;
 
       return true;
     });
-  }, [members, searchQuery, statusFilter, categoryFilter]);
+  }, [members, searchQuery, statusFilter, categoryFilter, memberSubscriptionHistoryMap]);
+
+  const loadMembersPage = useCallback(
+    async (page: number) => {
+      if (!isSupabaseConfigured) {
+        const total = filteredMembers.length;
+        const pages = Math.max(1, Math.ceil(total / 20));
+        const safePage = Math.min(page, pages);
+        setPagedMembers(filteredMembers.slice((safePage - 1) * 20, safePage * 20));
+        setTotalCount(total);
+        setTotalPages(pages);
+        return;
+      }
+
+      setIsPageLoading(true);
+      try {
+        const res = await supabaseService.fetchMembersPaginated({
+          page,
+          pageSize: 20,
+          search: searchQuery,
+          statusFilter,
+          categoryFilter,
+        });
+        if (res) {
+          setPagedMembers(res.data);
+          setTotalCount(res.count);
+          setTotalPages(res.totalPages);
+          setCurrentPage(res.page);
+        } else {
+          const total = filteredMembers.length;
+          const pages = Math.max(1, Math.ceil(total / 20));
+          setPagedMembers(filteredMembers.slice((page - 1) * 20, page * 20));
+          setTotalCount(total);
+          setTotalPages(pages);
+        }
+      } finally {
+        setIsPageLoading(false);
+      }
+    },
+    [searchQuery, statusFilter, categoryFilter, filteredMembers]
+  );
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      loadMembersPage(currentPage);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [currentPage, loadMembersPage]);
 
   // Statistics
   const stats = useMemo(() => {
@@ -118,9 +179,13 @@ export const MembersSearchPage: React.FC = () => {
     let expiredCount = 0;
 
     members.forEach((m) => {
-      const st = getSubscriptionStatus(m);
-      if (st.status === 'active') activeCount++;
-      else expiredCount++;
+      const history =
+        memberSubscriptionHistoryMap[(m.code || '').toUpperCase()] ||
+        memberSubscriptionHistoryMap[m.id] ||
+        [];
+      const st = getSubscriptionStatus(m, history);
+      if (st.isActive) activeCount++;
+      else if (st.status === 'expired') expiredCount++;
     });
 
     const todayCheckInsCount = checkInLogs.length;
@@ -131,7 +196,7 @@ export const MembersSearchPage: React.FC = () => {
       expired: expiredCount,
       todayVisits: todayCheckInsCount,
     };
-  }, [members, checkInLogs]);
+  }, [members, checkInLogs, memberSubscriptionHistoryMap]);
 
   // Copy Phone Helper
   const handleCopyPhone = (phone: string) => {
@@ -409,13 +474,19 @@ export const MembersSearchPage: React.FC = () => {
           <input
             type="text"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setCurrentPage(1);
+            }}
             placeholder="ابحث بالاسم، رقم التليفون، كود العضوية، أو المنطقة السكنية..."
             className="w-full bg-slate-950/80 border-2 border-slate-800 rounded-2xl pr-12 pl-4 py-3.5 text-sm font-bold text-white placeholder:text-slate-500 focus:outline-none focus:border-teal-400 transition"
           />
           {searchQuery && (
             <button
-              onClick={() => setSearchQuery('')}
+              onClick={() => {
+                setSearchQuery('');
+                setCurrentPage(1);
+              }}
               className="absolute left-4 top-3.5 p-1 rounded-xl bg-slate-800 text-slate-400 hover:text-white text-xs"
             >
               مسح
@@ -428,7 +499,10 @@ export const MembersSearchPage: React.FC = () => {
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-slate-400 font-bold ml-1">حالة الاشتراك:</span>
             <button
-              onClick={() => setStatusFilter('all')}
+              onClick={() => {
+                setStatusFilter('all');
+                setCurrentPage(1);
+              }}
               className={`py-1.5 px-3 rounded-xl font-bold transition cursor-pointer ${
                 statusFilter === 'all'
                   ? 'bg-teal-500 text-slate-950'
@@ -438,7 +512,10 @@ export const MembersSearchPage: React.FC = () => {
               الكل ({members.length})
             </button>
             <button
-              onClick={() => setStatusFilter('active')}
+              onClick={() => {
+                setStatusFilter('active');
+                setCurrentPage(1);
+              }}
               className={`py-1.5 px-3 rounded-xl font-bold transition cursor-pointer ${
                 statusFilter === 'active'
                   ? 'bg-emerald-500 text-slate-950'
@@ -448,7 +525,10 @@ export const MembersSearchPage: React.FC = () => {
               ساري فقط ({stats.active})
             </button>
             <button
-              onClick={() => setStatusFilter('expired')}
+              onClick={() => {
+                setStatusFilter('expired');
+                setCurrentPage(1);
+              }}
               className={`py-1.5 px-3 rounded-xl font-bold transition cursor-pointer ${
                 statusFilter === 'expired'
                   ? 'bg-rose-500 text-white'
@@ -463,7 +543,10 @@ export const MembersSearchPage: React.FC = () => {
             <span className="text-slate-400 font-bold ml-1">النشاط:</span>
             <select
               value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
+              onChange={(e) => {
+                setCategoryFilter(e.target.value);
+                setCurrentPage(1);
+              }}
               className="bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-teal-400"
             >
               <option value="all">كل الأنشطة</option>
@@ -477,14 +560,16 @@ export const MembersSearchPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Members List Cards */}
+      {/* Members List Cards (Server-Side Paginated 20/Page) */}
       <div className="space-y-4">
         <div className="flex items-center justify-between px-2 text-xs text-slate-400 font-bold">
-          <span>نتائج البحث: {filteredMembers.length} عضو</span>
-          <span>ترتيب تلقائي</span>
+          <span>نتائج البحث: {totalCount} عضو (صفحة {currentPage} من {totalPages})</span>
+          <span>عرض 20 عضو في الصفحة</span>
         </div>
 
-        {filteredMembers.length === 0 ? (
+        {isPageLoading ? (
+          <CardsGridSkeleton count={6} />
+        ) : pagedMembers.length === 0 ? (
           <div className="p-12 text-center bg-slate-900/50 border border-slate-800 rounded-3xl space-y-3">
             <div className="w-16 h-16 rounded-2xl bg-slate-800 text-slate-500 flex items-center justify-center mx-auto">
               <Search className="w-8 h-8" />
@@ -495,16 +580,26 @@ export const MembersSearchPage: React.FC = () => {
             </p>
           </div>
         ) : (
+          <>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredMembers.map((member) => {
-              const subStatus = getSubscriptionStatus(member);
-              const isActive = subStatus.status === 'active';
+            {pagedMembers.map((member) => {
+              const history =
+                memberSubscriptionHistoryMap[(member.code || '').toUpperCase()] ||
+                memberSubscriptionHistoryMap[member.id] ||
+                [];
+              const subStatus = getSubscriptionStatus(member, history);
+              const isActive = subStatus.isActive;
+              const isNeverSubscribed = subStatus.status === 'none';
 
               return (
                 <div
                   key={member.id}
                   className={`bg-slate-900/90 border rounded-3xl p-5 shadow-xl transition hover:border-slate-600 flex flex-col justify-between space-y-4 ${
-                    isActive ? 'border-slate-800' : 'border-rose-500/30 bg-rose-950/10'
+                    isActive
+                      ? 'border-slate-800'
+                      : isNeverSubscribed
+                      ? 'border-sky-500/30 bg-sky-950/10'
+                      : 'border-rose-500/30 bg-rose-950/10'
                   }`}
                 >
                   {/* Card Header: Avatar, Name, Code */}
@@ -536,9 +631,11 @@ export const MembersSearchPage: React.FC = () => {
 
                     {/* Status Badge */}
                     <span
-                      className={`text-[11px] font-black px-2.5 py-1 rounded-full shrink-0 border ${
+                      className={`text-[10px] font-black px-2.5 py-1 rounded-full shrink-0 border ${
                         isActive
                           ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                          : isNeverSubscribed
+                          ? 'bg-sky-500/15 text-sky-300 border-sky-500/35'
                           : 'bg-rose-500/20 text-rose-300 border-rose-500/40'
                       }`}
                     >
@@ -604,11 +701,13 @@ export const MembersSearchPage: React.FC = () => {
                       </div>
                     </div>
 
-                    {member.startDate && member.endDate && (
+                    {!isNeverSubscribed && member.startDate && member.endDate && (
                       <div className="text-[10px] text-slate-400 pt-1 border-t border-slate-800/60 flex items-center justify-between">
-                        <span>الصلاحية:</span>
-                        <span className="font-mono text-slate-300">
-                          من {formatDateAr(member.startDate)} إلى {formatDateAr(member.endDate)}
+                        <span>{subStatus.status === 'expired' ? 'انتهى:' : 'الصلاحية:'}</span>
+                        <span className={`font-mono ${subStatus.status === 'expired' ? 'text-rose-300 font-bold' : 'text-slate-300'}`}>
+                          {subStatus.status === 'expired' && subStatus.dateFormatted
+                            ? subStatus.dateFormatted
+                            : `من ${formatDateAr(member.startDate)} إلى ${formatDateAr(member.endDate)}`}
                         </span>
                       </div>
                     )}
@@ -684,6 +783,17 @@ export const MembersSearchPage: React.FC = () => {
               );
             })}
           </div>
+
+          <PaginationBar
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalCount={totalCount}
+            pageSize={20}
+            onPageChange={setCurrentPage}
+            isLoading={isPageLoading}
+            label="عضو"
+          />
+          </>
         )}
       </div>
 

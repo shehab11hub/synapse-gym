@@ -78,7 +78,7 @@ const MainDashboard: React.FC = () => {
 
   const renderActivePage = () => {
     if (isInitialLoading) {
-      return <PageSkeleton />;
+      return <PageSkeleton variant={activeTab} />;
     }
 
     switch (activeTab) {

@@ -17,7 +17,159 @@ import {
   DailyShiftClosing,
   MonthlyArchive,
   YearlyArchive,
+  MemberSubscriptionRecord,
+  PaginatedResult,
 } from '../types';
+
+const USER_COLUMNS = 'id, username, password, name, role, phone, created_at, active';
+const MEMBER_COLUMNS =
+  'id, code, name, phone, age, residential_area, photo_url, type, subscription_plan, subscription_fee, payment_method, collected_by_coach_id, payment_status, session_category, start_date, end_date, total_days, remaining_days, total_sessions, remaining_sessions, active, assigned_session_id, assigned_trainer_id, notes';
+const COACH_COLUMNS =
+  'id, code, name, phone, specialty, payment_type, rate_per_session, monthly_salary, commission_rate, current_balance, total_paid_today, monthly_salary_paid_this_month, last_salary_payment_date, active';
+const SESSION_COLUMNS =
+  'id, title, sport, hall, coach_ids, session_category, price, tier1_price, tier2_price, tier3_price, start_time, end_time, status, started_at, ended_at, days_of_week, enrolled_player_ids, temporary_player_ids, completed_today_by_coach, notes';
+const PHYSIO_COLUMNS =
+  'id, doctor_name, doctor_code, doctor_phone, patient_name, patient_code, room_name, hourly_rate, start_time, end_time, elapsed_minutes, total_fee, extra_fee, extra_fee_reason, service_type, status, is_paused, paused_at, total_paused_seconds, billed_to, payment_method, instapay_ref, charged_to_coach_id, paid, notes';
+const POS_PRODUCT_COLUMNS =
+  'id, name, category, buy_price, sell_price, stock, low_stock_threshold, barcode, image';
+const POS_TRANSACTION_COLUMNS =
+  'id, items, total_amount, total_cost, profit, payment_method, coach_id, coach_name, notes, timestamp, cashier_name';
+const CHECK_IN_LOG_COLUMNS =
+  'id, member_id, member_name, member_code, member_type, timestamp, method, subscription_valid, seating_status, assigned_category, assigned_coach_id, assigned_coach_name, assigned_session_id, assigned_session_title, payment_mode, charged_amount, session_started_at, check_out_time, duration_minutes, pricing_tier, extra_fee_paid, extra_payment_method, check_out_status';
+const TRAINER_TRX_COLUMNS =
+  'transaction_id, coach_id, coach_name, amount, collected_by, payer_type, payer_name, gym_share, coach_share, status, created_at, month, type, payment_method, settled_at, settled_by, notes';
+const EXPENSE_COLUMNS =
+  'id, title, category, amount, date, recorded_by, notes, payment_method, auto_generated, related_entity_id';
+const CASH_INFLOW_COLUMNS =
+  'id, type, title, amount, date, member_name, payment_method, recorded_by';
+const MASTER_ENTRY_COLUMNS =
+  'id, month, date, player_name, player_code, amount, coach_id, coach_name, session_category, session_title, payment_method, payment_status, notes, source_type, entry_time, check_out_time, duration_minutes, pricing_tier, extra_fee_paid';
+const BILLING_CYCLE_COLUMNS =
+  'id, name, start_date, closed_date, is_active, total_collected, total_pending_on_coaches';
+const DAILY_CLOSING_COLUMNS =
+  'id, date, closing_day_date, next_day_date, shift_date_label, closed_at, closed_by, total_direct_cash, total_repayments, total_pos_cash, total_physio_cash, total_expenses, expected_net_drawer_cash, actual_counted_cash, difference, total_coach_debts_loaded_today, total_coach_earnings_today, notes';
+const MONTHLY_ARCHIVE_COLUMNS =
+  'id, month, closed_at, closed_by, total_revenue, total_expenses, net_profit, total_pos_cash, master_entries_snapshot, expenses_snapshot, cash_inflows_snapshot, trainer_transactions_snapshot, pos_transactions_snapshot, coach_debt_carry_over';
+const YEARLY_ARCHIVE_COLUMNS =
+  'id, year, archived_at, archived_by, total_revenue, total_expenses, net_profit, total_check_ins, total_direct_subscriptions, total_coach_debts_loaded, total_coach_settlements, monthly_stats, check_in_logs_snapshot, master_entries_snapshot, expenses_snapshot, cash_inflows_snapshot';
+const SUBSCRIPTION_COLUMNS =
+  'id, member_id, member_code, plan_name, session_category, start_date, end_date, total_days, total_sessions, fee, payment_method, status, created_at';
+
+const sanitizeSearch = (q: string): string => q.trim().replace(/[%_,()]/g, ' ').trim();
+
+const mapMemberRow = (m: any): Member => ({
+  id: m.id,
+  code: m.code,
+  name: m.name,
+  phone: m.phone,
+  age: m.age ? Number(m.age) : undefined,
+  residentialArea: m.residential_area || undefined,
+  photoUrl: m.photo_url,
+  type: m.type,
+  subscriptionPlan: m.subscription_plan,
+  subscriptionFee: Number(m.subscription_fee || 0),
+  paymentMethod: m.payment_method,
+  collectedByCoachId: m.collected_by_coach_id,
+  paymentStatus: m.payment_status,
+  sessionCategory: m.session_category,
+  startDate: m.start_date || '',
+  endDate: m.end_date || '',
+  totalDays: Number(m.total_days || 0),
+  remainingDays: Number(m.remaining_days || 0),
+  totalSessions: Number(m.total_sessions || 0),
+  remainingSessions: Number(m.remaining_sessions || 0),
+  active: Boolean(m.active),
+  assignedSessionId: m.assigned_session_id,
+  assignedTrainerId: m.assigned_trainer_id,
+  notes: m.notes,
+});
+
+const mapCheckInLogRow = (l: any): CheckInLog => ({
+  id: l.id,
+  memberId: l.member_id,
+  memberName: l.member_name,
+  memberCode: l.member_code,
+  memberType: l.member_type,
+  timestamp: l.timestamp,
+  method: l.method,
+  subscriptionValid: l.subscription_valid,
+  seatingStatus: l.seating_status,
+  assignedCategory: l.assigned_category,
+  assignedCoachId: l.assigned_coach_id,
+  assignedCoachName: l.assigned_coach_name,
+  assignedSessionId: l.assigned_session_id,
+  assignedSessionTitle: l.assigned_session_title,
+  paymentMode: l.payment_mode,
+  chargedAmount: Number(l.charged_amount || 0),
+  sessionStartedAt: l.session_started_at || undefined,
+  checkOutTime: l.check_out_time || undefined,
+  durationMinutes:
+    l.duration_minutes !== undefined && l.duration_minutes !== null
+      ? Number(l.duration_minutes)
+      : undefined,
+  pricingTier: l.pricing_tier || undefined,
+  extraFeePaid:
+    l.extra_fee_paid !== undefined && l.extra_fee_paid !== null
+      ? Number(l.extra_fee_paid)
+      : 0,
+  extraPaymentMethod: l.extra_payment_method || undefined,
+  checkOutStatus: l.check_out_status || undefined,
+});
+
+const mapPosTransactionRow = (t: any): POSTransaction => ({
+  id: t.id,
+  items: t.items || [],
+  totalAmount: Number(t.total_amount || 0),
+  totalCost: Number(t.total_cost || 0),
+  profit: Number(t.profit || 0),
+  paymentMethod: t.payment_method,
+  coachId: t.coach_id || undefined,
+  coachName: t.coach_name || undefined,
+  notes: t.notes || undefined,
+  timestamp: t.timestamp,
+  cashierName: t.cashier_name,
+});
+
+const mapDailyClosingRow = (c: any): DailyShiftClosing => ({
+  id: c.id,
+  date: c.date,
+  closingDayDate: c.closing_day_date || undefined,
+  nextDayDate: c.next_day_date || undefined,
+  shiftDateLabel: c.shift_date_label || undefined,
+  closedAt: c.closed_at,
+  closedBy: c.closed_by,
+  totalDirectCash: Number(c.total_direct_cash || 0),
+  totalRepayments: Number(c.total_repayments || 0),
+  totalPosCash: Number(c.total_pos_cash || 0),
+  totalPhysioCash: Number(c.total_physio_cash || 0),
+  totalExpenses: Number(c.total_expenses || 0),
+  expectedNetDrawerCash: Number(c.expected_net_drawer_cash || 0),
+  actualCountedCash: Number(c.actual_counted_cash || 0),
+  difference: Number(c.difference || 0),
+  totalCoachDebtsLoadedToday: Number(c.total_coach_debts_loaded_today || 0),
+  totalCoachEarningsToday: Number(c.total_coach_earnings_today || 0),
+  notes: c.notes,
+});
+
+const mapTrainerTrxRow = (t: any): TrainerTransaction => ({
+  transaction_id: t.transaction_id,
+  coach_id: t.coach_id,
+  coach_name: t.coach_name,
+  amount: Number(t.amount || 0),
+  collected_by: t.collected_by,
+  payer_type: t.payer_type,
+  payer_name: t.payer_name,
+  gym_share: Number(t.gym_share || 0),
+  coach_share: Number(t.coach_share || 0),
+  status: t.status,
+  created_at: t.created_at,
+  month: t.month,
+  type: t.type,
+  payment_method: t.payment_method,
+  settled_at: t.settled_at,
+  settled_by: t.settled_by,
+  notes: t.notes,
+});
 
 async function execWithTimeout<T>(op: PromiseLike<T>): Promise<T> {
   return withDbTimeout(op);
@@ -28,7 +180,7 @@ export const supabaseService = {
   async fetchUsers(): Promise<User[] | null> {
     if (!isSupabaseConfigured || !supabase) return null;
     try {
-      const { data, error } = await supabase.from('users').select('*');
+      const { data, error } = await supabase.from('users').select(USER_COLUMNS);
       if (error) return null;
       return (data || []).map((u: any) => ({
         id: u.id,
@@ -78,39 +230,80 @@ export const supabaseService = {
   async fetchMembers(): Promise<Member[] | null> {
     if (!isSupabaseConfigured || !supabase) return null;
     try {
-      const { data, error } = await supabase.from('members').select('*');
+      const { data, error } = await supabase
+        .from('members')
+        .select(MEMBER_COLUMNS)
+        .order('created_at', { ascending: false });
       if (error) {
         console.error('Supabase fetchMembers error:', error);
         return null;
       }
-      return (data || []).map((m: any) => ({
-        id: m.id,
-        code: m.code,
-        name: m.name,
-        phone: m.phone,
-        age: m.age ? Number(m.age) : undefined,
-        residentialArea: m.residential_area || undefined,
-        photoUrl: m.photo_url,
-        type: m.type,
-        subscriptionPlan: m.subscription_plan,
-        subscriptionFee: Number(m.subscription_fee || 0),
-        paymentMethod: m.payment_method,
-        collectedByCoachId: m.collected_by_coach_id,
-        paymentStatus: m.payment_status,
-        sessionCategory: m.session_category,
-        startDate: m.start_date,
-        endDate: m.end_date,
-        totalDays: m.total_days,
-        remainingDays: m.remaining_days,
-        totalSessions: m.total_sessions,
-        remainingSessions: m.remaining_sessions,
-        active: m.active,
-        assignedSessionId: m.assigned_session_id,
-        assignedTrainerId: m.assigned_trainer_id,
-        notes: m.notes,
-      }));
+      return (data || []).map(mapMemberRow);
     } catch (e) {
       console.error('Supabase fetchMembers exception:', e);
+      return null;
+    }
+  },
+
+  async fetchMembersPaginated(options: {
+    page: number;
+    pageSize?: number;
+    search?: string;
+    statusFilter?: 'all' | 'active' | 'expired';
+    categoryFilter?: string;
+  }): Promise<PaginatedResult<Member> | null> {
+    if (!isSupabaseConfigured || !supabase) return null;
+    const page = Math.max(1, options.page || 1);
+    const pageSize = options.pageSize || 20;
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    try {
+      let query = supabase
+        .from('members')
+        .select(MEMBER_COLUMNS, { count: 'exact' })
+        .order('created_at', { ascending: false });
+
+      if (options.categoryFilter && options.categoryFilter !== 'all') {
+        query = query.eq('session_category', options.categoryFilter);
+      }
+
+      if (options.search && options.search.trim()) {
+        const cleanQ = sanitizeSearch(options.search);
+        if (cleanQ) {
+          query = query.or(
+            `name.ilike.%${cleanQ}%,phone.ilike.%${cleanQ}%,code.ilike.%${cleanQ}%,residential_area.ilike.%${cleanQ}%,subscription_plan.ilike.%${cleanQ}%`
+          );
+        }
+      }
+
+      const todayIso = new Date().toISOString().slice(0, 10);
+      if (options.statusFilter === 'active') {
+        query = query.or(
+          `end_date.gt.${todayIso},and(total_sessions.gt.0,remaining_sessions.gt.0,or(end_date.is.null,end_date.gt.${todayIso}))`
+        );
+      } else if (options.statusFilter === 'expired') {
+        query = query.or(
+          `and(total_days.gt.0,end_date.lte.${todayIso}),and(total_sessions.gt.0,remaining_sessions.lte.0)`
+        );
+      }
+
+      const { data, count, error } = await execWithTimeout(query.range(from, to));
+      if (error) {
+        console.error('Supabase fetchMembersPaginated error:', error);
+        return null;
+      }
+
+      const totalCount = count ?? 0;
+      return {
+        data: (data || []).map(mapMemberRow),
+        count: totalCount,
+        page,
+        pageSize,
+        totalPages: Math.max(1, Math.ceil(totalCount / pageSize)),
+      };
+    } catch (e) {
+      console.error('Supabase fetchMembersPaginated exception:', e);
       return null;
     }
   },
@@ -129,20 +322,20 @@ export const supabaseService = {
         type: member.type,
         subscription_plan: member.subscriptionPlan,
         subscription_fee: member.subscriptionFee ?? 0,
-        payment_method: member.paymentMethod,
-        collected_by_coach_id: member.collectedByCoachId,
-        payment_status: member.paymentStatus,
-        session_category: member.sessionCategory,
-        start_date: member.startDate,
-        end_date: member.endDate,
+        payment_method: member.paymentMethod || 'cash',
+        collected_by_coach_id: member.collectedByCoachId || null,
+        payment_status: member.paymentStatus || 'paid',
+        session_category: member.sessionCategory || 'gym',
+        start_date: member.startDate || null,
+        end_date: member.endDate || null,
         total_days: member.totalDays,
         remaining_days: member.remainingDays,
         total_sessions: member.totalSessions,
         remaining_sessions: member.remainingSessions,
         active: member.active,
-        assigned_session_id: member.assignedSessionId,
-        assigned_trainer_id: member.assignedTrainerId,
-        notes: member.notes,
+        assigned_session_id: member.assignedSessionId || null,
+        assigned_trainer_id: member.assignedTrainerId || null,
+        notes: member.notes ?? null,
         updated_at: new Date().toISOString(),
       }));
       return !error;
@@ -166,7 +359,7 @@ export const supabaseService = {
   async fetchCoaches(): Promise<Coach[] | null> {
     if (!isSupabaseConfigured || !supabase) return null;
     try {
-      const { data, error } = await supabase.from('coaches').select('*');
+      const { data, error } = await supabase.from('coaches').select(COACH_COLUMNS);
       if (error) return null;
       return (data || []).map((c: any) => ({
         id: c.id,
@@ -186,6 +379,34 @@ export const supabaseService = {
       }));
     } catch {
       return null;
+    }
+  },
+
+  async upsertCoachesBatch(coaches: Coach[]): Promise<boolean> {
+    if (!isSupabaseConfigured || !supabase || coaches.length === 0) return true;
+    try {
+      const nowIso = new Date().toISOString();
+      const rows = coaches.map((coach) => ({
+        id: coach.id,
+        code: coach.code ?? null,
+        name: coach.name,
+        phone: coach.phone,
+        specialty: coach.specialty,
+        payment_type: coach.paymentType,
+        rate_per_session: coach.ratePerSession ?? 0,
+        monthly_salary: coach.monthlySalary ?? 0,
+        commission_rate: coach.commissionRate ?? 0,
+        current_balance: coach.currentBalance ?? 0,
+        total_paid_today: coach.totalPaidToday ?? 0,
+        monthly_salary_paid_this_month: coach.monthlySalaryPaidThisMonth ?? false,
+        last_salary_payment_date: coach.lastSalaryPaymentDate ?? null,
+        active: coach.active,
+        updated_at: nowIso,
+      }));
+      const { error } = await supabase.from('coaches').upsert(rows);
+      return !error;
+    } catch {
+      return false;
     }
   },
 
@@ -227,7 +448,7 @@ export const supabaseService = {
   async fetchSessions(): Promise<GymSession[] | null> {
     if (!isSupabaseConfigured || !supabase) return null;
     try {
-      const { data, error } = await supabase.from('gym_sessions').select('*');
+      const { data, error } = await supabase.from('gym_sessions').select(SESSION_COLUMNS);
       if (error) return null;
       return (data || []).map((s: any) => ({
         id: s.id,
@@ -295,6 +516,40 @@ export const supabaseService = {
     }
   },
 
+  async upsertSessionsBatch(sessions: GymSession[]): Promise<boolean> {
+    if (!isSupabaseConfigured || !supabase || sessions.length === 0) return true;
+    try {
+      const nowIso = new Date().toISOString();
+      const rows = sessions.map((session) => ({
+        id: session.id,
+        title: session.title,
+        sport: session.sport,
+        hall: session.hall,
+        coach_ids: session.coachIds,
+        session_category: session.sessionCategory,
+        price: session.price,
+        tier1_price: session.tier1Price ?? session.price ?? 0,
+        tier2_price: session.tier2Price ?? 0,
+        tier3_price: session.tier3Price ?? 0,
+        start_time: session.startTime,
+        end_time: session.endTime,
+        status: session.status || 'idle',
+        started_at: session.startedAt ?? null,
+        ended_at: session.endedAt ?? null,
+        days_of_week: session.daysOfWeek,
+        enrolled_player_ids: session.enrolledPlayerIds,
+        temporary_player_ids: session.temporaryPlayerIds,
+        completed_today_by_coach: session.completedTodayByCoach,
+        notes: session.notes ?? null,
+        updated_at: nowIso,
+      }));
+      const { error } = await supabase.from('gym_sessions').upsert(rows);
+      return !error;
+    } catch {
+      return false;
+    }
+  },
+
   async deleteSession(id: string): Promise<boolean> {
     if (!isSupabaseConfigured || !supabase) return false;
     try {
@@ -309,7 +564,7 @@ export const supabaseService = {
   async fetchPhysioBookings(): Promise<PhysioBooking[] | null> {
     if (!isSupabaseConfigured || !supabase) return null;
     try {
-      const { data, error } = await supabase.from('physio_bookings').select('*');
+      const { data, error } = await supabase.from('physio_bookings').select(PHYSIO_COLUMNS);
       if (error) return null;
       return (data || []).map((p: any) => ({
         id: p.id,
@@ -393,7 +648,7 @@ export const supabaseService = {
   async fetchProducts(): Promise<POSProduct[] | null> {
     if (!isSupabaseConfigured || !supabase) return null;
     try {
-      const { data, error } = await supabase.from('pos_products').select('*');
+      const { data, error } = await supabase.from('pos_products').select(POS_PRODUCT_COLUMNS);
       if (error) return null;
       return (data || []).map((p: any) => ({
         id: p.id,
@@ -446,21 +701,73 @@ export const supabaseService = {
   async fetchPOSTransactions(): Promise<POSTransaction[] | null> {
     if (!isSupabaseConfigured || !supabase) return null;
     try {
-      const { data, error } = await supabase.from('pos_transactions').select('*');
+      const { data, error } = await supabase
+        .from('pos_transactions')
+        .select(POS_TRANSACTION_COLUMNS)
+        .order('timestamp', { ascending: false });
       if (error) return null;
-      return (data || []).map((t: any) => ({
-        id: t.id,
-        items: t.items || [],
-        totalAmount: Number(t.total_amount || 0),
-        totalCost: Number(t.total_cost || 0),
-        profit: Number(t.profit || 0),
-        paymentMethod: t.payment_method,
-        coachId: t.coach_id || undefined,
-        coachName: t.coach_name || undefined,
-        notes: t.notes || undefined,
-        timestamp: t.timestamp,
-        cashierName: t.cashier_name,
-      }));
+      return (data || []).map(mapPosTransactionRow);
+    } catch {
+      return null;
+    }
+  },
+
+  async fetchPOSTransactionsByCoach(coachId: string): Promise<POSTransaction[] | null> {
+    if (!isSupabaseConfigured || !supabase || !coachId) return null;
+    try {
+      const { data, error } = await supabase
+        .from('pos_transactions')
+        .select(POS_TRANSACTION_COLUMNS)
+        .eq('coach_id', coachId)
+        .order('timestamp', { ascending: false });
+      if (error) return null;
+      return (data || []).map(mapPosTransactionRow);
+    } catch {
+      return null;
+    }
+  },
+
+  async fetchPOSTransactionsPaginated(options: {
+    page: number;
+    pageSize?: number;
+    search?: string;
+    paymentMethod?: string;
+  }): Promise<PaginatedResult<POSTransaction> | null> {
+    if (!isSupabaseConfigured || !supabase) return null;
+    const page = Math.max(1, options.page || 1);
+    const pageSize = options.pageSize || 20;
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    try {
+      let query = supabase
+        .from('pos_transactions')
+        .select(POS_TRANSACTION_COLUMNS, { count: 'exact' })
+        .order('timestamp', { ascending: false });
+
+      if (options.paymentMethod && options.paymentMethod !== 'all') {
+        query = query.eq('payment_method', options.paymentMethod);
+      }
+
+      if (options.search && options.search.trim()) {
+        const cleanQ = sanitizeSearch(options.search);
+        if (cleanQ) {
+          query = query.or(
+            `id.ilike.%${cleanQ}%,cashier_name.ilike.%${cleanQ}%,coach_name.ilike.%${cleanQ}%,notes.ilike.%${cleanQ}%`
+          );
+        }
+      }
+
+      const { data, count, error } = await execWithTimeout(query.range(from, to));
+      if (error) return null;
+      const totalCount = count ?? 0;
+      return {
+        data: (data || []).map(mapPosTransactionRow),
+        count: totalCount,
+        page,
+        pageSize,
+        totalPages: Math.max(1, Math.ceil(totalCount / pageSize)),
+      };
     } catch {
       return null;
     }
@@ -499,33 +806,59 @@ export const supabaseService = {
   async fetchCheckInLogs(): Promise<CheckInLog[] | null> {
     if (!isSupabaseConfigured || !supabase) return null;
     try {
-      const { data, error } = await supabase.from('check_in_logs').select('*');
+      const { data, error } = await supabase
+        .from('check_in_logs')
+        .select(CHECK_IN_LOG_COLUMNS)
+        .order('timestamp', { ascending: false });
       if (error) return null;
-      return (data || []).map((l: any) => ({
-        id: l.id,
-        memberId: l.member_id,
-        memberName: l.member_name,
-        memberCode: l.member_code,
-        memberType: l.member_type,
-        timestamp: l.timestamp,
-        method: l.method,
-        subscriptionValid: l.subscription_valid,
-        seatingStatus: l.seating_status,
-        assignedCategory: l.assigned_category,
-        assignedCoachId: l.assigned_coach_id,
-        assignedCoachName: l.assigned_coach_name,
-        assignedSessionId: l.assigned_session_id,
-        assignedSessionTitle: l.assigned_session_title,
-        paymentMode: l.payment_mode,
-        chargedAmount: Number(l.charged_amount || 0),
-        sessionStartedAt: l.session_started_at || undefined,
-        checkOutTime: l.check_out_time || undefined,
-        durationMinutes: l.duration_minutes !== undefined && l.duration_minutes !== null ? Number(l.duration_minutes) : undefined,
-        pricingTier: l.pricing_tier || undefined,
-        extraFeePaid: l.extra_fee_paid !== undefined && l.extra_fee_paid !== null ? Number(l.extra_fee_paid) : 0,
-        extraPaymentMethod: l.extra_payment_method || undefined,
-        checkOutStatus: l.check_out_status || undefined,
-      }));
+      return (data || []).map(mapCheckInLogRow);
+    } catch {
+      return null;
+    }
+  },
+
+  async fetchCheckInLogsPaginated(options: {
+    page: number;
+    pageSize?: number;
+    search?: string;
+    dateFilter?: string;
+  }): Promise<PaginatedResult<CheckInLog> | null> {
+    if (!isSupabaseConfigured || !supabase) return null;
+    const page = Math.max(1, options.page || 1);
+    const pageSize = options.pageSize || 20;
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    try {
+      let query = supabase
+        .from('check_in_logs')
+        .select(CHECK_IN_LOG_COLUMNS, { count: 'exact' })
+        .order('timestamp', { ascending: false });
+
+      if (options.dateFilter && options.dateFilter.trim()) {
+        const d = options.dateFilter.trim();
+        query = query.gte('timestamp', `${d}T00:00:00`).lte('timestamp', `${d}T23:59:59`);
+      }
+
+      if (options.search && options.search.trim()) {
+        const cleanQ = sanitizeSearch(options.search);
+        if (cleanQ) {
+          query = query.or(
+            `member_name.ilike.%${cleanQ}%,member_code.ilike.%${cleanQ}%,assigned_coach_name.ilike.%${cleanQ}%,assigned_session_title.ilike.%${cleanQ}%`
+          );
+        }
+      }
+
+      const { data, count, error } = await execWithTimeout(query.range(from, to));
+      if (error) return null;
+      const totalCount = count ?? 0;
+      return {
+        data: (data || []).map(mapCheckInLogRow),
+        count: totalCount,
+        page,
+        pageSize,
+        totalPages: Math.max(1, Math.ceil(totalCount / pageSize)),
+      };
     } catch {
       return null;
     }
@@ -616,18 +949,45 @@ export const supabaseService = {
   async fetchTrainerTransactions(): Promise<TrainerTransaction[] | null> {
     if (!isSupabaseConfigured || !supabase) return null;
     try {
-      const { data, error } = await supabase.from('trainer_transactions').select('*');
+      const { data, error } = await supabase
+        .from('trainer_transactions')
+        .select(TRAINER_TRX_COLUMNS)
+        .order('created_at', { ascending: false });
       if (error) return null;
-      return (data || []).map((t: any) => ({
+      return (data || []).map(mapTrainerTrxRow);
+    } catch {
+      return null;
+    }
+  },
+
+  async fetchTrainerTransactionsByCoach(coachId: string): Promise<TrainerTransaction[] | null> {
+    if (!isSupabaseConfigured || !supabase || !coachId) return null;
+    try {
+      const { data, error } = await supabase
+        .from('trainer_transactions')
+        .select(TRAINER_TRX_COLUMNS)
+        .eq('coach_id', coachId)
+        .order('created_at', { ascending: false });
+      if (error) return null;
+      return (data || []).map(mapTrainerTrxRow);
+    } catch {
+      return null;
+    }
+  },
+
+  async upsertTrainerTransactionsBatch(items: TrainerTransaction[]): Promise<boolean> {
+    if (!isSupabaseConfigured || !supabase || items.length === 0) return true;
+    try {
+      const rows = items.map((t) => ({
         transaction_id: t.transaction_id,
         coach_id: t.coach_id,
         coach_name: t.coach_name,
-        amount: Number(t.amount || 0),
+        amount: t.amount,
         collected_by: t.collected_by,
         payer_type: t.payer_type,
         payer_name: t.payer_name,
-        gym_share: Number(t.gym_share || 0),
-        coach_share: Number(t.coach_share || 0),
+        gym_share: t.gym_share,
+        coach_share: t.coach_share,
         status: t.status,
         created_at: t.created_at,
         month: t.month,
@@ -637,8 +997,10 @@ export const supabaseService = {
         settled_by: t.settled_by,
         notes: t.notes,
       }));
+      const { error } = await supabase.from('trainer_transactions').upsert(rows);
+      return !error;
     } catch {
-      return null;
+      return false;
     }
   },
 
@@ -694,7 +1056,10 @@ export const supabaseService = {
   async fetchExpenses(): Promise<ExpenseItem[] | null> {
     if (!isSupabaseConfigured || !supabase) return null;
     try {
-      const { data, error } = await supabase.from('expenses').select('*');
+      const { data, error } = await supabase
+        .from('expenses')
+        .select(EXPENSE_COLUMNS)
+        .order('date', { ascending: false });
       if (error) return null;
       return (data || []).map((e: any) => ({
         id: e.id,
@@ -748,7 +1113,10 @@ export const supabaseService = {
   async fetchCashInflows(): Promise<CashInflowItem[] | null> {
     if (!isSupabaseConfigured || !supabase) return null;
     try {
-      const { data, error } = await supabase.from('cash_inflows').select('*');
+      const { data, error } = await supabase
+        .from('cash_inflows')
+        .select(CASH_INFLOW_COLUMNS)
+        .order('date', { ascending: false });
       if (error) return null;
       return (data || []).map((i: any) => ({
         id: i.id,
@@ -798,7 +1166,10 @@ export const supabaseService = {
   async fetchMasterReportEntries(): Promise<MasterReportEntry[] | null> {
     if (!isSupabaseConfigured || !supabase) return null;
     try {
-      const { data, error } = await supabase.from('master_report_entries').select('*');
+      const { data, error } = await supabase
+        .from('master_report_entries')
+        .select(MASTER_ENTRY_COLUMNS)
+        .order('date', { ascending: false });
       if (error) return null;
       return (data || []).map((m: any) => ({
         id: m.id,
@@ -863,6 +1234,37 @@ export const supabaseService = {
     }
   },
 
+  async upsertMasterReportEntriesBatch(entries: MasterReportEntry[]): Promise<boolean> {
+    if (!isSupabaseConfigured || !supabase || entries.length === 0) return true;
+    try {
+      const rows = entries.map((entry) => ({
+        id: entry.id,
+        month: entry.month,
+        date: entry.date,
+        player_name: entry.playerName,
+        player_code: entry.playerCode,
+        amount: entry.amount,
+        coach_id: entry.coachId,
+        coach_name: entry.coachName,
+        session_category: entry.sessionCategory,
+        session_title: entry.sessionTitle,
+        payment_method: entry.paymentMethod,
+        payment_status: entry.paymentStatus,
+        notes: entry.notes,
+        source_type: entry.sourceType,
+        entry_time: entry.entryTime ?? null,
+        check_out_time: entry.checkOutTime ?? null,
+        duration_minutes: entry.durationMinutes ?? null,
+        pricing_tier: entry.pricingTier ?? null,
+        extra_fee_paid: entry.extraFeePaid ?? 0,
+      }));
+      const { error } = await supabase.from('master_report_entries').upsert(rows);
+      return !error;
+    } catch {
+      return false;
+    }
+  },
+
   async deleteMasterReportEntry(id: string): Promise<boolean> {
     if (!isSupabaseConfigured || !supabase) return false;
     try {
@@ -877,7 +1279,9 @@ export const supabaseService = {
   async fetchBillingCycles(): Promise<MonthlyBillingCycle[] | null> {
     if (!isSupabaseConfigured || !supabase) return null;
     try {
-      const { data, error } = await supabase.from('monthly_billing_cycles').select('*');
+      const { data, error } = await supabase
+        .from('monthly_billing_cycles')
+        .select(BILLING_CYCLE_COLUMNS);
       if (error) return null;
       return (data || []).map((b: any) => ({
         id: b.id,
@@ -915,28 +1319,53 @@ export const supabaseService = {
   async fetchDailyShiftClosings(): Promise<DailyShiftClosing[] | null> {
     if (!isSupabaseConfigured || !supabase) return null;
     try {
-      const { data, error } = await supabase.from('daily_shift_closings').select('*');
+      const { data, error } = await supabase
+        .from('daily_shift_closings')
+        .select(DAILY_CLOSING_COLUMNS)
+        .order('closed_at', { ascending: false });
       if (error) return null;
-      return (data || []).map((c: any) => ({
-        id: c.id,
-        date: c.date,
-        closingDayDate: c.closing_day_date || undefined,
-        nextDayDate: c.next_day_date || undefined,
-        shiftDateLabel: c.shift_date_label || undefined,
-        closedAt: c.closed_at,
-        closedBy: c.closed_by,
-        totalDirectCash: Number(c.total_direct_cash || 0),
-        totalRepayments: Number(c.total_repayments || 0),
-        totalPosCash: Number(c.total_pos_cash || 0),
-        totalPhysioCash: Number(c.total_physio_cash || 0),
-        totalExpenses: Number(c.total_expenses || 0),
-        expectedNetDrawerCash: Number(c.expected_net_drawer_cash || 0),
-        actualCountedCash: Number(c.actual_counted_cash || 0),
-        difference: Number(c.difference || 0),
-        totalCoachDebtsLoadedToday: Number(c.total_coach_debts_loaded_today || 0),
-        totalCoachEarningsToday: Number(c.total_coach_earnings_today || 0),
-        notes: c.notes,
-      }));
+      return (data || []).map(mapDailyClosingRow);
+    } catch {
+      return null;
+    }
+  },
+
+  async fetchDailyShiftClosingsPaginated(options: {
+    page: number;
+    pageSize?: number;
+    search?: string;
+  }): Promise<PaginatedResult<DailyShiftClosing> | null> {
+    if (!isSupabaseConfigured || !supabase) return null;
+    const page = Math.max(1, options.page || 1);
+    const pageSize = options.pageSize || 20;
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    try {
+      let query = supabase
+        .from('daily_shift_closings')
+        .select(DAILY_CLOSING_COLUMNS, { count: 'exact' })
+        .order('closed_at', { ascending: false });
+
+      if (options.search && options.search.trim()) {
+        const cleanQ = sanitizeSearch(options.search);
+        if (cleanQ) {
+          query = query.or(
+            `closed_by.ilike.%${cleanQ}%,shift_date_label.ilike.%${cleanQ}%,notes.ilike.%${cleanQ}%`
+          );
+        }
+      }
+
+      const { data, count, error } = await execWithTimeout(query.range(from, to));
+      if (error) return null;
+      const totalCount = count ?? 0;
+      return {
+        data: (data || []).map(mapDailyClosingRow),
+        count: totalCount,
+        page,
+        pageSize,
+        totalPages: Math.max(1, Math.ceil(totalCount / pageSize)),
+      };
     } catch {
       return null;
     }
@@ -975,7 +1404,7 @@ export const supabaseService = {
   async fetchMonthlyArchives(): Promise<MonthlyArchive[] | null> {
     if (!isSupabaseConfigured || !supabase) return null;
     try {
-      const { data, error } = await supabase.from('monthly_archives').select('*');
+      const { data, error } = await supabase.from('monthly_archives').select(MONTHLY_ARCHIVE_COLUMNS);
       if (error) return null;
       return (data || []).map((a: any) => ({
         id: a.id,
@@ -1027,7 +1456,7 @@ export const supabaseService = {
   async fetchYearlyArchives(): Promise<YearlyArchive[] | null> {
     if (!isSupabaseConfigured || !supabase) return null;
     try {
-      const { data, error } = await supabase.from('yearly_archives').select('*');
+      const { data, error } = await supabase.from('yearly_archives').select(YEARLY_ARCHIVE_COLUMNS);
       if (error) return null;
       return (data || []).map((y: any) => ({
         id: y.id,
@@ -1096,12 +1525,65 @@ export const supabaseService = {
     }
   },
 
+  // ─── SUBSCRIPTIONS HISTORY ────────────────────────────────────
+  async fetchSubscriptions(): Promise<MemberSubscriptionRecord[] | null> {
+    if (!isSupabaseConfigured || !supabase) return null;
+    try {
+      const { data, error } = await supabase
+        .from('subscriptions')
+        .select(SUBSCRIPTION_COLUMNS)
+        .order('end_date', { ascending: false });
+      if (error) return null;
+      return (data || []).map((s: any) => ({
+        id: s.id,
+        memberId: s.member_id,
+        memberCode: s.member_code,
+        planName: s.plan_name,
+        sessionCategory: s.session_category || 'gym',
+        startDate: s.start_date,
+        endDate: s.end_date,
+        totalDays: Number(s.total_days || 0),
+        totalSessions: Number(s.total_sessions || 0),
+        fee: Number(s.fee || 0),
+        paymentMethod: s.payment_method,
+        status: s.status || 'active',
+        createdAt: s.created_at,
+      }));
+    } catch {
+      return null;
+    }
+  },
+
+  async insertSubscription(sub: MemberSubscriptionRecord): Promise<boolean> {
+    if (!isSupabaseConfigured || !supabase) return false;
+    try {
+      const { error } = await supabase.from('subscriptions').upsert({
+        id: sub.id,
+        member_id: sub.memberId,
+        member_code: sub.memberCode,
+        plan_name: sub.planName,
+        session_category: sub.sessionCategory || 'gym',
+        start_date: sub.startDate,
+        end_date: sub.endDate,
+        total_days: sub.totalDays,
+        total_sessions: sub.totalSessions,
+        fee: sub.fee,
+        payment_method: sub.paymentMethod || 'cash',
+        status: sub.status,
+        created_at: sub.createdAt,
+      });
+      return !error;
+    } catch {
+      return false;
+    }
+  },
+
   // ─── COMPLETE OPERATIONAL DATA WIPE (RESET DATABASE TO ZERO) ──
   async wipeAllOperationalData(): Promise<boolean> {
     if (!isSupabaseConfigured || !supabase) return false;
     try {
       const tables = [
-        'checkin_logs',
+        'check_in_logs',
         'trainer_transactions',
         'pos_transactions',
         'physio_bookings',
@@ -1111,11 +1593,12 @@ export const supabaseService = {
         'daily_shift_closings',
         'monthly_archives',
         'yearly_archives',
-        'sessions',
+        'subscriptions',
+        'gym_sessions',
         'members',
         'coaches',
-        'products',
-        'billing_cycles',
+        'pos_products',
+        'monthly_billing_cycles',
       ];
       for (const table of tables) {
         if (table === 'trainer_transactions') {

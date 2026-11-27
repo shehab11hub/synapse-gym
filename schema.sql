@@ -391,22 +391,83 @@ CREATE TABLE IF NOT EXISTS public.yearly_archives (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- TABLE: subscriptions (Normalized Member Subscription History - سجل الاشتراكات التاريخي)
+CREATE TABLE IF NOT EXISTS public.subscriptions (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+  member_id TEXT NOT NULL,
+  member_code VARCHAR(10) NOT NULL,
+  plan_name TEXT NOT NULL,
+  session_category TEXT DEFAULT 'gym',
+  start_date DATE NOT NULL,
+  end_date DATE NOT NULL,
+  total_days INT DEFAULT 30,
+  total_sessions INT DEFAULT 0,
+  fee NUMERIC(12, 2) DEFAULT 0.00,
+  payment_method TEXT DEFAULT 'cash',
+  status TEXT DEFAULT 'active' CHECK (status IN ('active', 'expired', 'cancelled')),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- ==============================================================================
--- 4. PERFORMANCE INDEXES
+-- 4. PERFORMANCE INDEXES (SEARCH, FILTERING, SORTING & FOREIGN KEYS)
 -- ==============================================================================
+-- Members indexes (code, phone, status, expiration, foreign keys)
 CREATE INDEX IF NOT EXISTS idx_members_code ON public.members (code);
+CREATE INDEX IF NOT EXISTS idx_members_phone ON public.members (phone);
 CREATE INDEX IF NOT EXISTS idx_members_active ON public.members (active);
+CREATE INDEX IF NOT EXISTS idx_members_end_date ON public.members (end_date);
+CREATE INDEX IF NOT EXISTS idx_members_session_cat ON public.members (session_category);
+CREATE INDEX IF NOT EXISTS idx_members_assigned_session ON public.members (assigned_session_id);
+CREATE INDEX IF NOT EXISTS idx_members_assigned_trainer ON public.members (assigned_trainer_id);
+CREATE INDEX IF NOT EXISTS idx_members_created_at_desc ON public.members (created_at DESC);
+
+-- Coaches indexes
+CREATE INDEX IF NOT EXISTS idx_coaches_code ON public.coaches (code);
+CREATE INDEX IF NOT EXISTS idx_coaches_active ON public.coaches (active);
+
+-- Subscriptions history indexes
+CREATE INDEX IF NOT EXISTS idx_subscriptions_member_id ON public.subscriptions (member_id);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_member_code ON public.subscriptions (member_code);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_end_date_desc ON public.subscriptions (end_date DESC);
+
+-- Check-in logs indexes (member lookup, coach/session FK, timestamps, active check-out status)
 CREATE INDEX IF NOT EXISTS idx_check_in_logs_member_id ON public.check_in_logs (member_id);
-CREATE INDEX IF NOT EXISTS idx_check_in_logs_timestamp ON public.check_in_logs (timestamp);
+CREATE INDEX IF NOT EXISTS idx_check_in_logs_member_code ON public.check_in_logs (member_code);
+CREATE INDEX IF NOT EXISTS idx_check_in_logs_coach_id ON public.check_in_logs (assigned_coach_id);
+CREATE INDEX IF NOT EXISTS idx_check_in_logs_session_id ON public.check_in_logs (assigned_session_id);
+CREATE INDEX IF NOT EXISTS idx_check_in_logs_timestamp ON public.check_in_logs (timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_check_in_logs_status ON public.check_in_logs (seating_status, check_out_status);
+
+-- Trainer transactions indexes
 CREATE INDEX IF NOT EXISTS idx_trainer_transactions_coach_id ON public.trainer_transactions (coach_id);
 CREATE INDEX IF NOT EXISTS idx_trainer_transactions_status ON public.trainer_transactions (status);
 CREATE INDEX IF NOT EXISTS idx_trainer_transactions_month ON public.trainer_transactions (month);
-CREATE INDEX IF NOT EXISTS idx_expenses_date ON public.expenses (date);
-CREATE INDEX IF NOT EXISTS idx_cash_inflows_date ON public.cash_inflows (date);
+CREATE INDEX IF NOT EXISTS idx_trainer_transactions_coach_status ON public.trainer_transactions (coach_id, status);
+CREATE INDEX IF NOT EXISTS idx_trainer_transactions_created_desc ON public.trainer_transactions (created_at DESC);
+
+-- Expenses, Cash Inflows & Master Report indexes
+CREATE INDEX IF NOT EXISTS idx_expenses_date ON public.expenses (date DESC);
+CREATE INDEX IF NOT EXISTS idx_expenses_category ON public.expenses (category);
+CREATE INDEX IF NOT EXISTS idx_cash_inflows_date ON public.cash_inflows (date DESC);
+CREATE INDEX IF NOT EXISTS idx_cash_inflows_type ON public.cash_inflows (type);
 CREATE INDEX IF NOT EXISTS idx_master_report_month ON public.master_report_entries (month);
-CREATE INDEX IF NOT EXISTS idx_daily_closings_date ON public.daily_shift_closings (date);
+CREATE INDEX IF NOT EXISTS idx_master_report_date_desc ON public.master_report_entries (date DESC);
+CREATE INDEX IF NOT EXISTS idx_master_report_player_code ON public.master_report_entries (player_code);
+CREATE INDEX IF NOT EXISTS idx_master_report_coach_id ON public.master_report_entries (coach_id);
+CREATE INDEX IF NOT EXISTS idx_master_report_source_type ON public.master_report_entries (source_type);
+
+-- Daily closings, Physio & POS indexes
+CREATE INDEX IF NOT EXISTS idx_daily_closings_date ON public.daily_shift_closings (date DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_closings_closed_at ON public.daily_shift_closings (closed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_pos_products_category ON public.pos_products (category);
-CREATE INDEX IF NOT EXISTS idx_pos_transactions_timestamp ON public.pos_transactions (timestamp);
+CREATE INDEX IF NOT EXISTS idx_pos_products_barcode ON public.pos_products (barcode);
+CREATE INDEX IF NOT EXISTS idx_pos_transactions_timestamp ON public.pos_transactions (timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_pos_transactions_coach_id ON public.pos_transactions (coach_id);
+CREATE INDEX IF NOT EXISTS idx_pos_transactions_method ON public.pos_transactions (payment_method);
+CREATE INDEX IF NOT EXISTS idx_physio_bookings_status ON public.physio_bookings (status);
+CREATE INDEX IF NOT EXISTS idx_physio_bookings_start_desc ON public.physio_bookings (start_time DESC);
+CREATE INDEX IF NOT EXISTS idx_physio_bookings_coach_id ON public.physio_bookings (charged_to_coach_id);
+CREATE INDEX IF NOT EXISTS idx_gym_sessions_status ON public.gym_sessions (status);
 
 -- ==============================================================================
 -- 5. ROW LEVEL SECURITY (RLS) & OPEN POLICIES
@@ -428,6 +489,7 @@ ALTER TABLE public.monthly_billing_cycles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.daily_shift_closings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.monthly_archives ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.yearly_archives ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.subscriptions ENABLE ROW LEVEL SECURITY;
 
 -- Allow anon and authenticated clients full access (for local/API SaaS usage)
 DO $$
@@ -483,7 +545,8 @@ DO $$ BEGIN
     public.pos_products,
     public.daily_shift_closings,
     public.trainer_transactions,
-    public.master_report_entries;
+    public.master_report_entries,
+    public.subscriptions;
 EXCEPTION
   WHEN duplicate_object THEN null;
   WHEN undefined_object THEN null;

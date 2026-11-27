@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   QrCode,
   Search,
@@ -40,7 +40,11 @@ import { CheckOutSettlementModal } from '../components/CheckOutSettlementModal';
 import { formatDateAr, formatEGP, formatArabicDayMonth, getSubscriptionStatus } from '../utils/formatters';
 import { generateQRDataUrl } from '../utils/qrGenerator';
 import { sounds } from '../utils/sound';
-import { LogOut } from 'lucide-react';
+import { LogOut, History } from 'lucide-react';
+import { supabaseService } from '../services/supabaseService';
+import { isSupabaseConfigured } from '../lib/supabase';
+import { PaginationBar } from '../components/PaginationBar';
+import { TableRowsSkeleton } from '../components/PageSkeleton';
 
 const formatElapsedHMS = (startIso: string, nowMs: number): string => {
   const diffSec = Math.max(0, Math.floor((nowMs - new Date(startIso).getTime()) / 1000));
@@ -67,7 +71,97 @@ export const ReceptionPage: React.FC = () => {
     assignPlayerToSession,
     assignArrivedMember,
     renewMemberSubscription,
+    memberSubscriptionHistoryMap,
   } = useGymData();
+
+  // Precomputed O(1) lookups to avoid N+1 / O(N*M) scans inside queue & log maps
+  const { membersById, membersByCode } = useMemo(() => {
+    const byId = new Map<string, Member>();
+    const byCode = new Map<string, Member>();
+    members.forEach((m) => {
+      if (m.id) byId.set(m.id, m);
+      if (m.code) byCode.set(m.code.toUpperCase(), m);
+    });
+    return { membersById: byId, membersByCode: byCode };
+  }, [members]);
+
+  const resolveMemberAndSubInfo = useCallback(
+    (memberId?: string, memberCode?: string) => {
+      const m =
+        (memberId ? membersById.get(memberId) : undefined) ||
+        (memberCode ? membersByCode.get(memberCode.toUpperCase()) : undefined);
+      const history = m
+        ? memberSubscriptionHistoryMap[(m.code || '').toUpperCase()] ||
+          memberSubscriptionHistoryMap[m.id] ||
+          []
+        : [];
+      return { member: m, subInfo: getSubscriptionStatus(m, history) };
+    },
+    [membersById, membersByCode, memberSubscriptionHistoryMap]
+  );
+
+  // Historical Check-In / Check-Out Archive Tab State (Server-side Pagination: 20 per page)
+  const [logViewTab, setLogViewTab] = useState<'live' | 'history'>('live');
+  const [historyLogs, setHistoryLogs] = useState<CheckInLog[]>([]);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyTotalPages, setHistoryTotalPages] = useState(1);
+  const [historyTotalCount, setHistoryTotalCount] = useState(0);
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyDateFilter, setHistoryDateFilter] = useState('');
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+
+  const loadHistoricalCheckIns = useCallback(
+    async (page: number, search: string, dateFilter: string) => {
+      setIsHistoryLoading(true);
+      try {
+        if (isSupabaseConfigured) {
+          const res = await supabaseService.fetchCheckInLogsPaginated({
+            page,
+            pageSize: 20,
+            search,
+            dateFilter,
+          });
+          if (res) {
+            setHistoryLogs(res.data);
+            setHistoryTotalCount(res.count);
+            setHistoryTotalPages(res.totalPages);
+            setHistoryPage(res.page);
+            return;
+          }
+        }
+        // Fallback local pagination if offline
+        const q = search.trim().toLowerCase();
+        const filtered = checkInLogs.filter((l) => {
+          const matchesSearch =
+            !q ||
+            l.memberName.toLowerCase().includes(q) ||
+            l.memberCode.toLowerCase().includes(q) ||
+            (l.assignedCoachName || '').toLowerCase().includes(q) ||
+            (l.assignedSessionTitle || '').toLowerCase().includes(q);
+          const matchesDate = !dateFilter || l.timestamp.startsWith(dateFilter);
+          return matchesSearch && matchesDate;
+        });
+        const total = filtered.length;
+        const pages = Math.max(1, Math.ceil(total / 20));
+        const safePage = Math.min(page, pages);
+        setHistoryLogs(filtered.slice((safePage - 1) * 20, safePage * 20));
+        setHistoryTotalCount(total);
+        setHistoryTotalPages(pages);
+        setHistoryPage(safePage);
+      } finally {
+        setIsHistoryLoading(false);
+      }
+    },
+    [checkInLogs]
+  );
+
+  useEffect(() => {
+    if (logViewTab !== 'history') return;
+    const timer = setTimeout(() => {
+      loadHistoricalCheckIns(historyPage, historySearch, historyDateFilter);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [logViewTab, historyPage, historySearch, historyDateFilter, loadHistoricalCheckIns]);
 
   const [settlementLogId, setSettlementLogId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -706,10 +800,9 @@ export const ReceptionPage: React.FC = () => {
                 hour12: true,
               });
 
-              const matchingMember = members.find((m) => m.id === log.memberId || m.code === log.memberCode);
+              const { member: matchingMember, subInfo } = resolveMemberAndSubInfo(log.memberId, log.memberCode);
               const displayName = matchingMember?.name || log.memberName;
               const displayCode = matchingMember?.code || log.memberCode;
-              const subInfo = getSubscriptionStatus(matchingMember);
 
               return (
                 <div
@@ -763,30 +856,38 @@ export const ReceptionPage: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Subscription Status & Expiration Alert */}
+                    {/* Subscription Status & Expiration Alert (3 Accurate States) */}
                     {subInfo.status === 'expired' ? (
-                      <div className="mb-3 p-2 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-300 text-[11px] font-bold flex items-center justify-between">
+                      <div className="mb-3 p-2 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-300 text-[11px] font-bold flex items-center justify-between gap-2">
                         <div className="flex items-center gap-1.5">
                           <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                          <span>⚠️ اشتراك منتهي (انتهت الأيام)</span>
+                          <span>⚠️ اشتراك منتهي</span>
                         </div>
-                        <span className="text-[10px] text-rose-400 font-mono">
-                          {subInfo.dateFormatted ? `انتهى: ${subInfo.dateFormatted}` : ''}
-                        </span>
+                        {subInfo.dateFormatted && (
+                          <span className="text-[10px] text-rose-300 font-mono">
+                            انتهى: {subInfo.dateFormatted}
+                          </span>
+                        )}
                       </div>
                     ) : subInfo.status === 'none' ? (
-                      <div className="mb-3 p-2 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[11px] font-bold flex items-center gap-1.5">
-                        <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                        <span>⚠️ غير مشترك (تذكرة يومية / يحتاج تجديد)</span>
+                      <div className="mb-3 p-2 rounded-xl bg-sky-500/15 border border-sky-500/35 text-sky-300 text-[11px] font-bold flex items-center gap-1.5">
+                        <span>🆕 زائر جديد — غير مشترك من قبل</span>
                       </div>
                     ) : (
-                      <div className="mb-3 p-1.5 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between text-[10px] font-bold">
-                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                          {subInfo.badgeText}
-                        </span>
-                        {matchingMember?.endDate && (
-                          <span className="text-slate-400 font-mono">
-                            حتى: {formatArabicDayMonth(matchingMember.endDate)}
+                      <div className="mb-3 p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between gap-2 text-[10px] font-bold">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shrink-0">
+                            {subInfo.badgeText}
+                          </span>
+                          {matchingMember?.subscriptionPlan && (
+                            <span className="text-emerald-200 truncate">
+                              {matchingMember.subscriptionPlan}
+                            </span>
+                          )}
+                        </div>
+                        {subInfo.dateFormatted && (
+                          <span className="text-slate-300 font-mono shrink-0">
+                            حتى: {subInfo.dateFormatted}
                           </span>
                         )}
                       </div>
@@ -1113,18 +1214,42 @@ export const ReceptionPage: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 text-center">
-                  <div className="text-xs text-slate-400 mb-1 flex items-center justify-center gap-1">
-                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>حالة الاشتراك</span>
-                  </div>
-                  <div className="text-sm font-bold text-emerald-400 mt-1">
-                    {selectedMember.active ? 'ساري وصالح' : 'معلق / منتهي'}
-                  </div>
-                  <div className="text-[10px] text-slate-500 mt-1">
-                    ينتهي: {formatDateAr(selectedMember.endDate)}
-                  </div>
-                </div>
+                {(() => {
+                  const selectedSub = resolveMemberAndSubInfo(selectedMember.id, selectedMember.code).subInfo;
+                  return (
+                    <div className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 text-center">
+                      <div className="text-xs text-slate-400 mb-1 flex items-center justify-center gap-1">
+                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>حالة الاشتراك</span>
+                      </div>
+                      <div
+                        className={`text-sm font-bold mt-1 ${
+                          selectedSub.status === 'expired'
+                            ? 'text-rose-400'
+                            : selectedSub.status === 'none'
+                            ? 'text-sky-300'
+                            : 'text-emerald-400'
+                        }`}
+                      >
+                        {selectedSub.status === 'none'
+                          ? '🆕 زائر جديد — غير مشترك من قبل'
+                          : selectedSub.status === 'expired'
+                          ? '⚠️ اشتراك منتهي'
+                          : 'ساري وصالح'}
+                      </div>
+                      {selectedSub.status === 'expired' && selectedSub.dateFormatted && (
+                        <div className="text-[10px] text-rose-300 mt-1">
+                          انتهى: {selectedSub.dateFormatted}
+                        </div>
+                      )}
+                      {selectedSub.isActive && selectedSub.dateFormatted && (
+                        <div className="text-[10px] text-slate-400 mt-1">
+                          ينتهي: {selectedSub.dateFormatted}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Plan Card */}
@@ -1163,19 +1288,53 @@ export const ReceptionPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Today's Live Check-in Log Table */}
-      <div className="bg-[#0f172a]/90 border border-slate-800 rounded-3xl p-6 shadow-xl">
-        <div className="flex items-center justify-between mb-4">
+      {/* Today's Live Check-in Log Table & Historical Paginated Check-In/Out Archive */}
+      <div className="bg-[#0f172a]/90 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <h3 className="text-base font-black text-white">سجل الحضور اليومي الكامل</h3>
-            <span className="text-xs px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30">
-              {checkInLogs.length} حركة تسجيل
-            </span>
+            <h3 className="text-base font-black text-white">
+              {logViewTab === 'live' ? 'سجل الحضور اليومي الكامل (الحي)' : 'سجل الحضور والانصراف السابق'}
+            </h3>
+            {logViewTab === 'live' && (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30">
+                {checkInLogs.length} حركة تسجيل
+              </span>
+            )}
           </div>
-          <span className="text-xs text-slate-400">يتم التحديث لحظياً عند كل مسح</span>
+
+          <div className="flex items-center gap-1.5 p-1 bg-slate-900 border border-slate-800 rounded-2xl text-xs">
+            <button
+              type="button"
+              onClick={() => setLogViewTab('live')}
+              className={`px-3 py-1.5 rounded-xl font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                logViewTab === 'live'
+                  ? 'bg-teal-500 text-slate-950 font-black shadow'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Zap className="w-3.5 h-3.5" />
+              <span>السجل الحي لليوم (الكل ظاهر)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setLogViewTab('history');
+                setHistoryPage(1);
+              }}
+              className={`px-3 py-1.5 rounded-xl font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                logViewTab === 'history'
+                  ? 'bg-teal-500 text-slate-950 font-black shadow'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <History className="w-3.5 h-3.5" />
+              <span>السجل السابق (20/صفحة)</span>
+            </button>
+          </div>
         </div>
 
-        {checkInLogs.length > 0 ? (
+        {logViewTab === 'live' ? (
+          checkInLogs.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full text-right text-xs">
               <thead>
@@ -1191,7 +1350,7 @@ export const ReceptionPage: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-slate-800/60">
                 {checkInLogs.map((log) => {
-                  const mMember = members.find((m) => m.id === log.memberId || m.code === log.memberCode);
+                  const { member: mMember, subInfo } = resolveMemberAndSubInfo(log.memberId, log.memberCode);
                   const dispName = mMember?.name || log.memberName;
                   const dispCode = mMember?.code || log.memberCode;
                   return (
@@ -1247,21 +1406,18 @@ export const ReceptionPage: React.FC = () => {
                     </td>
                     <td className="py-3 px-4">
                       {(() => {
-                        const targetMember = members.find(
-                          (m) => m.id === log.memberId || m.code === log.memberCode
-                        );
-                        const subInfo = getSubscriptionStatus(targetMember);
-
                         if (subInfo.status === 'expired') {
                           return (
                             <div className="space-y-0.5">
                               <span className="text-rose-400 font-black text-xs flex items-center gap-1">
                                 <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                                <span>اشتراك منتهي</span>
+                                <span>⚠️ اشتراك منتهي</span>
                               </span>
-                              <span className="text-[10px] text-rose-300 font-bold block">
-                                {subInfo.dateFormatted ? `انتهى: ${subInfo.dateFormatted}` : 'انتهت الصلاحية'}
-                              </span>
+                              {subInfo.dateFormatted && (
+                                <span className="text-[10px] text-rose-300 font-bold block">
+                                  انتهى: {subInfo.dateFormatted}
+                                </span>
+                              )}
                             </div>
                           );
                         }
@@ -1273,9 +1429,11 @@ export const ReceptionPage: React.FC = () => {
                                 <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
                                 <span>ساري ({subInfo.remainingDays} يوم)</span>
                               </span>
-                              <span className="text-[10px] text-emerald-300 font-bold block">
-                                حتى: {subInfo.dateFormatted}
-                              </span>
+                              {subInfo.dateFormatted && (
+                                <span className="text-[10px] text-emerald-300 font-bold block">
+                                  حتى: {subInfo.dateFormatted}
+                                </span>
+                              )}
                             </div>
                           );
                         }
@@ -1295,15 +1453,9 @@ export const ReceptionPage: React.FC = () => {
                         }
 
                         return (
-                          <div className="space-y-0.5">
-                            <span className="text-amber-400 font-bold text-xs flex items-center gap-1">
-                              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                              <span>بدون اشتراك</span>
-                            </span>
-                            <span className="text-[10px] text-slate-400 block">
-                              بحاجة لتفعيل
-                            </span>
-                          </div>
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-sky-500/15 border border-sky-500/35 text-sky-300 font-bold text-[11px]">
+                            🆕 زائر جديد — غير مشترك من قبل
+                          </span>
                         );
                       })()}
                     </td>
@@ -1330,9 +1482,116 @@ export const ReceptionPage: React.FC = () => {
             </tbody>
             </table>
           </div>
+          ) : (
+            <div className="p-8 text-center text-xs text-slate-500">
+              لا توجد تسجيلات حضور حتى الآن لليوم.
+            </div>
+          )
         ) : (
-          <div className="p-8 text-center text-xs text-slate-500">
-            لا توجد تسجيلات حضور حتى الآن لليوم.
+          /* SERVER-SIDE PAGINATED HISTORICAL CHECK-IN / CHECK-OUT LOG */
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row items-center gap-3">
+              <div className="relative flex-1 w-full">
+                <input
+                  type="text"
+                  value={historySearch}
+                  onChange={(e) => {
+                    setHistorySearch(e.target.value);
+                    setHistoryPage(1);
+                  }}
+                  placeholder="ابحث في قاعدة البيانات باسم اللاعب، الكود، الكابتن، أو الحصة..."
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 pl-9 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-teal-500"
+                />
+                <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+              </div>
+              <input
+                type="date"
+                value={historyDateFilter}
+                onChange={(e) => {
+                  setHistoryDateFilter(e.target.value);
+                  setHistoryPage(1);
+                }}
+                className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-teal-500"
+              />
+              {historyDateFilter && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHistoryDateFilter('');
+                    setHistoryPage(1);
+                  }}
+                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 font-bold cursor-pointer"
+                >
+                  كل التواريخ
+                </button>
+              )}
+            </div>
+
+            {isHistoryLoading ? (
+              <TableRowsSkeleton rows={6} cols={6} />
+            ) : historyLogs.length > 0 ? (
+              <>
+                <div className="overflow-x-auto rounded-2xl border border-slate-800">
+                  <table className="w-full text-right text-xs">
+                    <thead>
+                      <tr className="bg-slate-900 border-b border-slate-800 text-slate-400">
+                        <th className="py-3 px-4 font-bold">اللاعب</th>
+                        <th className="py-3 px-4 font-bold">الكود</th>
+                        <th className="py-3 px-4 font-bold">التاريخ والدخول</th>
+                        <th className="py-3 px-4 font-bold">الانصراف والمدة</th>
+                        <th className="py-3 px-4 font-bold">النشاط والكابتن</th>
+                        <th className="py-3 px-4 font-bold">المبلغ المحصل</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      {historyLogs.map((hLog) => (
+                        <tr key={hLog.id} className="hover:bg-slate-800/30 transition">
+                          <td className="py-3 px-4 font-bold text-white">{hLog.memberName}</td>
+                          <td className="py-3 px-4 font-mono text-cyan-400">{hLog.memberCode}</td>
+                          <td className="py-3 px-4 font-mono text-slate-300">
+                            {new Date(hLog.timestamp).toLocaleString('ar-EG')}
+                          </td>
+                          <td className="py-3 px-4 font-mono text-slate-300">
+                            {hLog.checkOutTime ? (
+                              <span>
+                                {new Date(hLog.checkOutTime).toLocaleTimeString('ar-EG', {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })}
+                                {hLog.durationMinutes ? ` (${hLog.durationMinutes} د)` : ''}
+                              </span>
+                            ) : (
+                              <span className="text-slate-500">—</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-slate-300">
+                            {hLog.assignedSessionTitle || hLog.assignedCategory || '—'}
+                            {hLog.assignedCoachName ? ` (${hLog.assignedCoachName})` : ''}
+                          </td>
+                          <td className="py-3 px-4 font-mono font-bold text-emerald-400">
+                            {formatEGP((hLog.chargedAmount || 0) + (hLog.extraFeePaid || 0))}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <PaginationBar
+                  currentPage={historyPage}
+                  totalPages={historyTotalPages}
+                  totalCount={historyTotalCount}
+                  pageSize={20}
+                  onPageChange={setHistoryPage}
+                  isLoading={isHistoryLoading}
+                  label="سجل حضور وانصراف"
+                />
+              </>
+            ) : (
+              <div className="p-8 text-center text-xs text-slate-500">
+                لا توجد سجلات حضور وانصراف مطابقة للبحث.
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1383,10 +1642,10 @@ export const ReceptionPage: React.FC = () => {
 
             {/* Scrollable Form Body */}
             {(() => {
-              const targetMember = members.find(
-                (m) => m.id === selectedLogForSeating.memberId || m.code === selectedLogForSeating.memberCode
+              const { member: targetMember, subInfo } = resolveMemberAndSubInfo(
+                selectedLogForSeating.memberId,
+                selectedLogForSeating.memberCode
               );
-              const subInfo = getSubscriptionStatus(targetMember);
               const isSubscribed = subInfo.isActive;
 
               return (
@@ -1458,20 +1717,19 @@ export const ReceptionPage: React.FC = () => {
                     )}
 
                     {subInfo.status === 'none' && (
-                      <div className="p-3.5 rounded-2xl bg-amber-950/40 border border-amber-500/40 space-y-1 animate-scale-up">
+                      <div className="p-3.5 rounded-2xl bg-sky-950/40 border border-sky-500/40 space-y-1 animate-scale-up">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
-                            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-                            <span className="text-xs font-bold text-amber-300">
-                              اللاعب ليس لديه اشتراك نشط حالياً.
+                            <span className="text-xs font-bold text-sky-300">
+                              🆕 زائر جديد — غير مشترك من قبل
                             </span>
                           </div>
-                          <span className="text-[11px] text-amber-300 font-bold bg-amber-500/20 px-2.5 py-0.5 rounded-full border border-amber-500/30">
-                            عضوية غير مفعلة
+                          <span className="text-[11px] text-sky-300 font-bold bg-sky-500/20 px-2.5 py-0.5 rounded-full border border-sky-500/30">
+                            زائر جديد
                           </span>
                         </div>
                         <p className="text-[11px] text-slate-300 leading-relaxed">
-                          يمكن عمل وتفعيل اشتراك جديد فوراً من خيار "تمرين حر" بالأسفل وتوريد المبلغ بالدرج أو إنستاباي.
+                          لم يسبق لهذا الزائر الاشتراك في الجيم من قبل. يمكن عمل وتفعيل اشتراك جديد فوراً من خيار "تمرين حر" بالأسفل وتوريد المبلغ بالدرج أو إنستاباي.
                         </p>
                       </div>
                     )}

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import {
   Member,
   Coach,
@@ -20,6 +20,9 @@ import {
   DailyShiftClosing,
   MonthlyArchive,
   PeriodArchive,
+  MemberSubscriptionRecord,
+  SubscriptionPlanPreset,
+  GymSettings,
 } from '../types';
 import {
   exportMasterReportToXLSX,
@@ -34,6 +37,7 @@ import { supabaseService } from '../services/supabaseService';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { getSubscriptionStatus } from '../utils/formatters';
 import { withDbTimeout, NETWORK_ERROR_MESSAGE, NetworkDbError } from '../utils/network';
+import { smartCache, DEFAULT_GYM_SETTINGS } from '../utils/smartCache';
 
 export const generateUniqueMemberCode = (existingMembers: Member[]): string => {
   const existingCodes = new Set(existingMembers.map((m) => m.code?.toUpperCase()));
@@ -59,6 +63,14 @@ interface GymDataContextType {
   networkError: string | null;
   reportNetworkError: (msg?: string) => void;
   clearNetworkError: () => void;
+
+  // Smart Cached Reference Data & Subscription History (O(1) lookup)
+  subscriptions: MemberSubscriptionRecord[];
+  memberSubscriptionHistoryMap: Record<string, Array<{ endDate?: string; date?: string; totalDays?: number; totalSessions?: number; fee?: number }>>;
+  subscriptionPlans: SubscriptionPlanPreset[];
+  updateSubscriptionPlans: (plans: SubscriptionPlanPreset[]) => void;
+  gymSettings: GymSettings;
+  updateGymSettings: (updates: Partial<GymSettings>) => void;
 
   // Members
   members: Member[];
@@ -412,12 +424,15 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
-  // Single Source of Truth State (Strictly synced from Supabase - Zero localStorage cache)
+  // Hydrate semi-static reference data immediately from Smart Cache (Memory + localStorage)
   const [members, setMembers] = useState<Member[]>(INITIAL_MEMBERS);
-  const [sessions, setSessions] = useState<GymSession[]>(INITIAL_SESSIONS);
-  const [coaches, setCoaches] = useState<Coach[]>(INITIAL_COACHES);
+  const [sessions, setSessions] = useState<GymSession[]>(() => smartCache.getSessions() || INITIAL_SESSIONS);
+  const [coaches, setCoaches] = useState<Coach[]>(() => smartCache.getCoaches() || INITIAL_COACHES);
   const [physioBookings, setPhysioBookings] = useState<PhysioBooking[]>(INITIAL_PHYSIO_BOOKINGS);
-  const [products, setProducts] = useState<POSProduct[]>(INITIAL_PRODUCTS);
+  const [products, setProducts] = useState<POSProduct[]>(() => smartCache.getProducts() || INITIAL_PRODUCTS);
+  const [subscriptions, setSubscriptions] = useState<MemberSubscriptionRecord[]>([]);
+  const [subscriptionPlans, setSubscriptionPlans] = useState<SubscriptionPlanPreset[]>(() => smartCache.getSubscriptionPlans());
+  const [gymSettings, setGymSettings] = useState<GymSettings>(() => smartCache.getGymSettings());
   const [transactions, setTransactions] = useState<POSTransaction[]>([]);
   const [expenses, setExpenses] = useState<ExpenseItem[]>(INITIAL_EXPENSES);
   const [cashInflows, setCashInflows] = useState<CashInflowItem[]>(INITIAL_INFLOWS);
@@ -426,11 +441,87 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [trainerTransactions, setTrainerTransactions] = useState<TrainerTransaction[]>(INITIAL_TRAINER_TRANSACTIONS);
   const [masterReportEntries, setMasterReportEntries] = useState<MasterReportEntry[]>(INITIAL_MASTER_ENTRIES);
   const [billingCycles, setBillingCycles] = useState<MonthlyBillingCycle[]>(INITIAL_BILLING_CYCLES);
-  const [currentMonth, setCurrentMonth] = useState<string>(dynamicCurrentMonth);
+  const [currentMonth, setCurrentMonth] = useState<string>(() => smartCache.getGymSettings().currentMonth || dynamicCurrentMonth);
   const [monthlyArchives, setMonthlyArchives] = useState<MonthlyArchive[]>([]);
   const [yearlyArchives, setYearlyArchives] = useState<YearlyArchive[]>([]);
   const [dailyShiftClosings, setDailyShiftClosings] = useState<DailyShiftClosing[]>([]);
   const [periodArchives, setPeriodArchives] = useState<PeriodArchive[]>([]);
+
+  const updateSubscriptionPlans = (plans: SubscriptionPlanPreset[]) => {
+    setSubscriptionPlans(plans);
+    smartCache.setSubscriptionPlans(plans);
+  };
+
+  const updateGymSettings = (updates: Partial<GymSettings>) => {
+    setGymSettings((prev) => {
+      const next = { ...prev, ...updates, updatedAt: new Date().toISOString() };
+      smartCache.setGymSettings(next);
+      return next;
+    });
+  };
+
+  // Auto-sync Smart Cache whenever semi-static reference data changes (create, edit, delete, realtime)
+  useEffect(() => {
+    if (coaches.length > 0) smartCache.setCoaches(coaches);
+  }, [coaches]);
+
+  useEffect(() => {
+    if (products.length > 0) smartCache.setProducts(products);
+  }, [products]);
+
+  useEffect(() => {
+    if (sessions.length > 0) smartCache.setSessions(sessions);
+  }, [sessions]);
+
+  useEffect(() => {
+    smartCache.setGymSettings({
+      ...DEFAULT_GYM_SETTINGS,
+      ...gymSettings,
+      currentMonth,
+      updatedAt: new Date().toISOString(),
+    });
+  }, [currentMonth]);
+
+  // Precompute O(1) Member Subscription History Map (eliminates N+1 / O(N*M) scans in UI cards)
+  const memberSubscriptionHistoryMap = useMemo(() => {
+    const map: Record<
+      string,
+      Array<{ endDate?: string; date?: string; totalDays?: number; totalSessions?: number; fee?: number }>
+    > = {};
+
+    subscriptions.forEach((sub) => {
+      const codeKey = (sub.memberCode || '').toUpperCase();
+      const idKey = sub.memberId;
+      const entry = {
+        endDate: sub.endDate,
+        date: sub.createdAt,
+        totalDays: sub.totalDays,
+        totalSessions: sub.totalSessions,
+        fee: sub.fee,
+      };
+      if (codeKey) {
+        if (!map[codeKey]) map[codeKey] = [];
+        map[codeKey].push(entry);
+      }
+      if (idKey) {
+        if (!map[idKey]) map[idKey] = [];
+        map[idKey].push(entry);
+      }
+    });
+
+    masterReportEntries.forEach((entry) => {
+      if (entry.sourceType === 'subscription' && entry.playerCode) {
+        const codeKey = entry.playerCode.toUpperCase();
+        if (!map[codeKey]) map[codeKey] = [];
+        map[codeKey].push({
+          date: entry.date,
+          fee: entry.amount,
+        });
+      }
+    });
+
+    return map;
+  }, [subscriptions, masterReportEntries]);
 
   // Backend Directory Sync (non-blocking)
   useEffect(() => {
@@ -472,6 +563,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           remoteDailyClosings,
           remoteMonthlyArchives,
           remoteYearlyArchives,
+          remoteSubscriptions,
         ] = await Promise.all([
           supabaseService.fetchMembers(),
           supabaseService.fetchCoaches(),
@@ -488,11 +580,13 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           supabaseService.fetchDailyShiftClosings(),
           supabaseService.fetchMonthlyArchives(),
           supabaseService.fetchYearlyArchives(),
+          supabaseService.fetchSubscriptions(),
         ]);
 
         if (remoteMembers !== null) setMembers(remoteMembers);
         if (remoteCoaches !== null) {
           const usedCodes = new Set(remoteCoaches.map((c) => c.code?.trim()).filter(Boolean));
+          const coachesToBatchUpdate: Coach[] = [];
           const normalizedCoaches = remoteCoaches.map((c) => {
             if (c.code && /^\d{5}$/.test(c.code.trim())) return c;
             let newCode = '';
@@ -501,16 +595,24 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
             } while (usedCodes.has(newCode));
             usedCodes.add(newCode);
             const updatedCoach = { ...c, code: newCode };
-            if (isSupabaseConfigured) {
-              supabaseService.upsertCoach(updatedCoach).catch(() => {});
-            }
+            coachesToBatchUpdate.push(updatedCoach);
             return updatedCoach;
           });
+          if (coachesToBatchUpdate.length > 0 && isSupabaseConfigured) {
+            supabaseService.upsertCoachesBatch(coachesToBatchUpdate).catch(() => {});
+          }
           setCoaches(normalizedCoaches);
+          smartCache.setCoaches(normalizedCoaches);
         }
-        if (remoteSessions !== null) setSessions(remoteSessions);
+        if (remoteSessions !== null) {
+          setSessions(remoteSessions);
+          smartCache.setSessions(remoteSessions);
+        }
         if (remotePhysio !== null) setPhysioBookings(remotePhysio);
-        if (remoteProducts !== null) setProducts(remoteProducts);
+        if (remoteProducts !== null) {
+          setProducts(remoteProducts);
+          smartCache.setProducts(remoteProducts);
+        }
         if (remotePosTx !== null) setTransactions(remotePosTx);
         if (remoteCheckIns !== null) setCheckInLogs(remoteCheckIns);
         if (remoteTrainerTx !== null) setTrainerTransactions(remoteTrainerTx);
@@ -521,6 +623,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         if (remoteDailyClosings !== null) setDailyShiftClosings(remoteDailyClosings);
         if (remoteMonthlyArchives !== null) setMonthlyArchives(remoteMonthlyArchives);
         if (remoteYearlyArchives !== null) setYearlyArchives(remoteYearlyArchives);
+        if (remoteSubscriptions !== null) setSubscriptions(remoteSubscriptions);
       } catch (err) {
         console.warn('Initial Supabase sync failed:', err);
         setNetworkError(NETWORK_ERROR_MESSAGE);
@@ -583,6 +686,10 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         .on('postgres_changes', { event: '*', schema: 'public', table: 'master_report_entries' }, async () => {
           const fresh = await supabaseService.fetchMasterReportEntries();
           if (fresh !== null) setMasterReportEntries(fresh);
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'subscriptions' }, async () => {
+          const fresh = await supabaseService.fetchSubscriptions();
+          if (fresh !== null) setSubscriptions(fresh);
         })
         .subscribe();
     }
@@ -757,6 +864,33 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       supabaseService.upsertMember(newMember).catch(() => {});
     }
 
+    // Record normalized subscription history ONLY when a real subscription was created
+    const hasRealSub =
+      (newMember.totalDays ?? 0) > 0 ||
+      (newMember.totalSessions ?? 0) > 0 ||
+      fee > 0;
+    if (hasRealSub) {
+      const subRec: MemberSubscriptionRecord = {
+        id: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        memberId: newMember.id,
+        memberCode: newMember.code,
+        planName: newMember.subscriptionPlan,
+        sessionCategory: newMember.sessionCategory,
+        startDate: newMember.startDate || new Date().toISOString().slice(0, 10),
+        endDate: newMember.endDate || new Date().toISOString().slice(0, 10),
+        totalDays: newMember.totalDays || 0,
+        totalSessions: newMember.totalSessions || 0,
+        fee,
+        paymentMethod: newMember.paymentMethod || 'cash',
+        status: 'active',
+        createdAt: new Date().toISOString(),
+      };
+      setSubscriptions((prev) => [subRec, ...prev]);
+      if (isSupabaseConfigured) {
+        supabaseService.insertSubscription(subRec).catch(() => {});
+      }
+    }
+
     return newMember;
   };
 
@@ -896,6 +1030,26 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
 
     setMembers((prev) => prev.map((m) => (m.id === member.id ? updatedMember : m)));
+
+    const subRec: MemberSubscriptionRecord = {
+      id: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      memberId: member.id,
+      memberCode: member.code,
+      planName,
+      sessionCategory: member.sessionCategory || 'gym',
+      startDate,
+      endDate,
+      totalDays: durationDays,
+      totalSessions: sessionsCount !== undefined ? sessionsCount : member.totalSessions || 0,
+      fee,
+      paymentMethod,
+      status: 'active',
+      createdAt: new Date().toISOString(),
+    };
+    setSubscriptions((prev) => [subRec, ...prev]);
+    if (isSupabaseConfigured) {
+      supabaseService.insertSubscription(subRec).catch(() => {});
+    }
 
     // Update any unassigned checkInLog for this member to be valid
     setCheckInLogs((prev) =>
@@ -1388,12 +1542,18 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         ? Math.round(sessionTotalRev / assignedCoaches.length)
         : sessionTotalRev;
 
+    const batchTrainerTxs: TrainerTransaction[] = [];
+    const batchMasterEntries: MasterReportEntry[] = [];
+    const perSessionCoachUpdates: Coach[] = [];
+
     assignedCoaches.forEach((coach) => {
       compMap[coach.id] = true;
 
       // أجر المدرب للحصة إذا كان تعاقده بنظام الحصة (Per Session) - يُضاف لمستحقات الكابتن (له فلوس)
       if (coach.paymentType === 'per_session') {
         const rate = coach.ratePerSession || 150;
+        const updatedCoach = { ...coach, currentBalance: coach.currentBalance + rate };
+        perSessionCoachUpdates.push(updatedCoach);
         setCoaches((prevCoaches) =>
           prevCoaches.map((c) =>
             c.id === coach.id
@@ -1426,7 +1586,7 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           payment_method: 'coach_collected',
           notes: `تحميل قيمة الحصة بعد اكتمالها (${coachDebtAttendeesCount} متدربين تم تحصيلهم بيد الكابتن × ${session.price} ج.م)`,
         };
-        setTrainerTransactions((prev) => [newTrx, ...prev]);
+        batchTrainerTxs.push(newTrx);
 
         // إدراج قيد بالتقرير الشامل كمديونية معلقة على الكابتن
         const repEntry: MasterReportEntry = {
@@ -1445,14 +1605,27 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           notes: `تحميل مديونية على الكابتن (${coachDebtAttendeesCount} لاعب)`,
           sourceType: 'session',
         };
-        setMasterReportEntries((prev) => [repEntry, ...prev]);
-
-        if (isSupabaseConfigured) {
-          supabaseService.upsertTrainerTransaction(newTrx).catch(() => {});
-          supabaseService.upsertMasterReportEntry(repEntry).catch(() => {});
-        }
+        batchMasterEntries.push(repEntry);
       }
     });
+
+    if (batchTrainerTxs.length > 0) {
+      setTrainerTransactions((prev) => [...batchTrainerTxs, ...prev]);
+    }
+    if (batchMasterEntries.length > 0) {
+      setMasterReportEntries((prev) => [...batchMasterEntries, ...prev]);
+    }
+    if (isSupabaseConfigured) {
+      if (perSessionCoachUpdates.length > 0) {
+        supabaseService.upsertCoachesBatch(perSessionCoachUpdates).catch(() => {});
+      }
+      if (batchTrainerTxs.length > 0) {
+        supabaseService.upsertTrainerTransactionsBatch(batchTrainerTxs).catch(() => {});
+      }
+      if (batchMasterEntries.length > 0) {
+        supabaseService.upsertMasterReportEntriesBatch(batchMasterEntries).catch(() => {});
+      }
+    }
 
     setSessions((prev) => {
       const updated = prev.map((s) => {
@@ -3053,13 +3226,14 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       return entry;
     });
 
-    // Pessimistic DB Write FIRST
+    // Pessimistic DB Write FIRST (Batched to avoid N+1 requests)
     const ok = await strictDbWrite(async () => {
       const results = await Promise.all([
-        supabaseService.upsertTrainerTransaction(repaymentTrx),
+        supabaseService.upsertTrainerTransactionsBatch([repaymentTrx, ...modifiedTrainerTrx]),
         supabaseService.insertCashInflow(inflowItem),
-        ...modifiedTrainerTrx.map((t) => supabaseService.upsertTrainerTransaction(t)),
-        ...modifiedMasterEntries.map((e) => supabaseService.upsertMasterReportEntry(e)),
+        ...(modifiedMasterEntries.length > 0
+          ? [supabaseService.upsertMasterReportEntriesBatch(modifiedMasterEntries)]
+          : []),
       ]);
       return results.every(Boolean);
     });
@@ -3267,16 +3441,6 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       setTrainerTransactions((prev) => [newTrx, ...prev]);
       setMasterReportEntries((prev) => [repEntry, ...prev]);
-
-      if (isSupabaseConfigured) {
-        supabaseService.upsertTrainerTransaction(newTrx).catch(() => {});
-        supabaseService.upsertMasterReportEntry(repEntry).catch(() => {});
-      }
-
-      if (isSupabaseConfigured) {
-        supabaseService.upsertTrainerTransaction(newTrx).catch(() => {});
-        supabaseService.upsertMasterReportEntry(repEntry).catch(() => {});
-      }
 
       return { success: true, type: 'charge' as const };
     }
@@ -3619,6 +3783,8 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setMonthlyArchives([]);
     setYearlyArchives([]);
     setDailyShiftClosings([]);
+    setSubscriptions([]);
+    smartCache.invalidate();
     const freshCycle: MonthlyBillingCycle = {
       id: `cycle-${Date.now()}`,
       name: dynamicCurrentMonth,
@@ -4071,9 +4237,9 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       supabaseService.clearAllCheckInLogs().catch(() => {});
       supabaseService.clearCheckInLogsForDate(newClosing.date).catch(() => {});
       supabaseService.clearCompletedPhysioBookings().catch(() => {});
-      resetSessions.forEach((s) => {
-        supabaseService.upsertSession(s).catch(() => {});
-      });
+      if (resetSessions.length > 0) {
+        supabaseService.upsertSessionsBatch(resetSessions).catch(() => {});
+      }
     }
 
     return newClosing;
@@ -4144,6 +4310,12 @@ export const GymDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         networkError,
         reportNetworkError,
         clearNetworkError,
+        subscriptions,
+        memberSubscriptionHistoryMap,
+        subscriptionPlans,
+        updateSubscriptionPlans,
+        gymSettings,
+        updateGymSettings,
         members,
         cancelCheckIn,
         clearAllCheckInLogs,

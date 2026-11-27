@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   ShoppingCart,
   Plus,
@@ -26,9 +26,13 @@ import {
 } from 'lucide-react';
 import { useGymData } from '../context/GymDataContext';
 import { useAuth } from '../context/AuthContext';
-import { POSProduct, POSTransactionItem } from '../types';
+import { POSProduct, POSTransaction, POSTransactionItem } from '../types';
 import { formatEGP } from '../utils/formatters';
 import { sounds } from '../utils/sound';
+import { supabaseService } from '../services/supabaseService';
+import { isSupabaseConfigured } from '../lib/supabase';
+import { PaginationBar } from '../components/PaginationBar';
+import { TableRowsSkeleton } from '../components/PageSkeleton';
 
 export const PosPage: React.FC = () => {
   const {
@@ -82,9 +86,71 @@ export const PosPage: React.FC = () => {
     barcode: '',
   });
 
-  // View mode: POS Register vs Bar Inventory Database
-  const [activeView, setActiveView] = useState<'register' | 'inventory'>('register');
+  // View mode: POS Register vs Bar Inventory Database vs Paginated Sales Invoices
+  const [activeView, setActiveView] = useState<'register' | 'inventory' | 'invoices'>('register');
   const [stockStatusFilter, setStockStatusFilter] = useState<'all' | 'low' | 'out'>('all');
+
+  // Server-Side Paginated POS Invoices State (20 per page)
+  const [invoiceSearch, setInvoiceSearch] = useState('');
+  const [invoiceMethodFilter, setInvoiceMethodFilter] = useState<string>('all');
+  const [invoicePage, setInvoicePage] = useState(1);
+  const [pagedInvoices, setPagedInvoices] = useState<POSTransaction[]>([]);
+  const [invoiceTotalPages, setInvoiceTotalPages] = useState(1);
+  const [invoiceTotalCount, setInvoiceTotalCount] = useState(0);
+  const [isInvoicesLoading, setIsInvoicesLoading] = useState(false);
+
+  const loadInvoicesPage = useCallback(
+    async (page: number) => {
+      if (!isSupabaseConfigured) {
+        const q = invoiceSearch.trim().toLowerCase();
+        const filtered = transactions.filter((tx) => {
+          const matchesQ =
+            !q ||
+            tx.id.toLowerCase().includes(q) ||
+            tx.cashierName.toLowerCase().includes(q) ||
+            (tx.coachName || '').toLowerCase().includes(q) ||
+            (tx.notes || '').toLowerCase().includes(q);
+          const matchesMethod =
+            invoiceMethodFilter === 'all' || tx.paymentMethod === invoiceMethodFilter;
+          return matchesQ && matchesMethod;
+        });
+        const total = filtered.length;
+        const pages = Math.max(1, Math.ceil(total / 20));
+        const safePage = Math.min(page, pages);
+        setPagedInvoices(filtered.slice((safePage - 1) * 20, safePage * 20));
+        setInvoiceTotalCount(total);
+        setInvoiceTotalPages(pages);
+        return;
+      }
+
+      setIsInvoicesLoading(true);
+      try {
+        const res = await supabaseService.fetchPOSTransactionsPaginated({
+          page,
+          pageSize: 20,
+          search: invoiceSearch,
+          paymentMethod: invoiceMethodFilter,
+        });
+        if (res) {
+          setPagedInvoices(res.data);
+          setInvoiceTotalCount(res.count);
+          setInvoiceTotalPages(res.totalPages);
+          setInvoicePage(res.page);
+        }
+      } finally {
+        setIsInvoicesLoading(false);
+      }
+    },
+    [invoiceSearch, invoiceMethodFilter, transactions]
+  );
+
+  useEffect(() => {
+    if (activeView !== 'invoices') return;
+    const timer = setTimeout(() => {
+      loadInvoicesPage(invoicePage);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [activeView, invoicePage, loadInvoicesPage]);
 
   const handleOpenEdit = (product: POSProduct) => {
     if (!isManager) {
@@ -563,6 +629,21 @@ export const PosPage: React.FC = () => {
               <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
             )}
           </button>
+
+          <button
+            onClick={() => {
+              setActiveView('invoices');
+              setInvoicePage(1);
+            }}
+            className={`flex-1 sm:flex-none px-5 py-2.5 rounded-2xl font-black text-xs flex items-center justify-center gap-2 transition cursor-pointer ${
+              activeView === 'invoices'
+                ? 'bg-teal-500 text-slate-950 shadow-lg shadow-teal-500/25'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+            }`}
+          >
+            <Receipt className="w-4 h-4" />
+            <span>سجل فواتير المبيعات (20/صفحة)</span>
+          </button>
         </div>
 
         {isManager && (
@@ -576,7 +657,7 @@ export const PosPage: React.FC = () => {
         )}
       </div>
 
-      {/* CONDITIONAL VIEW: POS Register vs Bar Inventory Database */}
+      {/* CONDITIONAL VIEW: POS Register vs Bar Inventory Database vs Paginated Invoices */}
       {activeView === 'register' ? (
         /* Main Register & Cart Grid */
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -907,7 +988,7 @@ export const PosPage: React.FC = () => {
             </div>
           </div>
         </div>
-      ) : (
+      ) : activeView === 'inventory' ? (
         /* BAR INVENTORY DATABASE VIEW (جدول وقاعدة بيانات إدارة مخزون البار) */
         <div className="space-y-6">
           {/* Inventory Stats Mini KPIs */}
@@ -1174,6 +1255,139 @@ export const PosPage: React.FC = () => {
               </table>
             </div>
           </div>
+        </div>
+      ) : (
+        /* SERVER-SIDE PAGINATED POS INVOICES HISTORY VIEW (20 per page) */
+        <div className="space-y-6">
+          <div className="bg-[#0f172a]/90 border border-slate-800 rounded-3xl p-6 shadow-xl flex flex-col md:flex-row items-center justify-between gap-4">
+            <div className="relative flex-1 w-full">
+              <input
+                type="text"
+                value={invoiceSearch}
+                onChange={(e) => {
+                  setInvoiceSearch(e.target.value);
+                  setInvoicePage(1);
+                }}
+                placeholder="ابحث برقم الفاتورة، اسم الكاشير، الكابتن، أو الملاحظات..."
+                className="w-full bg-slate-900 border border-slate-700 rounded-2xl px-4 py-2.5 pl-10 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-teal-500"
+              />
+              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+            </div>
+
+            <select
+              value={invoiceMethodFilter}
+              onChange={(e) => {
+                setInvoiceMethodFilter(e.target.value);
+                setInvoicePage(1);
+              }}
+              className="bg-slate-900 border border-slate-700 rounded-2xl px-4 py-2.5 text-xs text-white font-bold focus:outline-none focus:border-teal-500"
+            >
+              <option value="all">كل طرق الدفع</option>
+              <option value="cash">نقدي (كاش)</option>
+              <option value="instapay">إنستاباي</option>
+              <option value="card">فيزا / بطاقة</option>
+              <option value="coach_debt">تحميل على الكابتن</option>
+            </select>
+          </div>
+
+          <div className="bg-[#0f172a]/90 border border-slate-800 rounded-3xl shadow-xl overflow-hidden">
+            {isInvoicesLoading ? (
+              <TableRowsSkeleton rows={6} cols={6} />
+            ) : pagedInvoices.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-right text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-900/90 text-slate-400 font-bold border-b border-slate-800">
+                      <th className="p-4">رقم الفاتورة</th>
+                      <th className="p-4">الأصناف المباعة</th>
+                      <th className="p-4">الإجمالي</th>
+                      <th className="p-4">صافي الربح</th>
+                      <th className="p-4">طريقة الدفع</th>
+                      <th className="p-4">الكاشير / الكابتن</th>
+                      <th className="p-4">التاريخ والوقت</th>
+                      <th className="p-4 text-center">إيصال</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60">
+                    {pagedInvoices.map((inv) => (
+                      <tr key={inv.id} className="hover:bg-slate-800/40 transition">
+                        <td className="p-4 font-mono text-teal-400 font-bold">
+                          #{inv.id.slice(-6)}
+                        </td>
+                        <td className="p-4 text-slate-200 font-bold max-w-xs truncate">
+                          {inv.items.map((i) => `${i.quantity}× ${i.productName}`).join('، ')}
+                        </td>
+                        <td className="p-4 font-mono font-black text-white">
+                          {formatEGP(inv.totalAmount)}
+                        </td>
+                        <td className="p-4 font-mono font-bold text-emerald-400">
+                          +{formatEGP(inv.profit)}
+                        </td>
+                        <td className="p-4">
+                          {inv.paymentMethod === 'coach_debt' ? (
+                            <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold text-[10px]">
+                              تحميل: {inv.coachName || 'كابتن'}
+                            </span>
+                          ) : inv.paymentMethod === 'instapay' ? (
+                            <span className="px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold text-[10px]">
+                              إنستاباي
+                            </span>
+                          ) : inv.paymentMethod === 'card' ? (
+                            <span className="px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-bold text-[10px]">
+                              فيزا
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold text-[10px]">
+                              كاش بالدرج
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-4 text-slate-300">{inv.cashierName}</td>
+                        <td className="p-4 font-mono text-slate-400 text-[11px]">
+                          {new Date(inv.timestamp).toLocaleString('ar-EG')}
+                        </td>
+                        <td className="p-4 text-center">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setReceiptData({
+                                id: inv.id,
+                                items: inv.items,
+                                total: inv.totalAmount,
+                                profit: inv.profit,
+                                method:
+                                  inv.paymentMethod === 'coach_debt'
+                                    ? `تحميل على كابتن ${inv.coachName || ''}`
+                                    : inv.paymentMethod,
+                                time: new Date(inv.timestamp).toLocaleString('ar-EG'),
+                              })
+                            }
+                            className="px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-teal-500/20 text-teal-300 font-bold text-[11px] transition cursor-pointer"
+                          >
+                            عرض
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="p-10 text-center text-xs text-slate-500">
+                لا توجد فواتير مبيعات مطابقة للبحث.
+              </div>
+            )}
+          </div>
+
+          <PaginationBar
+            currentPage={invoicePage}
+            totalPages={invoiceTotalPages}
+            totalCount={invoiceTotalCount}
+            pageSize={20}
+            onPageChange={setInvoicePage}
+            isLoading={isInvoicesLoading}
+            label="فاتورة مبيعات"
+          />
         </div>
       )}
 
@@ -1443,7 +1657,7 @@ export const PosPage: React.FC = () => {
             <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 mx-auto flex items-center justify-center mb-3">
               <CheckCircle2 className="w-6 h-6" />
             </div>
-            <h3 className="text-base font-black text-white">إيصال بيع Synapse POS</h3>
+            <h3 className="text-base font-black text-white">إيصال بيع EGYFIT POS</h3>
             <p className="text-xs text-slate-400 mt-0.5">تم تسجيل البيع وإضافة الربح بنجاح</p>
 
             <div className="my-4 p-4 rounded-2xl bg-slate-900 border border-slate-800 text-xs text-right space-y-2">

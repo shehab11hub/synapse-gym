@@ -22,6 +22,7 @@ import { Coach, TrainerTransaction, POSTransaction } from '../types';
 import { formatEGP } from '../utils/formatters';
 import { sounds } from '../utils/sound';
 import { BrandLogo } from '../components/BrandLogo';
+import { TableRowsSkeleton } from '../components/PageSkeleton';
 
 interface CoachPortalPageProps {
   onBackToStaffLogin?: () => void;
@@ -53,8 +54,8 @@ export const CoachPortalPage: React.FC<CoachPortalPageProps> = ({ onBackToStaffL
       if (isSupabaseConfigured) {
         const [remoteCoaches, remoteTrx, remotePos] = await Promise.all([
           supabaseService.fetchCoaches(),
-          supabaseService.fetchTrainerTransactions(),
-          supabaseService.fetchPOSTransactions(),
+          supabaseService.fetchTrainerTransactionsByCoach(coachId),
+          supabaseService.fetchPOSTransactionsByCoach(coachId),
         ]);
 
         if (remoteCoaches) {
@@ -101,25 +102,16 @@ export const CoachPortalPage: React.FC<CoachPortalPageProps> = ({ onBackToStaffL
     setIsLoading(true);
     try {
       let coachesList = contextCoaches;
-      let trxList: TrainerTransaction[] | null = null;
-      let posList: POSTransaction[] | null = null;
 
-      if (isSupabaseConfigured) {
-        const [remoteCoaches, remoteTrx, remotePos] = await Promise.all([
-          supabaseService.fetchCoaches(),
-          supabaseService.fetchTrainerTransactions(),
-          supabaseService.fetchPOSTransactions(),
-        ]);
+      if (isSupabaseConfigured && coachesList.length === 0) {
+        const remoteCoaches = await supabaseService.fetchCoaches();
         if (remoteCoaches && remoteCoaches.length > 0) {
-          // Merge codes from context in case DB hasn't been migrated yet
           coachesList = remoteCoaches.map((rc) => {
             if (rc.code) return rc;
             const localMatch = contextCoaches.find((lc) => lc.id === rc.id);
             return localMatch?.code ? { ...rc, code: localMatch.code } : rc;
           });
         }
-        if (remoteTrx) trxList = remoteTrx;
-        if (remotePos) posList = remotePos;
       }
 
       const matched = coachesList.find((c) => c.code?.trim() === cleanCode);
@@ -132,8 +124,15 @@ export const CoachPortalPage: React.FC<CoachPortalPageProps> = ({ onBackToStaffL
         return;
       }
 
-      if (trxList) setDbTrainerTx(trxList);
-      if (posList) setDbPosTx(posList);
+      if (isSupabaseConfigured) {
+        const [remoteTrx, remotePos] = await Promise.all([
+          supabaseService.fetchTrainerTransactionsByCoach(matched.id),
+          supabaseService.fetchPOSTransactionsByCoach(matched.id),
+        ]);
+        if (remoteTrx) setDbTrainerTx(remoteTrx);
+        if (remotePos) setDbPosTx(remotePos);
+      }
+
       setLoggedInCoach(matched);
       setLastSyncedAt(new Date().toLocaleTimeString('ar-EG'));
       sessionStorage.setItem(STORAGE_COACH_SESSION_KEY, matched.id);
@@ -472,7 +471,9 @@ export const CoachPortalPage: React.FC<CoachPortalPageProps> = ({ onBackToStaffL
             </span>
           </div>
 
-          {filteredHistory.length === 0 ? (
+          {isRefreshing && filteredHistory.length === 0 ? (
+            <TableRowsSkeleton rows={5} cols={4} />
+          ) : filteredHistory.length === 0 ? (
             <div className="py-12 text-center text-slate-500 text-sm">
               لا توجد حركات مسجلة في هذا التصنيف حتى الآن.
             </div>
